@@ -268,6 +268,7 @@ public final class CanvasActivity extends Activity {
         }
         if (removed) {
             rebuildBitmap();
+            blit(null);
         }
     }
 
