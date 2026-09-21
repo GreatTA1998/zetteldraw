@@ -268,7 +268,9 @@ public final class CanvasActivity extends Activity {
         }
         if (removed) {
             rebuildBitmap();
+            pauseScribble();
             blit(null);
+            resumeScribble();
         }
     }
 
