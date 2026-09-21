@@ -22,7 +22,6 @@ import com.onyx.android.sdk.pen.TouchHelper;
 import com.onyx.android.sdk.pen.data.TouchPointList;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -116,7 +115,7 @@ public final class CanvasActivity extends Activity {
         }
         touchHelper = TouchHelper.create(surfaceView, rawInputCallback);
         touchHelper.setStrokeWidth(STROKE_WIDTH)
-                .setLimitRect(limit, Collections.emptyList())
+                .setLimitRect(limit, new ArrayList<>())
                 .openRawDrawing();
         touchHelper.setStrokeStyle(TouchHelper.STROKE_STYLE_PENCIL);
         touchHelper.setStrokeColor(Color.BLACK);
