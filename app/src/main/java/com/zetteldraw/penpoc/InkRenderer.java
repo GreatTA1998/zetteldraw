@@ -3,6 +3,8 @@ package com.zetteldraw.penpoc;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
+import android.util.DisplayMetrics;
+import android.util.TypedValue;
 
 import com.onyx.android.sdk.api.device.epd.EpdController;
 import com.onyx.android.sdk.data.note.TouchPoint;
@@ -16,7 +18,13 @@ import java.util.List;
  * paints the bitmap that replaces the scribble overlay on pen-up.
  */
 final class InkRenderer {
-    static final float BASE_WIDTH_PX = 4.75f;
+    /** Notes default pen line width: 0.50mm. */
+    static final float BASE_WIDTH_MM = 0.50f;
+    /**
+     * Device pixels for {@link #BASE_WIDTH_MM}. Default is 0.50mm at 300 PPI
+     * (Go 7 Color II). {@link #applyBaseWidthMm} overwrites this from DisplayMetrics.
+     */
+    static float BASE_WIDTH_PX = 5.91f;
     static final float ERASER_RADIUS_PX = 18f;
 
     private static final float TAPER_FRACTION = 0.14f;
@@ -26,6 +34,11 @@ final class InkRenderer {
     private static final float PRESSURE_VARIATION_RATIO = 0.06f;
 
     private InkRenderer() {
+    }
+
+    static void applyBaseWidthMm(DisplayMetrics metrics) {
+        BASE_WIDTH_PX = TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_MM, BASE_WIDTH_MM, metrics);
     }
 
     static InkStroke strokeFrom(List<TouchPoint> points) {

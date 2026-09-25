@@ -8,7 +8,7 @@ Standard `View` / `onTouch` drawing is too delayed on Boox. This app uses the **
 
 1. Opens a full-screen white `SurfaceView` with tiny **Eraser** and **Wipe** controls.
 2. Calls `TouchHelper.create` → `openRawDrawing` → `setRawDrawingEnabled(true)` with hardware render on.
-3. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`** (same id as `EpdController.STROKE_STYLE_BRUSH`), so hardware ink can vary with pressure. Base width is **4.75px**.
+3. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`** (same id as `EpdController.STROKE_STYLE_BRUSH`), so hardware ink can vary with pressure. Base width is **0.50mm** (Notes default), converted to device pixels via `TypedValue.COMPLEX_UNIT_MM`. TouchHelper has no public setter for Notes pressure 30% or stroke stabilization 60%, so those stay firmware-default for `FOUNTAIN`.
 4. Completed strokes are copied into a bitmap and frozen on pen-up so they survive a refresh. The freeze is variable-width: pressure when it varies, plus thin–thick–thin end taper so flat pressure still looks like a pen, not a marker.
 5. Eraser deletes whole strokes by hit-testing the stroke list (not pixel smear). The stylus eraser / `shortcutErase` path does the same. Wipe clears the page.
 

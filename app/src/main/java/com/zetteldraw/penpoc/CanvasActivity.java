@@ -50,6 +50,7 @@ public final class CanvasActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        InkRenderer.applyBaseWidthMm(getResources().getDisplayMetrics());
         paint.setStyle(Paint.Style.STROKE);
         paint.setColor(Color.BLACK);
         paint.setStrokeWidth(InkRenderer.BASE_WIDTH_PX);
