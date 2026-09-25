@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Boox Pen POC</string>
+    <string name="inbox">Inbox</string>
+    <string name="file">File</string>
     <string name="eraser">Eraser</string>
     <string name="wipe">Wipe</string>
 </resources>

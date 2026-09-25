@@ -1,88 +1,122 @@
 package com.zetteldraw.penpoc;
 
 import android.app.Activity;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.Rect;
-import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
+import android.widget.TextView;
 
-import com.onyx.android.sdk.api.device.epd.EpdController;
-import com.onyx.android.sdk.api.device.epd.UpdateMode;
-import com.onyx.android.sdk.data.note.TouchPoint;
-import com.onyx.android.sdk.pen.RawInputCallback;
-import com.onyx.android.sdk.pen.TouchHelper;
-import com.onyx.android.sdk.pen.data.TouchPointList;
+import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.RecyclerView;
+import androidx.viewpager2.widget.ViewPager2;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 /**
- * Full-screen stylus canvas using Onyx {@link TouchHelper} raw/scribble drawing.
- * Live ink is rendered by the e-ink controller, not {@code View.onDraw}.
+ * Capture-first inbox of boards. Opens on the in-tray; a blank board is
+ * always last. File then a notebook name files the current board.
  */
 public final class CanvasActivity extends Activity {
-    private SurfaceView surfaceView;
+    private BoardStore store;
+    private String collectionId = BoardStore.INBOX;
+    private BoardView boardView;
+    private ViewPager2 pager;
+    private BoardAdapter adapter;
+    private TextView titleView;
     private LinearLayout toolbar;
+    private HorizontalScrollView trayScroll;
+    private LinearLayout tray;
+    private Button fileButton;
     private Button eraserButton;
     private Button wipeButton;
-    private TouchHelper touchHelper;
-    private Bitmap bitmap;
-    private Canvas bitmapCanvas;
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final ArrayList<Rect> excludeRects = new ArrayList<>();
-    private final ArrayList<InkRenderer.InkStroke> strokes = new ArrayList<>();
     private boolean eraserMode;
-    private boolean erasingStroke;
+    private boolean fileArmed;
+    private boolean browseArmed;
+    private String currentBoardId;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         InkRenderer.applyBaseWidthMm(getResources().getDisplayMetrics());
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setColor(Color.BLACK);
-        paint.setStrokeWidth(InkRenderer.BASE_WIDTH_PX);
-        paint.setStrokeCap(Paint.Cap.ROUND);
-        paint.setStrokeJoin(Paint.Join.ROUND);
+        store = new BoardStore(this);
 
         FrameLayout root = new FrameLayout(this);
-        surfaceView = new SurfaceView(this);
-        surfaceView.setOnTouchListener((View v, android.view.MotionEvent event) -> true);
-        root.addView(surfaceView, new FrameLayout.LayoutParams(
+        root.setBackgroundColor(Color.WHITE);
+
+        pager = new ViewPager2(this);
+        pager.setOrientation(ViewPager2.ORIENTATION_VERTICAL);
+        pager.setOffscreenPageLimit(1);
+        adapter = new BoardAdapter();
+        adapter.setHasStableIds(true);
+        pager.setAdapter(adapter);
+        root.addView(pager, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
+
+        boardView = new BoardView(this);
+        boardView.setFingerPassthrough(pager);
+        boardView.setListener(new BoardView.Listener() {
+            @Override
+            public void onBoardChanged(Board board) {
+                store.persistBoard(board);
+                refreshTitle();
+            }
+
+            @Override
+            public void onBecameNonEmpty(Board board) {
+                if (BoardStore.INBOX.equals(collectionId)) {
+                    store.onInboxBoardFilled(board.id);
+                    reloadPager(board.id);
+                } else {
+                    store.persistBoard(board);
+                }
+            }
+        });
+        root.addView(boardView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+
+        titleView = new TextView(this);
+        titleView.setTextColor(Color.BLACK);
+        titleView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        titleView.setPadding(dp(12), dp(10), dp(12), dp(10));
+        titleView.setOnClickListener(v -> toggleBrowse());
+        FrameLayout.LayoutParams titleLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        titleLp.gravity = Gravity.TOP | Gravity.START;
+        root.addView(titleView, titleLp);
 
         toolbar = new LinearLayout(this);
         toolbar.setOrientation(LinearLayout.HORIZONTAL);
         toolbar.setGravity(Gravity.CENTER_VERTICAL);
         int pad = dp(6);
         toolbar.setPadding(pad, pad, pad, pad);
+        fileButton = tinyButton(getString(R.string.file));
         eraserButton = tinyButton(getString(R.string.eraser));
         wipeButton = tinyButton(getString(R.string.wipe));
+        fileButton.setOnClickListener(v -> toggleFile());
         eraserButton.setOnClickListener(v -> setEraserMode(!eraserMode));
-        wipeButton.setOnClickListener(v -> wipePage());
-        LinearLayout.LayoutParams btnLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        toolbar.addView(eraserButton, btnLp);
-        btnLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        btnLp.leftMargin = dp(6);
-        toolbar.addView(wipeButton, btnLp);
-
+        wipeButton.setOnClickListener(v -> {
+            boardView.wipe();
+            store.persistBoard(boardView.getBoard());
+            if (BoardStore.INBOX.equals(collectionId)) {
+                store.ensureTrailingBlank();
+                reloadPager(boardView.getBoard().id);
+            }
+        });
+        toolbar.addView(fileButton, buttonLp(0));
+        toolbar.addView(eraserButton, buttonLp(dp(6)));
+        toolbar.addView(wipeButton, buttonLp(dp(6)));
         FrameLayout.LayoutParams barLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT);
@@ -90,343 +124,241 @@ public final class CanvasActivity extends Activity {
         barLp.topMargin = dp(8);
         barLp.rightMargin = dp(8);
         root.addView(toolbar, barLp);
+
+        trayScroll = new HorizontalScrollView(this);
+        trayScroll.setFillViewport(true);
+        trayScroll.setHorizontalScrollBarEnabled(false);
+        trayScroll.setVisibility(View.GONE);
+        tray = new LinearLayout(this);
+        tray.setOrientation(LinearLayout.HORIZONTAL);
+        tray.setGravity(Gravity.CENTER_VERTICAL);
+        tray.setPadding(dp(8), dp(4), dp(8), dp(4));
+        trayScroll.addView(tray, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT));
+        FrameLayout.LayoutParams trayLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        trayLp.gravity = Gravity.TOP;
+        trayLp.topMargin = dp(44);
+        root.addView(trayScroll, trayLp);
+
+        pager.registerOnPageChangeCallback(new ViewPager2.OnPageChangeCallback() {
+            @Override
+            public void onPageScrollStateChanged(int state) {
+                if (state == ViewPager2.SCROLL_STATE_DRAGGING) {
+                    boardView.pauseLive();
+                } else if (state == ViewPager2.SCROLL_STATE_IDLE) {
+                    boardView.resumeLive();
+                }
+            }
+
+            @Override
+            public void onPageSelected(int position) {
+                showBoardAt(position);
+            }
+        });
+
+        titleView.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
         toolbar.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
+        trayScroll.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
+        tray.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
 
         setContentView(root);
         setEraserMode(false);
-        surfaceView.getHolder().addCallback(surfaceCallback);
+        reloadPager(null);
+        boardView.setLive(true);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        if (touchHelper != null) {
-            applyLiveInk();
-            touchHelper.setRawDrawingEnabled(true);
-        }
+        boardView.resumeLive();
     }
 
     @Override
     protected void onPause() {
-        if (touchHelper != null) {
-            touchHelper.setRawDrawingEnabled(false);
-        }
+        store.persistBoard(boardView.getBoard());
+        boardView.pauseLive();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
-        if (touchHelper != null) {
-            touchHelper.closeRawDrawing();
-            touchHelper = null;
-        }
-        recycleBitmap();
+        boardView.close();
         super.onDestroy();
     }
 
-    private final SurfaceHolder.Callback surfaceCallback = new SurfaceHolder.Callback() {
-        @Override
-        public void surfaceCreated(SurfaceHolder holder) {
-            ensureBitmap();
-            rebuildBitmap();
-            fillWhite();
-            restoreBitmap();
-            openRawDrawing();
+    private void reloadPager(String selectId) {
+        List<Board> boards = store.boardsIn(collectionId);
+        if (boards.isEmpty() && !BoardStore.INBOX.equals(collectionId)) {
+            collectionId = BoardStore.INBOX;
+            boards = store.boardsIn(collectionId);
         }
+        adapter.setBoards(boards);
+        int index = indexOf(boards, selectId);
+        if (index < 0) {
+            index = 0;
+        }
+        pager.setCurrentItem(index, false);
+        showBoardAt(index);
+        refreshTitle();
+    }
 
-        @Override
-        public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-            ensureBitmap();
+    private void showBoardAt(int position) {
+        List<Board> boards = adapter.boards;
+        if (position < 0 || position >= boards.size()) {
+            return;
+        }
+        Board previous = boardView.getBoard();
+        if (previous != null && currentBoardId != null && !currentBoardId.equals(boards.get(position).id)) {
+            store.persistBoard(previous);
+        }
+        Board board = store.board(boards.get(position).id);
+        if (board == null) {
+            return;
+        }
+        currentBoardId = board.id;
+        boardView.bind(board);
+        refreshTitle();
+    }
+
+    private void toggleFile() {
+        fileArmed = !fileArmed;
+        browseArmed = false;
+        styleButton(fileButton, fileArmed);
+        rebuildTray();
+    }
+
+    private void toggleBrowse() {
+        browseArmed = !browseArmed;
+        fileArmed = false;
+        styleButton(fileButton, false);
+        rebuildTray();
+    }
+
+    private void rebuildTray() {
+        tray.removeAllViews();
+        if (!fileArmed && !browseArmed) {
+            trayScroll.setVisibility(View.GONE);
             updateExcludeRects();
-        }
-
-        @Override
-        public void surfaceDestroyed(SurfaceHolder holder) {
-            if (touchHelper != null) {
-                touchHelper.closeRawDrawing();
-                touchHelper = null;
-            }
-        }
-    };
-
-    private void openRawDrawing() {
-        if (touchHelper != null) {
-            touchHelper.closeRawDrawing();
-        }
-        Rect limit = canvasLimit();
-        touchHelper = TouchHelper.create(surfaceView, rawInputCallback);
-        touchHelper.setStrokeWidth(InkRenderer.BASE_WIDTH_PX)
-                .setStrokeColor(Color.BLACK)
-                .setLimitRect(limit, excludeRects)
-                .openRawDrawing();
-        applyLiveInk();
-        touchHelper.setPenUpRefreshEnabled(true);
-        touchHelper.enableFingerTouch(false);
-        touchHelper.enableSideBtnErase(true);
-        touchHelper.setRawDrawingEnabled(true);
-    }
-
-    private void applyLiveInk() {
-        if (touchHelper == null) {
             return;
         }
-        // FOUNTAIN == EpdController.STROKE_STYLE_BRUSH: live width follows pressure.
-        touchHelper.setStrokeStyle(TouchHelper.STROKE_STYLE_FOUNTAIN);
-        touchHelper.setStrokeWidth(InkRenderer.BASE_WIDTH_PX);
-        touchHelper.setStrokeColor(Color.BLACK);
-        touchHelper.setBrushRawDrawingEnabled(!eraserMode);
-        touchHelper.setRawDrawingRenderEnabled(!eraserMode);
-    }
-
-    private final RawInputCallback rawInputCallback = new RawInputCallback() {
-        @Override
-        public void onBeginRawDrawing(boolean shortcutErase, TouchPoint point) {
-            erasingStroke = eraserMode || shortcutErase;
-            if (erasingStroke && touchHelper != null) {
-                touchHelper.setRawDrawingRenderEnabled(false);
-            }
+        trayScroll.setVisibility(View.VISIBLE);
+        if (browseArmed && !BoardStore.INBOX.equals(collectionId)) {
+            tray.addView(trayButton(getString(R.string.inbox), v -> openCollection(BoardStore.INBOX)), buttonLp(0));
         }
-
-        @Override
-        public void onEndRawDrawing(boolean shortcutErase, TouchPoint point) {
-            erasingStroke = eraserMode || shortcutErase;
-        }
-
-        @Override
-        public void onRawDrawingTouchPointMoveReceived(TouchPoint point) {
-        }
-
-        @Override
-        public void onRawDrawingTouchPointListReceived(TouchPointList touchPointList) {
-            if (touchPointList == null) {
-                return;
-            }
-            List<TouchPoint> points = touchPointList.getPoints();
-            if (erasingStroke || eraserMode) {
-                eraseStrokes(points);
-            } else {
-                addStroke(points);
-            }
-        }
-
-        @Override
-        public void onBeginRawErasing(boolean shortcutErase, TouchPoint point) {
-            erasingStroke = true;
-            if (touchHelper != null) {
-                touchHelper.setRawDrawingRenderEnabled(false);
-            }
-        }
-
-        @Override
-        public void onEndRawErasing(boolean shortcutErase, TouchPoint point) {
-            erasingStroke = true;
-        }
-
-        @Override
-        public void onRawErasingTouchPointMoveReceived(TouchPoint point) {
-        }
-
-        @Override
-        public void onRawErasingTouchPointListReceived(TouchPointList touchPointList) {
-            if (touchPointList == null) {
-                return;
-            }
-            eraseStrokes(touchPointList.getPoints());
-        }
-
-        @Override
-        public void onPenUpRefresh(RectF refreshRect) {
-            surfaceView.post(() -> {
-                blit(refreshRect);
-                applyLiveInk();
-                erasingStroke = eraserMode;
+        for (Notebook notebook : Notebook.values()) {
+            Button button = trayButton(notebook.label, v -> {
+                if (fileArmed) {
+                    fileCurrent(notebook);
+                } else {
+                    openCollection(notebook.id);
+                }
             });
+            tray.addView(button, buttonLp(tray.getChildCount() == 0 ? 0 : dp(6)));
         }
-    };
-
-    private void addStroke(List<TouchPoint> points) {
-        if (points == null || points.isEmpty()) {
-            return;
-        }
-        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(points);
-        strokes.add(stroke);
-        ensureBitmap();
-        InkRenderer.draw(bitmapCanvas, paint, stroke);
+        tray.post(this::updateExcludeRects);
     }
 
-    private void eraseStrokes(List<TouchPoint> eraserPath) {
-        if (eraserPath == null || eraserPath.isEmpty() || strokes.isEmpty()) {
+    private void fileCurrent(Notebook notebook) {
+        Board current = boardView.getBoard();
+        if (current == null || !store.canFile(current.id)) {
+            fileArmed = false;
+            styleButton(fileButton, false);
+            rebuildTray();
             return;
         }
-        ArrayList<TouchPoint> path = InkRenderer.copyPoints(eraserPath);
-        boolean removed = false;
-        Iterator<InkRenderer.InkStroke> iterator = strokes.iterator();
-        while (iterator.hasNext()) {
-            if (InkRenderer.hits(iterator.next(), path)) {
-                iterator.remove();
-                removed = true;
-            }
+        store.persistBoard(current);
+        Board next = store.fileTo(current.id, notebook, collectionId);
+        fileArmed = false;
+        styleButton(fileButton, false);
+        rebuildTray();
+        if (!BoardStore.INBOX.equals(collectionId) && store.boardsIn(collectionId).isEmpty()) {
+            collectionId = BoardStore.INBOX;
         }
-        if (removed) {
-            rebuildBitmap();
-            pauseScribble();
-            blit(null);
-            resumeScribble();
-        }
+        reloadPager(next == null ? null : next.id);
     }
 
-    private void wipePage() {
-        strokes.clear();
-        ensureBitmap();
-        if (bitmap != null) {
-            bitmap.eraseColor(Color.WHITE);
-        }
-        pauseScribble();
-        fillWhite();
-        restoreBitmap();
-        resumeScribble();
+    private void openCollection(String id) {
+        collectionId = id;
+        browseArmed = false;
+        fileArmed = false;
+        styleButton(fileButton, false);
+        rebuildTray();
+        reloadPager(null);
     }
 
     private void setEraserMode(boolean on) {
         eraserMode = on;
         styleButton(eraserButton, on);
-        if (touchHelper != null) {
-            applyLiveInk();
-        }
+        boardView.setEraserMode(on);
     }
 
-    private void rebuildBitmap() {
-        ensureBitmap();
-        if (bitmap == null) {
-            return;
-        }
-        bitmap.eraseColor(Color.WHITE);
-        for (InkRenderer.InkStroke stroke : strokes) {
-            InkRenderer.draw(bitmapCanvas, paint, stroke);
-        }
-    }
-
-    private void blit(RectF refreshRect) {
-        if (bitmap == null || surfaceView.getHolder() == null) {
-            return;
-        }
-        Rect renderRect = new Rect();
-        if (refreshRect != null && !refreshRect.isEmpty()) {
-            refreshRect.roundOut(renderRect);
-            int pad = (int) Math.ceil(InkRenderer.BASE_WIDTH_PX * 2f);
-            renderRect.inset(-pad, -pad);
+    private void refreshTitle() {
+        List<Board> boards = adapter.boards;
+        int index = indexOf(boards, currentBoardId);
+        String name = BoardStore.INBOX.equals(collectionId)
+                ? getString(R.string.inbox)
+                : collectionId;
+        if (index >= 0 && !boards.isEmpty()) {
+            titleView.setText(name + "  " + (index + 1) + "/" + boards.size());
         } else {
-            renderRect.set(0, 0, surfaceView.getWidth(), surfaceView.getHeight());
+            titleView.setText(name);
         }
-        EpdController.setViewDefaultUpdateMode(surfaceView, UpdateMode.HAND_WRITING_REPAINT_MODE);
-        Canvas canvas = surfaceView.getHolder().lockCanvas(renderRect);
-        if (canvas == null) {
-            EpdController.resetViewUpdateMode(surfaceView);
-            return;
-        }
-        try {
-            canvas.drawBitmap(bitmap, 0f, 0f, null);
-        } finally {
-            surfaceView.getHolder().unlockCanvasAndPost(canvas);
-            EpdController.resetViewUpdateMode(surfaceView);
-        }
-    }
-
-    private void fillWhite() {
-        Canvas canvas = surfaceView.getHolder().lockCanvas();
-        if (canvas == null) {
-            return;
-        }
-        canvas.drawColor(Color.WHITE);
-        surfaceView.getHolder().unlockCanvasAndPost(canvas);
-    }
-
-    private void restoreBitmap() {
-        Canvas canvas = surfaceView.getHolder().lockCanvas();
-        if (canvas == null) {
-            return;
-        }
-        canvas.drawColor(Color.WHITE);
-        if (bitmap != null) {
-            canvas.drawBitmap(bitmap, 0f, 0f, null);
-        }
-        surfaceView.getHolder().unlockCanvasAndPost(canvas);
-    }
-
-    private void pauseScribble() {
-        if (touchHelper == null) {
-            return;
-        }
-        touchHelper.setRawDrawingEnabled(false);
-        touchHelper.setRawDrawingRenderEnabled(false);
-    }
-
-    private void resumeScribble() {
-        if (touchHelper == null) {
-            return;
-        }
-        applyLiveInk();
-        touchHelper.setRawDrawingEnabled(true);
     }
 
     private void updateExcludeRects() {
-        excludeRects.clear();
-        Rect toolbarRect = viewRectOnSurface(toolbar);
-        if (toolbarRect != null && !toolbarRect.isEmpty()) {
-            toolbarRect.inset(-dp(4), -dp(4));
-            excludeRects.add(toolbarRect);
+        ArrayList<Rect> rects = new ArrayList<>();
+        addExclude(rects, titleView);
+        addExclude(rects, toolbar);
+        if (trayScroll.getVisibility() == View.VISIBLE) {
+            addExclude(rects, trayScroll);
         }
-        if (touchHelper != null) {
-            touchHelper.setLimitRect(canvasLimit(), excludeRects);
-        }
+        boardView.setExtraExcludeRects(rects);
     }
 
-    private Rect viewRectOnSurface(View view) {
+    private void addExclude(List<Rect> rects, View view) {
         if (view == null || view.getWidth() <= 0 || view.getHeight() <= 0) {
-            return null;
-        }
-        int[] surfaceLoc = new int[2];
-        int[] viewLoc = new int[2];
-        surfaceView.getLocationOnScreen(surfaceLoc);
-        view.getLocationOnScreen(viewLoc);
-        int left = viewLoc[0] - surfaceLoc[0];
-        int top = viewLoc[1] - surfaceLoc[1];
-        return new Rect(left, top, left + view.getWidth(), top + view.getHeight());
-    }
-
-    private Rect canvasLimit() {
-        Rect limit = new Rect();
-        surfaceView.getLocalVisibleRect(limit);
-        if (limit.isEmpty()) {
-            limit.set(0, 0, Math.max(surfaceView.getWidth(), 1), Math.max(surfaceView.getHeight(), 1));
-        }
-        return limit;
-    }
-
-    private void ensureBitmap() {
-        int width = surfaceView.getWidth();
-        int height = surfaceView.getHeight();
-        if (width <= 0 || height <= 0) {
             return;
         }
-        if (bitmap != null && bitmap.getWidth() == width && bitmap.getHeight() == height) {
-            return;
-        }
-        recycleBitmap();
-        bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        bitmap.eraseColor(Color.WHITE);
-        bitmapCanvas = new Canvas(bitmap);
-        for (InkRenderer.InkStroke stroke : strokes) {
-            InkRenderer.draw(bitmapCanvas, paint, stroke);
-        }
+        int[] root = new int[2];
+        int[] loc = new int[2];
+        boardView.getLocationOnScreen(root);
+        view.getLocationOnScreen(loc);
+        Rect rect = new Rect(
+                loc[0] - root[0],
+                loc[1] - root[1],
+                loc[0] - root[0] + view.getWidth(),
+                loc[1] - root[1] + view.getHeight());
+        rect.inset(-dp(4), -dp(4));
+        rects.add(rect);
     }
 
-    private void recycleBitmap() {
-        if (bitmap != null) {
-            bitmap.recycle();
-            bitmap = null;
-            bitmapCanvas = null;
+    private static int indexOf(List<Board> boards, String id) {
+        if (id == null) {
+            return -1;
         }
+        for (int i = 0; i < boards.size(); i++) {
+            if (id.equals(boards.get(i).id)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private LinearLayout.LayoutParams buttonLp(int leftMargin) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        lp.leftMargin = leftMargin;
+        return lp;
+    }
+
+    private Button trayButton(String label, View.OnClickListener listener) {
+        Button button = tinyButton(label);
+        button.setOnClickListener(listener);
+        return button;
     }
 
     private Button tinyButton(String label) {
@@ -461,5 +393,50 @@ public final class CanvasActivity extends Activity {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    /**
+     * Vertical stack of page-sized slots. The live BoardView sits on top;
+     * these pages exist so finger-scroll moves between boards.
+     */
+    private final class BoardAdapter extends RecyclerView.Adapter<BoardAdapter.Holder> {
+        final ArrayList<Board> boards = new ArrayList<>();
+
+        void setBoards(List<Board> next) {
+            boards.clear();
+            boards.addAll(next);
+            notifyDataSetChanged();
+        }
+
+        @NonNull
+        @Override
+        public Holder onCreateViewHolder(@NonNull android.view.ViewGroup parent, int viewType) {
+            View page = new View(parent.getContext());
+            page.setLayoutParams(new RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.MATCH_PARENT));
+            page.setBackgroundColor(Color.TRANSPARENT);
+            return new Holder(page);
+        }
+
+        @Override
+        public void onBindViewHolder(@NonNull Holder holder, int position) {
+        }
+
+        @Override
+        public int getItemCount() {
+            return boards.size();
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return boards.get(position).id.hashCode();
+        }
+
+        final class Holder extends RecyclerView.ViewHolder {
+            Holder(View itemView) {
+                super(itemView);
+            }
+        }
     }
 }

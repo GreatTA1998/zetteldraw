@@ -10,8 +10,8 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 33
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -60,4 +60,5 @@ dependencies {
     implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.5")
     implementation("com.onyx.android.sdk:onyxsdk-device:1.3.6")
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
+    implementation("androidx.viewpager2:viewpager2:1.1.0")
 }

@@ -6,11 +6,11 @@ Standard `View` / `onTouch` drawing is too delayed on Boox. This app uses the **
 
 ## What it does
 
-1. Opens a full-screen white `SurfaceView` with tiny **Eraser** and **Wipe** controls.
-2. Calls `TouchHelper.create` → `openRawDrawing` → `setRawDrawingEnabled(true)` with hardware render on.
-3. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`** (same id as `EpdController.STROKE_STYLE_BRUSH`), so hardware ink can vary with pressure. Base width is **0.50mm** (Notes default), converted to device pixels via `TypedValue.COMPLEX_UNIT_MM`. TouchHelper has no public setter for Notes pressure 30% or stroke stabilization 60%, so those stay firmware-default for `FOUNTAIN`.
-4. Completed strokes are copied into a bitmap and frozen on pen-up so they survive a refresh. The freeze is variable-width: pressure when it varies, plus thin–thick–thin end taper so flat pressure still looks like a pen, not a marker.
-5. Eraser deletes whole strokes by hit-testing the stroke list (not pixel smear). The stylus eraser / `shortcutErase` path does the same. Wipe clears the page.
+1. Always opens on an **Inbox** of boards (the in-tray). A board is the atomic page. The inbox always ends with a blank board; finger-scroll down for more.
+2. Live ink uses `TouchHelper.create` → `openRawDrawing` → `setRawDrawingEnabled(true)` on the board being drawn, with hardware render on. Pen, **Eraser**, and **Wipe** stay.
+3. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`** (same id as `EpdController.STROKE_STYLE_BRUSH`). Base width is **0.50mm** (Notes default), converted to device pixels via `TypedValue.COMPLEX_UNIT_MM`. TouchHelper has no public setter for Notes pressure 30% or stroke stabilization 60%, so those stay firmware-default for `FOUNTAIN`.
+4. Two taps file the current board into a notebook: **File**, then **comedy** / **journal** / **actions.life** / **miscellaneous**. Notebooks are ordered sequences of boards, stored in `zetteldraw-boards.json` on device. Tap **Inbox** to open a notebook without filing.
+5. Completed strokes freeze to a bitmap on pen-up. Eraser deletes whole strokes. Wipe clears the page.
 
 Live drawing stays on TouchHelper. The bitmap freeze is not the live drawing path.
 
@@ -52,7 +52,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Sideload without adb: copy the APK to internal storage and open it in **Storage**. Allow install from that source if prompted.
 
-4. Open **Boox Pen POC**. Draw with the stylus. Compare latency to **Notes**. Use **Eraser** to delete strokes, **Wipe** to clear the page.
+4. Open **Boox Pen POC**. You land on Inbox. Draw with the stylus. Scroll down for the next blank board. **File** then a notebook name files the current board. Use **Eraser** to delete strokes, **Wipe** to clear the page.
 
 If the screen stays white and nothing appears under the pen:
 
@@ -73,5 +73,7 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 ## Layout
 
 - `PenApp` — Hidden API bypass required by Onyx on Android 11+.
-- `CanvasActivity` — `SurfaceView` + `TouchHelper` + pen-up bitmap freeze + Eraser/Wipe.
+- `CanvasActivity` — Inbox / notebook pager, File tray, Eraser, Wipe.
+- `BoardView` — `SurfaceView` + `TouchHelper` live ink on the current board.
+- `BoardStore` — local inbox + notebooks JSON.
 - `InkRenderer` — pressure + end-taper freeze strokes and eraser hit-tests.
