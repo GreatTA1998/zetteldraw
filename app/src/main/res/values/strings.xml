@@ -2,7 +2,6 @@
 <resources>
     <string name="app_name">Boox Pen POC</string>
     <string name="scratchpad">Scratchpad</string>
-    <string name="notebooks">Notebooks</string>
     <string name="pen">Pen</string>
     <string name="eraser">Eraser</string>
     <string name="lasso">Lasso</string>
@@ -16,10 +15,17 @@
     <string name="undo_nothing">Nothing left to undo</string>
     <string name="move">Move</string>
     <string name="wipe">Wipe</string>
-    <string name="empty_notebook">No pages yet.\nUse Move on a Scratchpad page to add one here.</string>
-    <string name="no_notebooks">No notebooks yet.\nTap + to create one.</string>
+    <string name="page_options">Page options</string>
+    <string name="page_number">Page %1$d</string>
+    <string name="delete_page">Delete page</string>
+    <string name="wipe_page_title">Wipe this page?</string>
+    <string name="wipe_page_body">Its ink is cleared. The page stays.</string>
+    <string name="delete_page_title">Delete this page?</string>
+    <string name="delete_page_body">It is removed here and on your other devices.</string>
+    <string name="no_notebooks_bar">No notebooks yet. Tap + to add one.</string>
     <string name="add_notebook">+</string>
     <string name="notebook_options">⋯</string>
+    <string name="notebook_menu">%1$s: rename or delete</string>
     <string name="new_notebook">New notebook</string>
     <string name="new_notebook_item">+ New notebook</string>
     <string name="rename">Rename</string>

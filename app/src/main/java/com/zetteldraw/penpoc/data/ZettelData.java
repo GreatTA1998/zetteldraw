@@ -48,4 +48,9 @@ public final class ZettelData {
         }
         return repository;
     }
+
+    /** Tests only: the next {@link #repository} call opens a fresh one for the current app. */
+    public static synchronized void resetForTest() {
+        repository = null;
+    }
 }

@@ -13,18 +13,21 @@ import java.util.List;
 public interface BoardRepository {
     List<NotebookInfo> notebooks();
 
-    /** Oldest first; always ends with one blank page. */
-    List<Board> scratchpadPages();
-
-    /** Oldest first, newest last. */
-    List<Board> notebookPages(String notebookId);
-
     /**
-     * Make sure the scratchpad ends with a blank page (call after the last
-     * page gets its first stroke). Returns that blank page. Blank pages are
-     * not stored until they get ink.
+     * One page list: the Scratchpad ({@code notebookId == null}) or a notebook,
+     * oldest first. It always ends with one blank page that is not stored;
+     * its first {@link #saveInk} stores it at the next position and a new
+     * blank follows. Empty for a deleted or unknown notebook.
      */
-    Board createScratchpadPage();
+    List<Board> pages(String notebookId);
+
+    default List<Board> scratchpadPages() {
+        return pages(null);
+    }
+
+    default List<Board> notebookPages(String notebookId) {
+        return pages(notebookId);
+    }
 
     /** Persist the page's current strokes. No-op when nothing changed. */
     void saveInk(Board page);
@@ -34,6 +37,12 @@ public interface BoardRepository {
 
     /** Clear one page's ink. */
     void wipePage(String boardId);
+
+    /**
+     * Tombstones the page (blank or not) so the delete syncs. A list's
+     * trailing blank page is never lost: deleting it just leaves a fresh one.
+     */
+    void deletePage(String boardId);
 
     /** New notebook, ordered after every existing one. Blank titles are rejected (returns null). */
     NotebookInfo createNotebook(String title);

@@ -33,8 +33,8 @@ import java.util.Set;
 /**
  * Live ink for a vertical stack of pages. One SurfaceView + TouchHelper
  * covers the drawing area; it paints whichever pages are scrolled into view.
- * Page i starts at content y = i * pageStride. Strokes are stored in
- * page-local coordinates.
+ * Pages stack top to bottom, each with its own height and a fixed gap
+ * below it. Strokes are stored in page-local coordinates.
  */
 final class PageInkView extends FrameLayout {
     interface Listener {
@@ -66,8 +66,10 @@ final class PageInkView extends FrameLayout {
     private final LinkedHashMap<String, Bitmap> bitmaps = new LinkedHashMap<>(8, 0.75f, true);
     private TouchHelper touchHelper;
     private Listener listener;
-    private int pageHeight = 1;
-    private int pageStride = 1;
+    /** Content y of each page's top edge, and each page's height. */
+    private int[] tops = new int[0];
+    private int[] heights = new int[0];
+    private int pageGap;
     private int scrollY;
     private boolean live;
     private boolean held;
@@ -110,7 +112,8 @@ final class PageInkView extends FrameLayout {
         return tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER;
     }
 
-    void setPages(List<Board> next, int pageHeight, int pageStride) {
+    /** {@code pageHeights[i]} is the height of {@code next.get(i)}; {@code gap} separates pages. */
+    void setPages(List<Board> next, int[] pageHeights, int gap) {
         if (selection != null) {
             endSelection();
             scheduleResume();
@@ -120,12 +123,20 @@ final class PageInkView extends FrameLayout {
         }
         pages.clear();
         pages.addAll(next);
-        this.pageHeight = Math.max(1, pageHeight);
-        this.pageStride = Math.max(this.pageHeight, pageStride);
+        pageGap = Math.max(0, gap);
+        tops = new int[pages.size()];
+        heights = new int[pages.size()];
+        int y = 0;
+        for (int i = 0; i < pages.size(); i++) {
+            tops[i] = y;
+            heights[i] = Math.max(1, pageHeights[i]);
+            y += heights[i] + pageGap;
+        }
         Iterator<Map.Entry<String, Bitmap>> it = bitmaps.entrySet().iterator();
         while (it.hasNext()) {
             Map.Entry<String, Bitmap> entry = it.next();
-            if (indexOfPage(entry.getKey()) < 0 || entry.getValue().getHeight() != this.pageHeight) {
+            int index = indexOfPage(entry.getKey());
+            if (index < 0 || entry.getValue().getHeight() != heights[index]) {
                 entry.getValue().recycle();
                 it.remove();
             }
@@ -384,7 +395,8 @@ final class PageInkView extends FrameLayout {
         }
     };
 
-    private void addStroke(List<TouchPoint> points) {
+    /** {@code points} are in surface coordinates, as TouchHelper reports them. */
+    void addStroke(List<TouchPoint> points) {
         if (points == null || points.isEmpty()) {
             return;
         }
@@ -440,7 +452,7 @@ final class PageInkView extends FrameLayout {
 
     private List<TouchPoint> toPage(List<TouchPoint> surfacePoints, int index) {
         ArrayList<TouchPoint> copy = InkRenderer.copyPoints(surfacePoints);
-        float dy = scrollY - (float) index * pageStride;
+        float dy = scrollY - (float) tops[index];
         for (TouchPoint point : copy) {
             point.y += dy;
         }
@@ -451,17 +463,32 @@ final class PageInkView extends FrameLayout {
         if (pages.isEmpty()) {
             return -1;
         }
-        int index = (int) Math.floor((surfaceY + scrollY) / pageStride);
-        return index < 0 || index >= pages.size() ? -1 : index;
+        float y = surfaceY + scrollY;
+        if (y < 0) {
+            return -1;
+        }
+        int index = 0;
+        while (index + 1 < pages.size() && tops[index + 1] <= y) {
+            index++;
+        }
+        return y < tops[index] + heights[index] + pageGap ? index : -1;
     }
 
     private int firstVisible() {
-        return Math.min(pages.size(), Math.max(0, scrollY / pageStride));
+        int index = 0;
+        while (index < pages.size() && tops[index] + heights[index] + pageGap <= scrollY) {
+            index++;
+        }
+        return index;
     }
 
     private int lastVisible() {
         int bottom = scrollY + Math.max(1, surfaceView.getHeight());
-        return Math.min(pages.size() - 1, bottom / pageStride);
+        int index = pages.size() - 1;
+        while (index > 0 && tops[index] > bottom) {
+            index--;
+        }
+        return index;
     }
 
     private int indexOfPage(String id) {
@@ -479,7 +506,7 @@ final class PageInkView extends FrameLayout {
         }
     }
 
-    private Bitmap bitmapFor(Board page) {
+    private Bitmap bitmapFor(Board page, int height) {
         Bitmap bitmap = bitmaps.get(page.id);
         if (bitmap != null) {
             return bitmap;
@@ -493,7 +520,7 @@ final class PageInkView extends FrameLayout {
             it.next().getValue().recycle();
             it.remove();
         }
-        bitmap = Bitmap.createBitmap(width, pageHeight, Bitmap.Config.ARGB_8888);
+        bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         bitmap.eraseColor(Color.WHITE);
         Canvas canvas = new Canvas(bitmap);
         for (InkRenderer.InkStroke stroke : page.strokes) {
@@ -531,12 +558,12 @@ final class PageInkView extends FrameLayout {
             canvas.drawColor(Color.WHITE);
             int last = lastVisible();
             for (int index = firstVisible(); index <= last; index++) {
-                float top = (float) index * pageStride - scrollY;
+                float top = (float) tops[index] - scrollY;
                 if (selection != null && selection.index == index) {
                     drawSelection(canvas, top);
                     continue;
                 }
-                Bitmap bitmap = bitmapFor(pages.get(index));
+                Bitmap bitmap = bitmapFor(pages.get(index), heights[index]);
                 if (bitmap != null) {
                     canvas.drawBitmap(bitmap, 0f, top, null);
                 }
@@ -590,7 +617,7 @@ final class PageInkView extends FrameLayout {
         Rect spriteRect = new Rect();
         bounds.roundOut(spriteRect);
 
-        Bitmap base = Bitmap.createBitmap(width, pageHeight, Bitmap.Config.ARGB_8888);
+        Bitmap base = Bitmap.createBitmap(width, heights[index], Bitmap.Config.ARGB_8888);
         base.eraseColor(Color.WHITE);
         Canvas baseCanvas = new Canvas(base);
         for (InkRenderer.InkStroke stroke : page.strokes) {
@@ -625,7 +652,7 @@ final class PageInkView extends FrameLayout {
 
     private RectF boxOnSurface(Selection s, float dx, float dy) {
         RectF box = new RectF(s.bounds);
-        box.offset(dx, (float) s.index * pageStride - scrollY + dy);
+        box.offset(dx, (float) tops[s.index] - scrollY + dy);
         float pad = 4f * getResources().getDisplayMetrics().density;
         box.inset(-pad, -pad);
         return box;
@@ -667,7 +694,7 @@ final class PageInkView extends FrameLayout {
             case MotionEvent.ACTION_MOVE:
                 if (s.dragging) {
                     float[] offset = Lasso.clampOffset(s.bounds, x - s.downX, y - s.downY,
-                            surfaceView.getWidth(), pageHeight);
+                            surfaceView.getWidth(), heights[s.index]);
                     s.dx = offset[0];
                     s.dy = offset[1];
                     scheduleDragFrame();

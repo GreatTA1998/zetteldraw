@@ -112,7 +112,7 @@ public class NotebookManagementTest {
         Board a = inked(10f);
         BoardRepository.NotebookInfo fresh = repo.createNotebook("fresh");
         repo.movePageToNotebook(a.id, fresh.id);
-        assertEquals(RoomBoardRepositoryTest.ids(a), RoomBoardRepositoryTest.ids(repo.notebookPages(fresh.id)));
+        assertEquals(RoomBoardRepositoryTest.ids(a), RoomBoardRepositoryTest.ids(RoomBoardRepositoryTest.stored(repo.notebookPages(fresh.id))));
 
         repo.deleteNotebook(fresh.id);
         Board b = inked(20f);
@@ -159,7 +159,6 @@ public class NotebookManagementTest {
         TestInk.draw(page, x);
         device.tick();
         repo.saveInk(page);
-        repo.createScratchpadPage();
         return page;
     }
 }

@@ -8,12 +8,14 @@ Standard `View` / `onTouch` drawing is too delayed on Boox. This app uses the **
 
 Top to bottom:
 
-1. **Scratchpad | Notebooks**: top-level nav, always visible.
+1. **One top bar**: `Scratchpad | comedy  journal  actions.life  miscellaneous … | +`. Scratchpad is pinned left and **+** (new notebook) pinned right; the notebook tabs scroll sideways between them. The open item is inverted (black, bold white text).
+   - The open notebook's tab carries a small **⋯** inside it; long-press works on any tab (it opens that notebook, then its menu). **Rename / Delete** drops down anchored under that tab. Rename edits the name in the same anchored panel. Delete confirms there too; the notebook's pages move back to the end of the Scratchpad, and no page is deleted. **+** opens its name field under the **+**.
+   - Design choice: showing the ⋯ only on the open tab keeps the bar calm while making it obvious which notebook the menu affects. Anchoring every menu and form to the tab (or page) it acts on means nothing floats at a fixed position unrelated to its target.
 2. **Undo move · Pen / Eraser / Lasso**: drawing toolbar. A hint line on its left says what the Lasso is doing.
 3. Drawing area: a continuous vertical scroll of pages separated by a dashed line. Finger scrolls; the stylus draws.
-   - **Scratchpad**: blank pages top to bottom, always ending with a blank page. Opens on that last page.
-   - **Notebooks**: a row of notebook tabs (seeded with **comedy**, **journal**, **actions.life**, **miscellaneous**), then that notebook's pages in order. Five tabs fit; more scroll sideways. **+** creates a notebook. **⋯** (or long-press a tab) renames or deletes the open notebook. Deleting asks first, and the notebook's pages move back to the end of the Scratchpad. No page is deleted.
-4. Bottom-right of every page: **Move** and **Wipe**. Move opens a menu of notebooks plus **+ New notebook**. Tapping one appends the page as the newest page of that notebook. Wipe clears that page only. Both are disabled on blank pages.
+   - The Scratchpad and every notebook are the same kind of page list: pages in order, always ending with one blank page. The first stroke on that blank stores it (and syncs it) at the next position in that list, and a new blank appears after it. An empty notebook shows one blank page to draw on. The Scratchpad opens on its last page; a notebook opens on its first.
+   - A page is as tall as the drawing area under the two bars (minus the gap), so one whole page and its controls fit on screen. On the Go 7 Color II (1264×1680, xhdpi, full screen) that is **1264×1420**. Pages from before v10 whose ink reaches below that keep their old full-window height (1264×1680 there), so no ink is cropped or shifted.
+4. Bottom of every page: the page number (1, 2, 3 … within that list) on the left; **Move** and **⋯** on the right. Move opens a menu of notebooks plus **+ New notebook** and appends the page as the newest page there (disabled on blank pages). **⋯** opens **Wipe** (clears the ink; only on pages with ink) and **Delete page**, anchored to that page, and each confirms in the same spot. Delete tombstones the page so it syncs, and works on blank pages too. A list's trailing blank page can't disappear: deleting it just leaves a fresh one.
 
 **Lasso** (select and move ink on one page):
 
@@ -104,7 +106,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Sideload without adb: copy the APK to internal storage and open it in **Storage**. Allow install from that source if prompted.
 
-4. Open **Boox Pen POC**. You land on the last blank Scratchpad page. Draw with the stylus; finger-scroll through pages. **Move** on a page, then a notebook name, files it. **Eraser** deletes strokes; **Wipe** clears one page.
+4. Open **Boox Pen POC**. You land on the last blank Scratchpad page. Draw with the stylus; finger-scroll through pages. **Move** on a page, then a notebook name, files it. **Eraser** deletes strokes; a page's **⋯** wipes or deletes it.
 
 If the screen stays white and nothing appears under the pen:
 
@@ -125,12 +127,12 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 ## Layout
 
 - `PenApp` — Hidden API bypass required by Onyx on Android 11+.
-- `CanvasActivity` — Scratchpad | Notebooks nav, Pen / Eraser / Lasso / Undo toolbar, notebook tabs, page slots with Move / Wipe.
+- `CanvasActivity` — the one top bar (Scratchpad, notebook tabs with their anchored menu, +), Pen / Eraser / Lasso / Undo toolbar, page slots with page number, Move and ⋯ (Wipe / Delete).
 - `PageScroller` — finger scroll over the page stack; forwards stylus gestures to the ink surface, and every touch while a lasso selection is up.
 - `PageInkView` — `SurfaceView` + `TouchHelper` live ink; paints the visible pages at the current scroll offset. Owns raw-drawing pause/resume, and the lasso selection, drag preview and commit.
 - `Lasso` — lasso hit-test, offset clamping, move (rewrites points, keeps ids) and single-level undo.
 - `InkRenderer` — pressure + end-taper freeze strokes and eraser hit-tests.
-- `data/BoardRepository` — what the UI calls: list scratchpad and notebook pages, save ink, move, wipe, and create / rename / delete notebooks. `RoomBoardRepository` implements it with Room, ink files and the Documents mirror.
+- `data/BoardRepository` — what the UI calls: one `pages(notebookId)` list for the Scratchpad (`null`) and each notebook, always ending with a blank page; save ink, move, wipe, delete pages, and create / rename / delete notebooks. `RoomBoardRepository` implements it with Room, ink files and the Documents mirror.
 - `data/LegacyBoardImporter` — one-time import of the old `zetteldraw-boards.json`.
 - `sync/` — `SyncEngine` (push the outbox, then pull until caught up), `SyncClient` (HTTP), `SyncWorker` / `SyncScheduler` (WorkManager), `SyncConfig`.
 - `server/` — sync service, shared SQL migrations, docker-compose.

@@ -72,7 +72,9 @@ public class LegacyMigrationTest {
         assertTrue(scratch.get(3).isBlank());
 
         List<Board> comedy = device.repo.notebookPages(Notebook.COMEDY.uuid);
-        assertEquals(RoomBoardRepositoryTest.ids(comedy), List.of(c1, c2));
+        assertEquals(List.of(c1, c2), RoomBoardRepositoryTest.ids(comedy).subList(0, 2));
+        assertEquals(3, comedy.size());
+        assertTrue(comedy.get(2).isBlank());
         assertEquals(1, device.repo.notebookPages(Notebook.JOURNAL.uuid).size());
         assertTrue(device.repo.notebookPages(Notebook.JOURNAL.uuid).get(0).isBlank());
 
@@ -98,7 +100,7 @@ public class LegacyMigrationTest {
         writeLegacyJson();
         assertEquals(0, LegacyBoardImporter.importIfPresent(filesDir, device.repo));
         assertEquals(4, device.repo.scratchpadPages().size());
-        assertEquals(2, device.repo.notebookPages(Notebook.COMEDY.uuid).size());
+        assertEquals(3, device.repo.notebookPages(Notebook.COMEDY.uuid).size());
     }
 
     @Test

@@ -18,6 +18,7 @@ import com.onyx.android.sdk.data.note.TouchPoint;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.ZettelData;
 
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
@@ -34,6 +35,11 @@ import java.util.List;
 @Config(sdk = 33, application = Application.class, qualifiers = "w600dp-h1000dp",
         shadows = IdleSurfaceViewShadow.class)
 public class CanvasActivitySmokeTest {
+    @Before
+    public void freshRepository() {
+        ZettelData.resetForTest();
+    }
+
     @Test
     public void createRenameDeleteNotebookThroughTheUi() {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
@@ -42,8 +48,14 @@ public class CanvasActivitySmokeTest {
         BoardRepository repo = ZettelData.repository(activity);
         idle();
 
-        click(root, "Notebooks");
-        assertNotNull("seed tab shown", find(root, "comedy"));
+        assertNotNull("seed tabs share the top bar with Scratchpad", find(root, "comedy"));
+        assertTrue("no tab ⋯ while the Scratchpad is open", tabMenus(root).isEmpty());
+        assertNull("no separate Notebooks row", find(root, "Notebooks"));
+        click(root, "comedy");
+        assertTrue(find(root, "comedy").getParent() instanceof View);
+        assertTrue("selected tab is inverted", ((View) find(root, "comedy").getParent()).isSelected());
+        assertFalse(find(root, "Scratchpad").isSelected());
+        assertEquals("only the selected tab carries ⋯", 1, tabMenus(root).size());
 
         click(root, "+");
         EditText name = findEdit(root);
@@ -53,8 +65,11 @@ public class CanvasActivitySmokeTest {
         assertNull("form closed", findEdit(root));
         assertEquals(5, repo.notebooks().size());
         assertNotNull("new tab shown", find(root, "sketches"));
+        assertTrue("new notebook opens", ((View) find(root, "sketches").getParent()).isSelected());
+        assertSame("⋯ sits inside the selected tab",
+                find(root, "sketches").getParent(), tabMenus(root).get(0).getParent());
 
-        click(root, "⋯");
+        clickTabMenu(root);
         click(root, "Rename");
         name = findEdit(root);
         assertEquals("sketches", name.getText().toString());
@@ -63,18 +78,145 @@ public class CanvasActivitySmokeTest {
         assertEquals("drawings", repo.notebooks().get(4).title);
         assertNotNull(find(root, "drawings"));
 
-        click(root, "⋯");
+        clickTabMenu(root);
         click(root, "Delete");
         assertNotNull("confirmation shown", find(root, "Delete “drawings”?"));
         click(root, "Cancel");
         assertEquals(5, repo.notebooks().size());
 
-        click(root, "⋯");
+        clickTabMenu(root);
         click(root, "Delete");
         clickLast(root, "Delete");
         assertEquals(4, repo.notebooks().size());
         assertNull(find(root, "drawings"));
 
+        controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void longPressAnyTabOpensItsMenuUnderThatTab() {
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+
+        TextView journal = find(root, "journal");
+        assertTrue(journal.performLongClick());
+        idle();
+        assertTrue("long-press selects the tab", ((View) journal.getParent()).isSelected());
+        TextView rename = find(root, "Rename");
+        assertNotNull("menu shown in-window", rename);
+        int[] tab = new int[2];
+        int[] item = new int[2];
+        ((View) journal.getParent()).getLocationInWindow(tab);
+        ((View) rename.getParent()).getLocationInWindow(item);
+        assertTrue("menu hangs below the tab", item[1] > tab[1]);
+
+        click(root, "Rename");
+        EditText name = findEdit(root);
+        assertEquals("journal", name.getText().toString());
+        name.setText("diary");
+        click(root, "Save");
+        assertNotNull(find(root, "diary"));
+        assertNull(find(root, "journal"));
+
+        click(root, "Scratchpad");
+        assertTrue(find(root, "Scratchpad").isSelected());
+        assertTrue(tabMenus(root).isEmpty());
+        controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void pageMenuWipesAndDeletesWithConfirmAndKeepsTheTrailingBlank() {
+        Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        Board first = repo.scratchpadPages().get(0);
+        first.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, 20f));
+        repo.saveInk(first);
+        Board second = repo.scratchpadPages().get(1);
+        second.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, 40f));
+        repo.saveInk(second);
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+        List<View> menus = byDescription(root, "Page options");
+        assertEquals("every page has a ⋯, blank ones too", 3, menus.size());
+        assertNull("Wipe lives in the menu now", find(root, "Wipe"));
+
+        menus.get(0).performClick();
+        idle();
+        click(root, "Wipe");
+        assertNotNull(find(root, "Wipe this page?"));
+        click(root, "Cancel");
+        assertFalse(first.isBlank());
+        byDescription(root, "Page options").get(0).performClick();
+        idle();
+        click(root, "Wipe");
+        clickLast(root, "Wipe");
+        assertTrue(first.isBlank());
+
+        byDescription(root, "Page options").get(0).performClick();
+        idle();
+        assertNull("nothing to wipe on a blank page", find(root, "Wipe"));
+        click(root, "Delete page");
+        assertNotNull(find(root, "Delete this page?"));
+        clickLast(root, "Delete");
+        List<Board> pages = repo.scratchpadPages();
+        assertEquals(2, pages.size());
+        assertEquals(second.id, pages.get(0).id);
+        assertTrue(pages.get(1).isBlank());
+        assertEquals(2, byDescription(root, "Page options").size());
+
+        byDescription(root, "Page options").get(1).performClick();
+        idle();
+        click(root, "Delete page");
+        clickLast(root, "Delete");
+        pages = repo.scratchpadPages();
+        assertEquals("the trailing blank page regenerates", 2, pages.size());
+        assertTrue(pages.get(1).isBlank());
+        assertEquals(2, byDescription(root, "Page options").size());
+        controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void notebookGrowsAPageOnFirstInkAndPagesAreNumbered() {
+        Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+
+        click(root, "comedy");
+        assertEquals("an empty notebook shows one blank page", 1, byDescription(root, "Page options").size());
+        assertEquals(1, byDescription(root, "Page 1").size());
+        assertNotNull(find(root, "1"));
+        assertNull("no empty-notebook hint any more", find(root, "No notebooks yet. Tap + to add one."));
+
+        PageInkView ink = findInk(root);
+        ArrayList<TouchPoint> stroke = new ArrayList<>();
+        stroke.add(new TouchPoint(100f, 100f, 0.5f, 1f, 0, 0, 1L));
+        stroke.add(new TouchPoint(160f, 140f, 0.5f, 1f, 0, 0, 2L));
+        ink.addStroke(stroke);
+        idle();
+        List<Board> pages = repo.notebookPages(Notebook.COMEDY.uuid);
+        assertEquals(2, pages.size());
+        assertFalse(pages.get(0).isBlank());
+        assertTrue(pages.get(1).isBlank());
+        assertEquals("a new blank page follows", 2, byDescription(root, "Page options").size());
+        assertEquals(1, byDescription(root, "Page 2").size());
+
+        byDescription(root, "Page options").get(0).performClick();
+        idle();
+        click(root, "Delete page");
+        clickLast(root, "Delete");
+        pages = repo.notebookPages(Notebook.COMEDY.uuid);
+        assertEquals("the notebook keeps one blank page", 1, pages.size());
+        assertTrue(pages.get(0).isBlank());
+        assertEquals(1, byDescription(root, "Page 1").size());
+        assertTrue(byDescription(root, "Page 2").isEmpty());
+
+        click(root, "Scratchpad");
+        assertEquals(1, byDescription(root, "Page 1").size());
         controller.pause().stop().destroy();
     }
 
@@ -85,18 +227,17 @@ public class CanvasActivitySmokeTest {
         Board first = repo.scratchpadPages().get(0);
         first.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, 20f));
         repo.saveInk(first);
-        Board second = repo.createScratchpadPage();
+        Board second = repo.scratchpadPages().get(1);
         second.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, 40f));
         repo.saveInk(second);
-        repo.createScratchpadPage();
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
 
         clickFirstEnabled(root, "Move");
-        click(root, "journal");
-        assertEquals(1, repo.notebookPages(Notebook.JOURNAL.uuid).size());
+        clickLast(root, "journal");
+        assertEquals(2, repo.notebookPages(Notebook.JOURNAL.uuid).size());
 
         clickFirstEnabled(root, "Move");
         click(root, "+ New notebook");
@@ -105,7 +246,7 @@ public class CanvasActivitySmokeTest {
         click(root, "Create");
         BoardRepository.NotebookInfo fresh = repo.notebooks().get(4);
         assertEquals("fresh", fresh.title);
-        assertEquals(1, repo.notebookPages(fresh.id).size());
+        assertEquals(2, repo.notebookPages(fresh.id).size());
         assertEquals(1, repo.scratchpadPages().size());
         assertTrue(repo.scratchpadPages().get(0).isBlank());
 
@@ -128,7 +269,6 @@ public class CanvasActivitySmokeTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
-        click(root, "Notebooks");
         click(root, "lasso");
         PageInkView ink = findInk(root);
         assertNotNull(ink);
@@ -180,6 +320,51 @@ public class CanvasActivitySmokeTest {
         assertEquals(PageInkView.Tool.LASSO, ink.tool());
 
         controller.pause().stop().destroy();
+    }
+
+    /** The ⋯ inside a notebook tab (pages have their own ⋯ with another description). */
+    private static List<View> tabMenus(View root) {
+        List<View> out = new ArrayList<>();
+        for (TextView view : collectAll(root, "⋯")) {
+            if (String.valueOf(view.getContentDescription()).endsWith("rename or delete")) {
+                out.add(view);
+            }
+        }
+        return out;
+    }
+
+    private static void clickTabMenu(View root) {
+        List<View> menus = tabMenus(root);
+        assertEquals(1, menus.size());
+        assertTrue(menus.get(0).performClick());
+        idle();
+    }
+
+    private static List<TextView> collectAll(View root, String text) {
+        List<TextView> all = new ArrayList<>();
+        collect(root, text, all);
+        return all;
+    }
+
+    private static List<View> byDescription(View view, String description) {
+        List<View> out = new ArrayList<>();
+        collectByDescription(view, description, out);
+        return out;
+    }
+
+    private static void collectByDescription(View view, String description, List<View> out) {
+        if (view.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        if (description.contentEquals(String.valueOf(view.getContentDescription()))) {
+            out.add(view);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                collectByDescription(group.getChildAt(i), description, out);
+            }
+        }
     }
 
     private static void touch(View target, int action, float x, float y) {

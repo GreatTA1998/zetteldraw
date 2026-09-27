@@ -45,8 +45,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private final Object lock = new Object();
     private final HashMap<String, Board> cache = new HashMap<>();
     private final AtomicBoolean indexPending = new AtomicBoolean();
-    /** Unsaved blank page shown at the end of the scratchpad. */
-    private Board trailingBlank;
+    /** Unsaved blank page at the end of each page list, keyed by {@link #listKey}. */
+    private final HashMap<String, Board> trailingBlanks = new HashMap<>();
     private long lastQueuedAt;
     private volatile Runnable remoteListener;
 
@@ -62,7 +62,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             lastQueuedAt = dao.maxQueuedAt();
             db.runInTransaction(this::seedNotebooks);
-            ensureTrailingBlankLocked();
+            ensureTrailingBlankLocked(null);
         }
     }
 
@@ -80,27 +80,21 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     @Override
-    public List<Board> scratchpadPages() {
+    public List<Board> pages(String notebookId) {
         synchronized (lock) {
-            List<Board> pages = toBoards(dao.scratchpadBoards());
-            if (trailingBlank != null) {
-                pages.add(trailingBlank);
+            if (notebookId != null) {
+                NotebookEntity notebook = dao.notebook(notebookId);
+                if (notebook == null || notebook.deletedAt != null) {
+                    return new ArrayList<>();
+                }
+            }
+            ensureTrailingBlankLocked(notebookId);
+            List<Board> pages = toBoards(rowsLocked(notebookId));
+            Board blank = trailingBlanks.get(listKey(notebookId));
+            if (blank != null) {
+                pages.add(blank);
             }
             return pages;
-        }
-    }
-
-    @Override
-    public List<Board> notebookPages(String notebookId) {
-        synchronized (lock) {
-            return toBoards(dao.notebookBoards(notebookId));
-        }
-    }
-
-    @Override
-    public Board createScratchpadPage() {
-        synchronized (lock) {
-            return ensureTrailingBlankLocked();
         }
     }
 
@@ -113,19 +107,24 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             byte[] bytes = page.isBlank() ? null : InkCodec.encode(page.strokes);
             String hash = bytes == null ? null : InkFileStore.sha256(bytes);
             BoardEntity row = dao.board(page.id);
+            String grewList = null;
+            boolean grew = false;
             if (row == null) {
                 if (bytes == null) {
                     return;
                 }
+                String key = listOfBlankLocked(page.id);
+                grewList = key == null ? null : notebookOfKey(key);
+                grew = true;
+                if (key != null) {
+                    trailingBlanks.remove(key);
+                }
                 row = new BoardEntity();
                 row.id = page.id;
-                row.notebookId = null;
-                row.position = Positions.after(dao.lastScratchpadPosition());
+                row.notebookId = grewList;
+                row.position = Positions.after(lastPositionLocked(grewList));
                 row.createdAt = page.createdAt;
                 cache.put(page.id, page);
-                if (trailingBlank == page) {
-                    trailingBlank = null;
-                }
             } else if (Objects.equals(row.inkHash, hash)) {
                 return;
             }
@@ -143,6 +142,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 dao.upsertBoard(toSave);
                 queueLocked(OutboxEntry.BOARD, toSave.id, OutboxEntry.UPSERT);
             });
+            if (grew) {
+                ensureTrailingBlankLocked(grewList);
+            }
             scheduleIndex();
         }
     }
@@ -155,15 +157,20 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 return;
             }
             BoardEntity row = dao.board(boardId);
+            String source;
             if (row == null) {
-                if (trailingBlank == null || !trailingBlank.id.equals(boardId)) {
+                String key = listOfBlankLocked(boardId);
+                if (key == null) {
                     return;
                 }
+                Board blank = trailingBlanks.remove(key);
+                source = notebookOfKey(key);
                 row = new BoardEntity();
-                row.id = trailingBlank.id;
-                row.createdAt = trailingBlank.createdAt;
-                cache.put(row.id, trailingBlank);
-                trailingBlank = null;
+                row.id = blank.id;
+                row.createdAt = blank.createdAt;
+                cache.put(row.id, blank);
+            } else {
+                source = row.notebookId;
             }
             row.position = Positions.after(dao.lastNotebookBoardPosition(notebookId));
             row.notebookId = notebookId;
@@ -173,7 +180,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 dao.upsertBoard(toSave);
                 queueLocked(OutboxEntry.BOARD, toSave.id, OutboxEntry.UPSERT);
             });
-            ensureTrailingBlankLocked();
+            trimTrailingBlanksLocked(source);
+            ensureTrailingBlankLocked(source);
+            ensureTrailingBlankLocked(notebookId);
             scheduleIndex();
         }
     }
@@ -186,13 +195,26 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (board == null && row != null) {
                 board = load(row);
             }
-            if (board == null) {
+            if (board == null || row == null) {
                 return;
             }
             board.strokes.clear();
             saveInk(board);
-            trimTrailingBlanksLocked();
-            ensureTrailingBlankLocked();
+            trimTrailingBlanksLocked(row.notebookId);
+            ensureTrailingBlankLocked(row.notebookId);
+        }
+    }
+
+    @Override
+    public void deletePage(String boardId) {
+        synchronized (lock) {
+            BoardEntity row = dao.board(boardId);
+            if (row == null || row.deletedAt != null || row.conflictOf != null) {
+                return;
+            }
+            tombstoneLocked(row);
+            trimTrailingBlanksLocked(row.notebookId);
+            ensureTrailingBlankLocked(row.notebookId);
         }
     }
 
@@ -255,7 +277,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.DELETE);
                 returnPagesToScratchpadLocked(notebookId);
             });
-            ensureTrailingBlankLocked();
+            Board blank = trailingBlanks.remove(listKey(notebookId));
+            if (blank != null) {
+                cache.remove(blank.id);
+            }
+            trimTrailingBlanksLocked(null);
+            ensureTrailingBlankLocked(null);
             scheduleIndex();
         }
     }
@@ -484,11 +511,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             for (Board board : boards) {
                 cache.put(board.id, board);
             }
-            if (trailingBlank != null) {
-                cache.remove(trailingBlank.id);
-                trailingBlank = null;
+            for (Board blank : trailingBlanks.values()) {
+                cache.remove(blank.id);
             }
-            ensureTrailingBlankLocked();
+            trailingBlanks.clear();
+            ensureTrailingBlankLocked(null);
             scheduleIndex();
             return rows.size();
         }
@@ -550,35 +577,66 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    private Board ensureTrailingBlankLocked() {
-        if (trailingBlank != null) {
-            return trailingBlank;
+    private static String listKey(String notebookId) {
+        return notebookId == null ? "" : notebookId;
+    }
+
+    private static String notebookOfKey(String key) {
+        return key.isEmpty() ? null : key;
+    }
+
+    private List<BoardEntity> rowsLocked(String notebookId) {
+        return notebookId == null ? dao.scratchpadBoards() : dao.notebookBoards(notebookId);
+    }
+
+    private String lastPositionLocked(String notebookId) {
+        return notebookId == null ? dao.lastScratchpadPosition() : dao.lastNotebookBoardPosition(notebookId);
+    }
+
+    /** Key of the list whose unsaved trailing blank is {@code boardId}, or null. */
+    private String listOfBlankLocked(String boardId) {
+        for (Map.Entry<String, Board> entry : trailingBlanks.entrySet()) {
+            if (entry.getValue().id.equals(boardId)) {
+                return entry.getKey();
+            }
         }
-        List<BoardEntity> rows = dao.scratchpadBoards();
+        return null;
+    }
+
+    private Board ensureTrailingBlankLocked(String notebookId) {
+        String key = listKey(notebookId);
+        Board blank = trailingBlanks.get(key);
+        if (blank != null) {
+            return blank;
+        }
+        List<BoardEntity> rows = rowsLocked(notebookId);
         if (!rows.isEmpty() && rows.get(rows.size() - 1).inkHash == null) {
             return load(rows.get(rows.size() - 1));
         }
-        trailingBlank = Board.blank();
-        cache.put(trailingBlank.id, trailingBlank);
-        return trailingBlank;
+        blank = Board.blank();
+        trailingBlanks.put(key, blank);
+        cache.put(blank.id, blank);
+        return blank;
     }
 
-    /** Keep at most one blank page at the end of the scratchpad. */
-    private void trimTrailingBlanksLocked() {
+    /** Keep at most one blank page at the end of the list. */
+    private void trimTrailingBlanksLocked(String notebookId) {
+        String key = listKey(notebookId);
         while (true) {
-            List<BoardEntity> rows = dao.scratchpadBoards();
-            int n = rows.size() + (trailingBlank != null ? 1 : 0);
+            List<BoardEntity> rows = rowsLocked(notebookId);
+            Board blank = trailingBlanks.get(key);
+            int n = rows.size() + (blank != null ? 1 : 0);
             if (n < 2) {
                 return;
             }
-            boolean lastBlank = trailingBlank != null || rows.get(rows.size() - 1).inkHash == null;
-            BoardEntity prev = trailingBlank != null ? rows.get(rows.size() - 1) : rows.get(rows.size() - 2);
+            boolean lastBlank = blank != null || rows.get(rows.size() - 1).inkHash == null;
+            BoardEntity prev = blank != null ? rows.get(rows.size() - 1) : rows.get(rows.size() - 2);
             if (!lastBlank || prev.inkHash != null) {
                 return;
             }
-            if (trailingBlank != null) {
-                cache.remove(trailingBlank.id);
-                trailingBlank = null;
+            if (blank != null) {
+                cache.remove(blank.id);
+                trailingBlanks.remove(key);
             } else {
                 tombstoneLocked(rows.get(rows.size() - 1));
             }

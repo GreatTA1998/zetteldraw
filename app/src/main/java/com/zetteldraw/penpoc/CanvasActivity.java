@@ -2,11 +2,13 @@ package com.zetteldraw.penpoc;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.InputType;
@@ -31,13 +33,15 @@ import java.util.HashMap;
 import java.util.List;
 
 /**
- * Scratchpad | Notebooks. Each section is a continuous vertical scroll of
- * pages; every page has Move (to a notebook) and Wipe.
+ * One top bar: Scratchpad | notebook tabs | +. Each collection is a continuous
+ * vertical scroll of pages; every page has Move (to a notebook) and Wipe.
  */
 public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
     private static final String SCRATCHPAD = "scratchpad";
-    private static final String NO_NOTEBOOK = "no-notebook";
+    private static final String PREFS = "canvas";
+    /** Pages created before this device first ran v10 may keep the old full-window height. */
+    private static final String SHORT_PAGES_SINCE = "short_pages_since";
 
     private BoardRepository repository;
     private String collectionId = SCRATCHPAD;
@@ -47,18 +51,16 @@ public final class CanvasActivity extends Activity {
 
     private FrameLayout root;
     private FrameLayout drawingArea;
-    /** In-window menu or form (Move, notebook options, name, delete confirm). */
+    /** In-window menu or form (Move, notebook menu, name, delete confirm). */
     private FrameLayout overlay;
+    private LinearLayout topBar;
     private PageInkView inkView;
     private PageScroller scroller;
     private LinearLayout pageColumn;
-    private TextView emptyView;
-    private LinearLayout notebookTabs;
     private HorizontalScrollView notebookScroll;
     private LinearLayout notebookStrip;
-    private View notebookTabsRule;
     private Button scratchpadTab;
-    private Button notebooksTab;
+    private Button addButton;
     private Button penButton;
     private Button eraserButton;
     private Button lassoButton;
@@ -67,10 +69,14 @@ public final class CanvasActivity extends Activity {
     /** Last committed lasso move; the Undo button puts it back. */
     private Lasso.Move lastMove;
     private final Runnable clearHint = () -> toolHint.setText("");
-    private final ArrayList<Button> notebookButtons = new ArrayList<>();
+    private final ArrayList<NotebookTab> notebookTabs = new ArrayList<>();
     private final ArrayList<PageSlot> slots = new ArrayList<>();
 
+    /** Height of a page: the drawing area minus the gap, so a whole page and its controls fit on screen. */
     private int pageHeight;
+    /** Full-window page height of v4–v9; old pages whose ink reaches below {@link #pageHeight} keep it. */
+    private int legacyPageHeight;
+    private long shortPagesSince;
     private int pageGap;
     private boolean scrolling;
     private boolean pagesLoaded;
@@ -82,6 +88,12 @@ public final class CanvasActivity extends Activity {
         super.onCreate(savedInstanceState);
         InkRenderer.applyBaseWidthMm(getResources().getDisplayMetrics());
         repository = ZettelData.repository(this);
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        shortPagesSince = prefs.getLong(SHORT_PAGES_SINCE, 0L);
+        if (shortPagesSince == 0L) {
+            shortPagesSince = System.currentTimeMillis();
+            prefs.edit().putLong(SHORT_PAGES_SINCE, shortPagesSince).apply();
+        }
         pageGap = dp(24);
 
         root = new FrameLayout(this);
@@ -92,14 +104,11 @@ public final class CanvasActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
-        column.addView(buildNav(), matchWrap());
+        topBar = buildTopBar();
+        column.addView(topBar, matchWrap());
         column.addView(rule(), ruleLp());
         column.addView(buildToolbar(), matchWrap());
         column.addView(rule(), ruleLp());
-        notebookTabs = buildNotebookTabs();
-        column.addView(notebookTabs, matchWrap());
-        notebookTabsRule = rule();
-        column.addView(notebookTabsRule, ruleLp());
 
         drawingArea = new FrameLayout(this);
         column.addView(drawingArea, new LinearLayout.LayoutParams(
@@ -118,12 +127,9 @@ public final class CanvasActivity extends Activity {
 
             @Override
             public void onPageBecameNonEmpty(Board page) {
-                if (SCRATCHPAD.equals(collectionId)) {
-                    int before = pagesIn(collectionId).size();
-                    repository.createScratchpadPage();
-                    if (pagesIn(collectionId).size() != before) {
-                        reloadPages(scroller.getScrollY());
-                    }
+                // The first stroke stored the trailing blank, and the repository added a new one.
+                if (pagesIn(collectionId).size() != slots.size()) {
+                    reloadPages(scroller.getScrollY());
                 }
             }
 
@@ -174,19 +180,11 @@ public final class CanvasActivity extends Activity {
                 FrameLayout.LayoutParams.WRAP_CONTENT));
         drawingArea.addView(scroller, matchMatch());
 
-        emptyView = new TextView(this);
-        emptyView.setText(R.string.empty_notebook);
-        emptyView.setTextColor(Color.DKGRAY);
-        emptyView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        emptyView.setGravity(Gravity.CENTER);
-        emptyView.setPadding(dp(24), dp(24), dp(24), dp(24));
-        emptyView.setVisibility(View.GONE);
-        drawingArea.addView(emptyView, matchMatch());
 
         root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            if (pageHeight == 0 && root.getHeight() > 0) {
-                // v4 boards were drawn on a full-window surface; keep that page size.
-                pageHeight = root.getHeight();
+            if (pageHeight == 0 && root.getHeight() > 0 && drawingArea.getHeight() > 0) {
+                legacyPageHeight = root.getHeight();
+                pageHeight = Math.min(legacyPageHeight, drawingArea.getHeight() - pageGap);
                 root.post(() -> openCollection(collectionId));
             }
         });
@@ -220,21 +218,49 @@ public final class CanvasActivity extends Activity {
         super.onDestroy();
     }
 
-    private View buildNav() {
-        LinearLayout nav = row(Gravity.CENTER_VERTICAL | Gravity.START);
-        scratchpadTab = tinyButton(getString(R.string.scratchpad), 15);
-        notebooksTab = tinyButton(getString(R.string.notebooks), 15);
+    /**
+     * Scratchpad pinned left, + pinned right, notebook tabs scrolling between.
+     * Only the selected notebook's tab carries a ⋯; long-press works on any tab.
+     */
+    private LinearLayout buildTopBar() {
+        LinearLayout bar = row(Gravity.CENTER_VERTICAL);
+        scratchpadTab = new Button(this, null, android.R.attr.borderlessButtonStyle);
+        styleTabLabel(scratchpadTab, getString(R.string.scratchpad));
         scratchpadTab.setOnClickListener(v -> openCollection(SCRATCHPAD));
-        notebooksTab.setOnClickListener(v -> openNotebooks());
-        TextView divider = new TextView(this);
-        divider.setText("|");
-        divider.setTextColor(Color.BLACK);
-        divider.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        divider.setPadding(dp(8), 0, dp(8), 0);
-        nav.addView(scratchpadTab, wrap());
-        nav.addView(divider, wrap());
-        nav.addView(notebooksTab, wrap());
-        return nav;
+        bar.addView(scratchpadTab, wrap());
+        bar.addView(barDivider(), barDividerLp());
+
+        notebookScroll = new HorizontalScrollView(this);
+        notebookScroll.setHorizontalScrollBarEnabled(false);
+        notebookStrip = new LinearLayout(this);
+        notebookStrip.setOrientation(LinearLayout.HORIZONTAL);
+        notebookStrip.setGravity(Gravity.CENTER_VERTICAL);
+        notebookScroll.addView(notebookStrip, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        bar.addView(notebookScroll, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        bar.addView(barDivider(), barDividerLp());
+        addButton = tinyButton(getString(R.string.add_notebook), 22);
+        addButton.setContentDescription(getString(R.string.new_notebook));
+        addButton.setMinimumWidth(dp(56));
+        addButton.setMinimumHeight(dp(48));
+        addButton.setPadding(dp(8), 0, dp(8), dp(2));
+        addButton.setOnClickListener(v -> showNameForm(null, null, addButton));
+        bar.addView(addButton, wrap());
+        rebuildNotebookTabs();
+        return bar;
+    }
+
+    private View barDivider() {
+        return rule();
+    }
+
+    private LinearLayout.LayoutParams barDividerLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(1), dp(32));
+        lp.leftMargin = dp(8);
+        lp.rightMargin = dp(8);
+        return lp;
     }
 
     private View buildToolbar() {
@@ -294,60 +320,28 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    /** Scrolling notebook tabs (five fit on screen) with fixed ⋯ and + on the right. */
-    private LinearLayout buildNotebookTabs() {
-        LinearLayout tabs = row(Gravity.CENTER_VERTICAL);
-        notebookScroll = new HorizontalScrollView(this);
-        notebookScroll.setHorizontalScrollBarEnabled(false);
-        notebookStrip = new LinearLayout(this);
-        notebookStrip.setOrientation(LinearLayout.HORIZONTAL);
-        notebookScroll.addView(notebookStrip, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
-        tabs.addView(notebookScroll, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-
-        Button options = tinyButton(getString(R.string.notebook_options), 15);
-        options.setOnClickListener(v -> {
-            if (notebookId != null && !SCRATCHPAD.equals(collectionId)) {
-                showNotebookOptions(notebookId);
-            }
-        });
-        Button add = tinyButton(getString(R.string.add_notebook), 15);
-        add.setOnClickListener(v -> showNameForm(null, null));
-        LinearLayout.LayoutParams lp = wrap();
-        lp.leftMargin = dp(6);
-        tabs.addView(options, lp);
-        LinearLayout.LayoutParams addLp = wrap();
-        addLp.leftMargin = dp(6);
-        tabs.addView(add, addLp);
-        rebuildNotebookTabs();
-        return tabs;
-    }
-
     private void rebuildNotebookTabs() {
         notebookStrip.removeAllViews();
-        notebookButtons.clear();
-        int width = getResources().getDisplayMetrics().widthPixels;
-        int tabWidth = Math.max(dp(64), (width - dp(16) - dp(110) - 4 * dp(6)) / 5);
-        for (BoardRepository.NotebookInfo each : repository.notebooks()) {
-            Button button = tinyButton(each.title, 13);
-            button.setTag(each.id);
-            button.setSingleLine(true);
-            button.setEllipsize(TextUtils.TruncateAt.END);
-            button.setOnClickListener(v -> openNotebook(each.id));
-            button.setOnLongClickListener(v -> {
-                openNotebook(each.id);
-                showNotebookOptions(each.id);
-                return true;
-            });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(tabWidth,
-                    LinearLayout.LayoutParams.WRAP_CONTENT);
-            if (!notebookButtons.isEmpty()) {
-                lp.leftMargin = dp(6);
-            }
-            notebookStrip.addView(button, lp);
-            notebookButtons.add(button);
+        notebookTabs.clear();
+        List<BoardRepository.NotebookInfo> notebooks = repository.notebooks();
+        if (notebooks.isEmpty()) {
+            TextView hint = new TextView(this);
+            hint.setText(R.string.no_notebooks_bar);
+            hint.setTextColor(Color.BLACK);
+            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            hint.setPadding(dp(4), 0, dp(4), 0);
+            notebookStrip.addView(hint, wrap());
         }
+        for (BoardRepository.NotebookInfo each : notebooks) {
+            NotebookTab tab = new NotebookTab(this, each);
+            LinearLayout.LayoutParams lp = wrap();
+            if (!notebookTabs.isEmpty()) {
+                lp.leftMargin = dp(4);
+            }
+            notebookStrip.addView(tab, lp);
+            notebookTabs.add(tab);
+        }
+        styleTabs();
     }
 
     /** Sync pulled changes: notebooks may have been added, renamed or deleted elsewhere. */
@@ -365,6 +359,7 @@ public final class CanvasActivity extends Activity {
         }
     }
 
+    /** Reopens the last notebook, else the first; the Scratchpad when none are left. */
     private void openNotebooks() {
         List<BoardRepository.NotebookInfo> notebooks = repository.notebooks();
         String target = null;
@@ -376,24 +371,50 @@ public final class CanvasActivity extends Activity {
         if (target == null && !notebooks.isEmpty()) {
             target = notebooks.get(0).id;
         }
-        openNotebook(target);
-    }
-
-    /** {@code id == null} shows the Notebooks section with no notebook (none exist). */
-    private void openNotebook(String id) {
-        notebookId = id;
-        openCollection(id == null ? NO_NOTEBOOK : id);
-        Button selected = tabFor(id);
-        if (selected != null) {
-            notebookScroll.post(() -> notebookScroll.smoothScrollTo(
-                    Math.max(0, selected.getLeft() - dp(24)), 0));
+        if (target == null) {
+            notebookId = null;
+            openCollection(SCRATCHPAD);
+        } else {
+            openNotebook(target);
         }
     }
 
-    private Button tabFor(String id) {
-        for (Button button : notebookButtons) {
-            if (button.getTag().equals(id)) {
-                return button;
+    private void openNotebook(String id) {
+        notebookId = id;
+        openCollection(id);
+        NotebookTab selected = tabFor(id);
+        if (selected != null) {
+            notebookScroll.post(() -> revealTab(selected, true));
+        }
+    }
+
+    /** Scrolls the strip only as far as needed to show the whole tab. */
+    private void revealTab(NotebookTab tab, boolean smooth) {
+        int viewport = notebookScroll.getWidth();
+        if (viewport <= 0) {
+            return;
+        }
+        int x = notebookScroll.getScrollX();
+        int target = x;
+        if (tab.getLeft() < x) {
+            target = Math.max(0, tab.getLeft() - dp(24));
+        } else if (tab.getRight() > x + viewport) {
+            target = tab.getRight() - viewport + dp(24);
+        }
+        if (target == x) {
+            return;
+        }
+        if (smooth) {
+            notebookScroll.smoothScrollTo(target, 0);
+        } else {
+            notebookScroll.scrollTo(target, 0);
+        }
+    }
+
+    private NotebookTab tabFor(String id) {
+        for (NotebookTab tab : notebookTabs) {
+            if (tab.id.equals(id)) {
+                return tab;
             }
         }
         return null;
@@ -426,7 +447,11 @@ public final class CanvasActivity extends Activity {
         if (saved != null) {
             target = saved;
         } else if (SCRATCHPAD.equals(id)) {
-            target = Math.max(0, pagesIn(id).size() - 1) * stride();
+            List<Board> pages = pagesIn(id);
+            target = 0;
+            for (int i = 0; i < pages.size() - 1; i++) {
+                target += heightOf(pages.get(i)) + pageGap;
+            }
         } else {
             target = 0;
         }
@@ -437,27 +462,21 @@ public final class CanvasActivity extends Activity {
         List<Board> pages = pagesIn(collectionId);
         pageColumn.removeAllViews();
         slots.clear();
+        int[] heights = new int[pages.size()];
         for (int i = 0; i < pages.size(); i++) {
-            PageSlot slot = new PageSlot(this, pages.get(i));
+            heights[i] = heightOf(pages.get(i));
+            PageSlot slot = new PageSlot(this, pages.get(i), i + 1);
             slots.add(slot);
             pageColumn.addView(slot, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, stride()));
+                    LinearLayout.LayoutParams.MATCH_PARENT, heights[i] + pageGap));
         }
-        emptyView.setText(NO_NOTEBOOK.equals(collectionId) ? R.string.no_notebooks : R.string.empty_notebook);
-        emptyView.setVisibility(pages.isEmpty() ? View.VISIBLE : View.GONE);
-        inkView.setPages(pages, pageHeight, stride());
+        inkView.setPages(pages, heights, pageGap);
         pendingScrollY = Math.max(0, targetScrollY);
         pageColumn.requestLayout();
     }
 
     private List<Board> pagesIn(String id) {
-        if (SCRATCHPAD.equals(id)) {
-            return repository.scratchpadPages();
-        }
-        if (NO_NOTEBOOK.equals(id)) {
-            return new ArrayList<>();
-        }
-        return repository.notebookPages(id);
+        return repository.pages(SCRATCHPAD.equals(id) ? null : id);
     }
 
     private void onScrolled(int scrollY) {
@@ -486,27 +505,83 @@ public final class CanvasActivity extends Activity {
         for (BoardRepository.NotebookInfo each : repository.notebooks()) {
             addPanelButton(list, each.title, () -> moveTo(slot, each.id));
         }
-        addPanelButton(list, getString(R.string.new_notebook_item), () -> showNameForm(null, slot));
+        addPanelButton(list, getString(R.string.new_notebook_item), () -> showNameForm(null, slot, null));
 
-        list.measure(View.MeasureSpec.makeMeasureSpec(drawingArea.getWidth(), View.MeasureSpec.AT_MOST),
+        showOverlay(list, pageAnchoredLp(slot.moveButton, list), drawingArea);
+    }
+
+    /** Above the page's bottom-right controls, right-aligned with them; below if there is no room above. */
+    private FrameLayout.LayoutParams pageAnchoredLp(View anchor, View content) {
+        content.measure(View.MeasureSpec.makeMeasureSpec(drawingArea.getWidth(), View.MeasureSpec.AT_MOST),
                 View.MeasureSpec.makeMeasureSpec(drawingArea.getHeight(), View.MeasureSpec.AT_MOST));
         int[] area = new int[2];
         int[] button = new int[2];
         drawingArea.getLocationOnScreen(area);
-        slot.moveButton.getLocationOnScreen(button);
+        anchor.getLocationOnScreen(button);
         int buttonTop = button[1] - area[1];
-        int buttonBottom = buttonTop + slot.moveButton.getHeight();
-        int top = buttonTop - dp(6) - list.getMeasuredHeight();
+        int buttonBottom = buttonTop + anchor.getHeight();
+        int top = buttonTop - dp(6) - content.getMeasuredHeight();
         if (top < 0) {
-            top = Math.min(buttonBottom + dp(6), Math.max(0, drawingArea.getHeight() - list.getMeasuredHeight()));
+            top = Math.min(buttonBottom + dp(6),
+                    Math.max(0, drawingArea.getHeight() - content.getMeasuredHeight()));
         }
-        FrameLayout.LayoutParams listLp = new FrameLayout.LayoutParams(
+        top = Math.max(0, top);
+        int right = drawingArea.getWidth() - (button[0] - area[0] + anchor.getWidth());
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT);
-        listLp.gravity = Gravity.TOP | Gravity.END;
-        listLp.topMargin = top;
-        listLp.rightMargin = dp(10);
-        showOverlay(list, listLp);
+        lp.gravity = Gravity.TOP | Gravity.END;
+        lp.topMargin = top;
+        lp.rightMargin = Math.max(dp(8), right);
+        return lp;
+    }
+
+    /** Wipe and Delete for one page, anchored to its ⋯; each confirms in the same spot. */
+    private void showPageMenu(PageSlot slot) {
+        LinearLayout menu = panel();
+        menu.setMinimumWidth(dp(200));
+        if (!slot.page.isBlank()) {
+            addPanelButton(menu, getString(R.string.wipe), () -> confirmPageAction(slot, false));
+        }
+        addPanelButton(menu, getString(R.string.delete_page), () -> confirmPageAction(slot, true));
+        showOverlay(menu, pageAnchoredLp(slot.moreButton, menu), drawingArea);
+    }
+
+    private void confirmPageAction(PageSlot slot, boolean delete) {
+        LinearLayout box = panel();
+        box.addView(panelText(getString(delete ? R.string.delete_page_title : R.string.wipe_page_title), 15));
+        box.addView(panelText(getString(delete ? R.string.delete_page_body : R.string.wipe_page_body), 13));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button cancel = tinyButton(getString(R.string.cancel), 15);
+        cancel.setMinimumHeight(dp(44));
+        cancel.setOnClickListener(v -> dismissOverlay());
+        Button confirm = tinyButton(getString(delete ? R.string.delete : R.string.wipe), 15);
+        confirm.setMinimumHeight(dp(44));
+        styleButton(confirm, true);
+        confirm.setOnClickListener(v -> {
+            dismissOverlay();
+            if (delete) {
+                deletePage(slot);
+            } else {
+                wipe(slot);
+            }
+        });
+        actions.addView(cancel, wrap());
+        LinearLayout.LayoutParams lp = wrap();
+        lp.leftMargin = dp(8);
+        actions.addView(confirm, lp);
+        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        actionsLp.topMargin = dp(8);
+        box.addView(actions, actionsLp);
+        showOverlay(box, pageAnchoredLp(slot.moreButton, box), drawingArea);
+    }
+
+    private void deletePage(PageSlot slot) {
+        repository.deletePage(slot.page.id);
+        inkView.invalidatePage(slot.page.id);
+        reloadPages(scroller.getScrollY());
     }
 
     private void moveTo(PageSlot slot, String targetNotebookId) {
@@ -515,21 +590,26 @@ public final class CanvasActivity extends Activity {
         reloadPages(scroller.getScrollY());
     }
 
-    private void showNotebookOptions(String id) {
-        LinearLayout list = panel();
-        TextView title = panelText(titleOf(id), 15);
-        list.addView(title);
-        addPanelButton(list, getString(R.string.rename), () -> showNameForm(id, null));
-        addPanelButton(list, getString(R.string.delete), () -> confirmDelete(id));
-        addPanelButton(list, getString(R.string.cancel), null);
-        showOverlay(list, topRightLp());
+    /** Rename / Delete, dropped down from the notebook's own tab. */
+    private void showNotebookMenu(String id) {
+        NotebookTab tab = tabFor(id);
+        if (tab == null) {
+            return;
+        }
+        revealTab(tab, false);
+        LinearLayout menu = panel();
+        menu.setMinimumWidth(Math.max(dp(200), tab.getWidth()));
+        addPanelButton(menu, getString(R.string.rename), () -> showNameForm(id, null, tab));
+        addPanelButton(menu, getString(R.string.delete), () -> confirmDelete(id, tab));
+        showOverlay(menu, anchoredLp(tab, menu), root);
     }
 
     /**
      * Create ({@code id == null}) or rename a notebook. With {@code moveAfter},
-     * the page is moved into the new notebook once it exists.
+     * the page is moved into the new notebook once it exists. With an
+     * {@code anchor} in the top bar the form hangs under it.
      */
-    private void showNameForm(String id, PageSlot moveAfter) {
+    private void showNameForm(String id, PageSlot moveAfter, View anchor) {
         LinearLayout form = panel();
         form.addView(panelText(getString(id == null ? R.string.new_notebook : R.string.rename_notebook), 15));
         EditText name = new EditText(this);
@@ -594,11 +674,11 @@ public final class CanvasActivity extends Activity {
         actionsLp.topMargin = dp(8);
         form.addView(actions, actionsLp);
 
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
-        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        lp.topMargin = dp(24);
-        showOverlay(form, lp);
+        if (anchor != null) {
+            showOverlay(form, anchoredLp(anchor, form), root);
+        } else {
+            showOverlay(form, centeredLp(), drawingArea);
+        }
         name.requestFocus();
         name.post(() -> {
             InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
@@ -608,8 +688,13 @@ public final class CanvasActivity extends Activity {
         });
     }
 
-    private void confirmDelete(String id) {
-        int pages = repository.notebookPages(id).size();
+    private void confirmDelete(String id, View anchor) {
+        int pages = 0;
+        for (Board page : repository.pages(id)) {
+            if (!page.isBlank()) {
+                pages++;
+            }
+        }
         LinearLayout box = panel();
         box.addView(panelText(getString(R.string.delete_notebook_title, titleOf(id)), 15));
         box.addView(panelText(pages == 0
@@ -636,11 +721,7 @@ public final class CanvasActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         actionsLp.topMargin = dp(8);
         box.addView(actions, actionsLp);
-        FrameLayout.LayoutParams boxLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
-        boxLp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        boxLp.topMargin = dp(24);
-        showOverlay(box, boxLp);
+        showOverlay(box, anchoredLp(anchor, box), root);
     }
 
     private LinearLayout panel() {
@@ -650,7 +731,7 @@ public final class CanvasActivity extends Activity {
         GradientDrawable background = new GradientDrawable();
         background.setCornerRadius(dp(4));
         background.setColor(Color.WHITE);
-        background.setStroke(dp(1), Color.BLACK);
+        background.setStroke(dp(2), Color.BLACK);
         list.setBackground(background);
         list.setClickable(true);
         return list;
@@ -667,8 +748,9 @@ public final class CanvasActivity extends Activity {
     }
 
     private void addPanelButton(LinearLayout list, String label, Runnable action) {
-        Button item = tinyButton(label, 15);
-        item.setMinimumHeight(dp(40));
+        Button item = tinyButton(label, 16);
+        item.setMinimumHeight(dp(48));
+        item.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         item.setSingleLine(true);
         item.setEllipsize(TextUtils.TruncateAt.END);
         item.setOnClickListener(v -> {
@@ -686,16 +768,37 @@ public final class CanvasActivity extends Activity {
         list.addView(item, lp);
     }
 
-    private FrameLayout.LayoutParams topRightLp() {
+    private FrameLayout.LayoutParams centeredLp() {
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
-        lp.gravity = Gravity.TOP | Gravity.END;
-        lp.topMargin = dp(6);
-        lp.rightMargin = dp(10);
+        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        lp.topMargin = dp(24);
         return lp;
     }
 
-    private void showOverlay(View content, FrameLayout.LayoutParams lp) {
+    /** Places {@code content} (in {@link #root}) hanging from the top bar, left-aligned with {@code anchor}. */
+    private FrameLayout.LayoutParams anchoredLp(View anchor, View content) {
+        content.measure(
+                View.MeasureSpec.makeMeasureSpec(root.getWidth() - dp(16), View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(root.getHeight(), View.MeasureSpec.AT_MOST));
+        int[] rootAt = new int[2];
+        int[] anchorAt = new int[2];
+        int[] barAt = new int[2];
+        root.getLocationInWindow(rootAt);
+        anchor.getLocationInWindow(anchorAt);
+        topBar.getLocationInWindow(barAt);
+        int left = anchorAt[0] - rootAt[0];
+        left = Math.max(dp(8), Math.min(left, root.getWidth() - content.getMeasuredWidth() - dp(8)));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.leftMargin = left;
+        lp.topMargin = barAt[1] - rootAt[1] + topBar.getHeight() - dp(4);
+        return lp;
+    }
+
+    /** {@code host} is {@link #drawingArea} for page menus, {@link #root} for top-bar menus. */
+    private void showOverlay(View content, FrameLayout.LayoutParams lp, FrameLayout host) {
         dismissOverlay();
         FrameLayout scrim = new FrameLayout(this);
         scrim.setClickable(true);
@@ -703,7 +806,7 @@ public final class CanvasActivity extends Activity {
         scrim.addView(content, lp);
         overlay = scrim;
         inkView.hold();
-        drawingArea.addView(scrim, matchMatch());
+        host.addView(scrim, matchMatch());
         updateExcludeRects();
     }
 
@@ -715,7 +818,7 @@ public final class CanvasActivity extends Activity {
         if (imm != null) {
             imm.hideSoftInputFromWindow(overlay.getWindowToken(), 0);
         }
-        drawingArea.removeView(overlay);
+        ((FrameLayout) overlay.getParent()).removeView(overlay);
         overlay = null;
         updateExcludeRects();
         inkView.release();
@@ -745,13 +848,94 @@ public final class CanvasActivity extends Activity {
     }
 
     private void syncNav() {
+        styleTabs();
+    }
+
+    private void styleTabs() {
         boolean scratch = SCRATCHPAD.equals(collectionId);
-        styleButton(scratchpadTab, scratch);
-        styleButton(notebooksTab, !scratch);
-        notebookTabs.setVisibility(scratch ? View.GONE : View.VISIBLE);
-        notebookTabsRule.setVisibility(scratch ? View.GONE : View.VISIBLE);
-        for (Button button : notebookButtons) {
-            styleButton(button, !scratch && button.getTag().equals(collectionId));
+        styleTab(scratchpadTab, scratch);
+        inkLabel(scratchpadTab, scratch);
+        for (NotebookTab tab : notebookTabs) {
+            tab.setCurrent(!scratch && tab.id.equals(collectionId));
+        }
+    }
+
+    /** E-ink selection: inverted and bold, no greys. */
+    private void styleTab(View tab, boolean selected) {
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(dp(4));
+        background.setColor(selected ? Color.BLACK : Color.WHITE);
+        tab.setBackground(background);
+        tab.setSelected(selected);
+    }
+
+    private void styleTabLabel(Button label, String text) {
+        label.setText(text);
+        label.setAllCaps(false);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        label.setMinWidth(0);
+        label.setMinimumWidth(0);
+        label.setMinHeight(0);
+        label.setMinimumHeight(dp(48));
+        label.setPadding(dp(14), 0, dp(14), 0);
+        label.setStateListAnimator(null);
+        label.setBackground(null);
+    }
+
+    private static void inkLabel(TextView label, boolean selected) {
+        label.setTextColor(selected ? Color.WHITE : Color.BLACK);
+        label.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
+    }
+
+    /**
+     * One notebook in the top bar. Tap opens it, long-press opens it and its
+     * menu; while it is the open notebook it also shows a ⋯ for that menu.
+     */
+    private final class NotebookTab extends LinearLayout {
+        final String id;
+        final Button label;
+        final View divider;
+        final Button more;
+
+        NotebookTab(Context context, BoardRepository.NotebookInfo info) {
+            super(context);
+            id = info.id;
+            setOrientation(HORIZONTAL);
+            setGravity(Gravity.CENTER_VERTICAL);
+            label = new Button(context, null, android.R.attr.borderlessButtonStyle);
+            styleTabLabel(label, info.title);
+            label.setMaxWidth(dp(220));
+            label.setOnClickListener(v -> openNotebook(id));
+            label.setOnLongClickListener(v -> {
+                openNotebook(id);
+                showNotebookMenu(id);
+                return true;
+            });
+            addView(label, wrap());
+
+            divider = new View(context);
+            divider.setBackgroundColor(Color.WHITE);
+            addView(divider, new LinearLayout.LayoutParams(dp(1), dp(24)));
+
+            more = new Button(context, null, android.R.attr.borderlessButtonStyle);
+            styleTabLabel(more, getString(R.string.notebook_options));
+            more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+            more.setMinimumWidth(dp(48));
+            more.setPadding(dp(10), 0, dp(12), dp(4));
+            more.setContentDescription(getString(R.string.notebook_menu, info.title));
+            more.setOnClickListener(v -> showNotebookMenu(id));
+            addView(more, wrap());
+            setCurrent(false);
+        }
+
+        void setCurrent(boolean current) {
+            styleTab(this, current);
+            inkLabel(label, current);
+            inkLabel(more, current);
+            divider.setVisibility(current ? VISIBLE : GONE);
+            more.setVisibility(current ? VISIBLE : GONE);
         }
     }
 
@@ -796,33 +980,66 @@ public final class CanvasActivity extends Activity {
         return null;
     }
 
-    private int stride() {
-        return pageHeight + pageGap;
+    /**
+     * Pages are {@link #pageHeight} tall, except a page from before v10 whose
+     * ink reaches below that: it keeps the old full-window height, so nothing
+     * is cropped or shifted.
+     */
+    private int heightOf(Board page) {
+        if (page.createdAt >= shortPagesSince) {
+            return pageHeight;
+        }
+        float bottom = 0f;
+        for (InkRenderer.InkStroke stroke : page.strokes) {
+            bottom = Math.max(bottom, stroke.bounds.bottom + stroke.maxWidth);
+        }
+        if (bottom <= pageHeight) {
+            return pageHeight;
+        }
+        return Math.max(legacyPageHeight, (int) Math.ceil(bottom));
     }
 
     /**
      * Transparent stand-in for one page above the ink surface: carries the
-     * page's Move / Wipe buttons and the dashed separator below it.
+     * page's number (bottom-left), Move and ⋯ (Wipe, Delete) (bottom-right)
+     * and the dashed separator below it.
      */
     private final class PageSlot extends FrameLayout {
         final Board page;
         final LinearLayout actions;
         final Button moveButton;
-        final Button wipeButton;
+        final Button moreButton;
 
-        PageSlot(Context context, Board page) {
+        PageSlot(Context context, Board page, int number) {
             super(context);
             this.page = page;
+            TextView label = new TextView(context);
+            label.setText(String.valueOf(number));
+            label.setTextColor(Color.DKGRAY);
+            label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+            label.setContentDescription(getString(R.string.page_number, number));
+            FrameLayout.LayoutParams labelLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT);
+            labelLp.gravity = Gravity.BOTTOM | Gravity.START;
+            labelLp.leftMargin = dp(14);
+            labelLp.bottomMargin = pageGap + dp(12);
+            addView(label, labelLp);
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
-            moveButton = tinyButton(getString(R.string.move), 13);
-            wipeButton = tinyButton(getString(R.string.wipe), 13);
+            moveButton = tinyButton(getString(R.string.move), 14);
+            moveButton.setMinimumHeight(dp(44));
+            moreButton = tinyButton(getString(R.string.notebook_options), 18);
+            moreButton.setMinimumHeight(dp(44));
+            moreButton.setMinimumWidth(dp(48));
+            moreButton.setPadding(dp(10), 0, dp(10), dp(4));
+            moreButton.setContentDescription(getString(R.string.page_options));
             moveButton.setOnClickListener(v -> showMoveMenu(this));
-            wipeButton.setOnClickListener(v -> wipe(this));
+            moreButton.setOnClickListener(v -> showPageMenu(this));
             actions.addView(moveButton, wrap());
             LinearLayout.LayoutParams lp = wrap();
             lp.leftMargin = dp(6);
-            actions.addView(wipeButton, lp);
+            actions.addView(moreButton, lp);
             FrameLayout.LayoutParams actionsLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
@@ -844,9 +1061,7 @@ public final class CanvasActivity extends Activity {
                 return;
             }
             moveButton.setEnabled(enabled);
-            wipeButton.setEnabled(enabled);
             moveButton.setAlpha(enabled ? 1f : 0.35f);
-            wipeButton.setAlpha(enabled ? 1f : 0.35f);
         }
     }
 
