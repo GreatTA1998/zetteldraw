@@ -16,7 +16,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker compose up -d --build --wait
+docker compose up -d --build --wait sync
 curl -fsS http://127.0.0.1:8787/healthz
 echo
 

@@ -1,6 +1,8 @@
-# Local dev: Postgres + MinIO + the sync service.
+# Local dev: Postgres + MinIO + the sync service + the web overview.
 #   docker compose up -d --build --wait
+#   docker compose run --rm sync node dist/scripts/seed.js   # optional demo library
 # Service: http://localhost:8787  (device token: dev-device-token)
+# Web overview: http://localhost:43917  (sign in with the device token)
 # MinIO console: http://localhost:59001  (zetteldraw / zetteldraw-secret)
 name: zetteldraw
 
@@ -51,6 +53,9 @@ services:
       S3_ACCESS_KEY: zetteldraw
       S3_SECRET_KEY: zetteldraw-secret
       DEVICE_TOKENS: ${DEVICE_TOKENS:-dev-device-token}
+      # Page size in device pixels assumed when rendering ink to PNG (Boox Go 7, portrait).
+      PAGE_WIDTH: ${PAGE_WIDTH:-1264}
+      PAGE_HEIGHT: ${PAGE_HEIGHT:-1680}
     ports:
       - "8787:8787"
     depends_on:
@@ -60,6 +65,23 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  web:
+    build: ../web
+    environment:
+      ZD_SERVER_URL: http://sync:8787
+      # Set to skip the sign-in screen (e.g. a wall display on a trusted network).
+      ZD_DEVICE_TOKEN: ${ZD_DEVICE_TOKEN:-}
+    ports:
+      - "43917:43917"
+    depends_on:
+      sync:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:43917/api/session"]
       interval: 2s
       timeout: 3s
       retries: 30
