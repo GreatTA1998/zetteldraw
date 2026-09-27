@@ -12,14 +12,50 @@ Top to bottom:
 2. **Pen / Eraser**: drawing toolbar.
 3. Drawing area: a continuous vertical scroll of pages separated by a dashed line. Finger scrolls; the stylus draws.
    - **Scratchpad**: blank pages top to bottom, always ending with a blank page. Opens on that last page.
-   - **Notebooks**: a row of notebook tabs (**comedy**, **journal**, **actions.life**, **miscellaneous**), then that notebook's pages in order.
-4. Bottom-right of every page: **Move** and **Wipe**. Move opens a menu of notebooks; tapping one appends the page as the newest page of that notebook. Wipe clears that page only. Both are disabled on blank pages.
+   - **Notebooks**: a row of notebook tabs (seeded with **comedy**, **journal**, **actions.life**, **miscellaneous**), then that notebook's pages in order. Five tabs fit; more scroll sideways. **+** creates a notebook. **⋯** (or long-press a tab) renames or deletes the open notebook. Deleting asks first, and the notebook's pages move back to the end of the Scratchpad. No page is deleted.
+4. Bottom-right of every page: **Move** and **Wipe**. Move opens a menu of notebooks plus **+ New notebook**. Tapping one appends the page as the newest page of that notebook. Wipe clears that page only. Both are disabled on blank pages.
 
 Live ink uses `TouchHelper.create` → `openRawDrawing` → `setRawDrawingEnabled(true)` on one `SurfaceView` under the page stack, with hardware render on. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`**, base width **0.50mm** (Notes default) via `TypedValue.COMPLEX_UNIT_MM`. TouchHelper has no public setter for Notes pressure 30% or stroke stabilization 60%, so those stay firmware-default.
 
-Completed strokes freeze to a per-page bitmap on pen-up. Eraser deletes whole strokes. Raw drawing pauses while scrolling or while the Move menu is open.
+Completed strokes freeze to a per-page bitmap on pen-up. Eraser deletes whole strokes. Raw drawing pauses while scrolling or while a menu or form is open. Menus and forms are drawn inside the window because separate popup windows do not show over the TouchHelper surface on Boox.
 
-Pages are stored locally in `files/zetteldraw-boards.json`. Boards from v4 (the Inbox build) load as Scratchpad pages; filed boards stay in their notebooks.
+## Storage and sync
+
+Local-first, as designed in the project's storage design doc:
+
+- **SQLite (Room)** is the source of truth on the device. Every pen-up writes one row plus one ink file before returning, and never waits on the network.
+- **Ink files**: one compact binary stroke file per board in `files/ink/<board-id>.zdi`, with a deflated body of float32 points. Rows keep only the sha256 and the size.
+- Tables `notebooks` and `boards` match Postgres column for column (`server/migrations/`). A unit test fails if they drift. There are also device-only tables: `outbox` (rows still to push) and `sync_state` (the pull cursor).
+- Ids are client UUIDs. Order uses fractional `position` keys (`a0`, `a0V`, …), so appending as newest or moving a page touches one row.
+- Deletes are tombstones (`deleted_at`). Conflicts are last-write-wins per row. A losing board with different ink is kept as a hidden conflict copy (`conflict_of`), so ink is never dropped.
+- **Backup without a server**: ink files plus `index.json` are mirrored to `Documents/zetteldraw/`, which survives an uninstall.
+- **First launch migration**: an existing `files/zetteldraw-boards.json` (v4/v5) is imported with the same board ids and order. It is then renamed to `zetteldraw-boards.json.migrated` and kept as a fallback.
+
+**Sync is off until a server URL is set.** Build with one:
+
+```bash
+./gradlew :app:assembleDebug -Pzetteldraw.syncUrl=http://<mac-lan-ip>:8787 -Pzetteldraw.syncToken=dev-device-token
+```
+
+With a URL set, WorkManager syncs every 15 minutes when the network is up, and again each time the app goes to the background. Failures retry with backoff. `SyncConfig.save()` can set the URL at runtime for a future settings screen.
+
+## Sync server (`server/`)
+
+TypeScript on Node 22 (Fastify, `pg`, AWS S3 client). Metadata goes in Postgres; ink blobs go in S3-compatible storage (MinIO locally) at `ink/<sha256>`. Auth is a bearer device token. See [server/README.md](server/README.md) for the protocol.
+
+```bash
+cd server
+docker compose up -d --build --wait     # Postgres + MinIO + service on :8787
+curl localhost:8787/healthz
+```
+
+Tests:
+
+```bash
+cd server && npm ci && npm test                   # unit: LWW, validation, migrations
+WITH_ANDROID=1 npm run test:integration           # compose up, push/pull round trip, Android client end-to-end, compose down
+cd .. && ./gradlew :app:testDebugUnitTest         # Android: repository, migration, positions, conflicts, schema contract
+```
 
 Tested target: Boox Go 7 Color II (Android 13, Kaleido 3, optional InkSense stylus).
 
@@ -85,5 +121,8 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 - `CanvasActivity` — Scratchpad | Notebooks nav, Pen / Eraser toolbar, notebook tabs, page slots with Move / Wipe.
 - `PageScroller` — finger scroll over the page stack; forwards stylus gestures to the ink surface.
 - `PageInkView` — `SurfaceView` + `TouchHelper` live ink; paints the visible pages at the current scroll offset.
-- `BoardStore` — local scratchpad + notebooks JSON.
 - `InkRenderer` — pressure + end-taper freeze strokes and eraser hit-tests.
+- `data/BoardRepository` — what the UI calls: list scratchpad and notebook pages, save ink, move, wipe, and create / rename / delete notebooks. `RoomBoardRepository` implements it with Room, ink files and the Documents mirror.
+- `data/LegacyBoardImporter` — one-time import of the old `zetteldraw-boards.json`.
+- `sync/` — `SyncEngine` (push the outbox, then pull until caught up), `SyncClient` (HTTP), `SyncWorker` / `SyncScheduler` (WorkManager), `SyncConfig`.
+- `server/` — sync service, shared SQL migrations, docker-compose.
