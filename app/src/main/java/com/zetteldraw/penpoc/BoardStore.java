@@ -19,17 +19,19 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Local inbox + notebooks. Inbox always ends with a blank board.
+ * Local scratchpad + notebooks. Inbox always ends with a blank board.
  */
 final class BoardStore {
-    static final String INBOX = "inbox";
+    static final String SCRATCHPAD = "scratchpad";
+    /** JSON key kept from v4 so existing boards load as scratchpad pages. */
+    private static final String SCRATCHPAD_KEY = "inbox";
 
     private static final String FILE_NAME = "zetteldraw-boards.json";
     private static final int VERSION = 1;
 
     private final File file;
     private final LinkedHashMap<String, Board> boards = new LinkedHashMap<>();
-    private final ArrayList<String> inbox = new ArrayList<>();
+    private final ArrayList<String> scratchpad = new ArrayList<>();
     private final LinkedHashMap<String, ArrayList<String>> notebooks = new LinkedHashMap<>();
 
     BoardStore(Context context) {
@@ -57,27 +59,12 @@ final class BoardStore {
         return boards.get(id);
     }
 
-    Board currentOrBlank(String collectionId, String preferredId) {
-        List<Board> list = boardsIn(collectionId);
-        if (list.isEmpty()) {
-            return null;
-        }
-        if (preferredId != null) {
-            for (Board board : list) {
-                if (board.id.equals(preferredId)) {
-                    return board;
-                }
-            }
-        }
-        return list.get(0);
-    }
-
     void ensureTrailingBlank() {
-        while (inbox.size() > 1) {
-            Board last = boards.get(inbox.get(inbox.size() - 1));
-            Board prev = boards.get(inbox.get(inbox.size() - 2));
+        while (scratchpad.size() > 1) {
+            Board last = boards.get(scratchpad.get(scratchpad.size() - 1));
+            Board prev = boards.get(scratchpad.get(scratchpad.size() - 2));
             if (last != null && last.isBlank() && prev != null && prev.isBlank()) {
-                String removed = inbox.remove(inbox.size() - 1);
+                String removed = scratchpad.remove(scratchpad.size() - 1);
                 if (!isReferenced(removed)) {
                     boards.remove(removed);
                 }
@@ -85,17 +72,17 @@ final class BoardStore {
                 break;
             }
         }
-        Board last = inbox.isEmpty() ? null : boards.get(inbox.get(inbox.size() - 1));
+        Board last = scratchpad.isEmpty() ? null : boards.get(scratchpad.get(scratchpad.size() - 1));
         if (last != null && last.isBlank()) {
             return;
         }
         Board blank = Board.blank();
         boards.put(blank.id, blank);
-        inbox.add(blank.id);
+        scratchpad.add(blank.id);
     }
 
     private boolean isReferenced(String boardId) {
-        if (inbox.contains(boardId)) {
+        if (scratchpad.contains(boardId)) {
             return true;
         }
         for (ArrayList<String> ids : notebooks.values()) {
@@ -107,19 +94,16 @@ final class BoardStore {
     }
 
     /**
-     * After the last inbox board gains ink, append a fresh blank page.
+     * After the last scratchpad page gains ink, append a fresh blank page.
      */
-    void onInboxBoardFilled(String boardId) {
-        if (inbox.isEmpty() || !boardId.equals(inbox.get(inbox.size() - 1))) {
-            persist();
-            return;
+    void onScratchpadPageFilled(String boardId) {
+        if (!scratchpad.isEmpty() && boardId.equals(scratchpad.get(scratchpad.size() - 1))) {
+            ensureTrailingBlank();
         }
-        Board last = boards.get(boardId);
-        if (last == null || last.isBlank()) {
-            persist();
-            return;
-        }
-        ensureTrailingBlank();
+        persist();
+    }
+
+    void save() {
         persist();
     }
 
@@ -131,46 +115,37 @@ final class BoardStore {
         persist();
     }
 
-    /**
-     * Two-tap file: move the current board into a notebook.
-     * Returns the board that should become current in the source collection.
-     */
-    Board fileTo(String boardId, Notebook notebook, String sourceCollection) {
-        if (boardId == null || notebook == null) {
-            return currentOrBlank(sourceCollection, null);
-        }
-        Board board = boards.get(boardId);
-        if (board == null || board.isBlank()) {
-            return currentOrBlank(sourceCollection, boardId);
+    /** Append the page as the newest page of {@code notebook}. */
+    void moveTo(String boardId, Notebook notebook) {
+        if (boardId == null || notebook == null || !boards.containsKey(boardId)) {
+            return;
         }
         removeFromAll(boardId);
         notebooks.get(notebook.id).add(boardId);
-        if (INBOX.equals(sourceCollection)) {
-            ensureTrailingBlank();
-        }
+        ensureTrailingBlank();
         persist();
-        List<Board> remaining = boardsIn(sourceCollection);
-        if (remaining.isEmpty()) {
-            return null;
-        }
-        return remaining.get(0);
     }
 
-    boolean canFile(String boardId) {
+    void wipe(String boardId) {
         Board board = boards.get(boardId);
-        return board != null && !board.isBlank();
+        if (board == null) {
+            return;
+        }
+        board.strokes.clear();
+        ensureTrailingBlank();
+        persist();
     }
 
     private List<String> idsIn(String collectionId) {
-        if (INBOX.equals(collectionId)) {
-            return inbox;
+        if (SCRATCHPAD.equals(collectionId)) {
+            return scratchpad;
         }
         ArrayList<String> ids = notebooks.get(collectionId);
         return ids == null ? new ArrayList<>() : ids;
     }
 
     private void removeFromAll(String boardId) {
-        inbox.remove(boardId);
+        scratchpad.remove(boardId);
         for (ArrayList<String> ids : notebooks.values()) {
             ids.remove(boardId);
         }
@@ -197,7 +172,7 @@ final class BoardStore {
                     }
                 }
             }
-            fillIds(root.optJSONArray(INBOX), inbox);
+            fillIds(root.optJSONArray(SCRATCHPAD_KEY), scratchpad);
             for (Notebook notebook : Notebook.values()) {
                 ArrayList<String> ids = notebooks.get(notebook.id);
                 ids.clear();
@@ -215,7 +190,7 @@ final class BoardStore {
             }
         } catch (JSONException | IOException ignored) {
             boards.clear();
-            inbox.clear();
+            scratchpad.clear();
             for (ArrayList<String> ids : notebooks.values()) {
                 ids.clear();
             }
@@ -226,7 +201,7 @@ final class BoardStore {
         try {
             JSONObject root = new JSONObject();
             root.put("version", VERSION);
-            root.put(INBOX, toIdArray(inbox));
+            root.put(SCRATCHPAD_KEY, toIdArray(scratchpad));
             JSONObject notebooksJson = new JSONObject();
             for (Map.Entry<String, ArrayList<String>> entry : notebooks.entrySet()) {
                 notebooksJson.put(entry.getKey(), toIdArray(entry.getValue()));

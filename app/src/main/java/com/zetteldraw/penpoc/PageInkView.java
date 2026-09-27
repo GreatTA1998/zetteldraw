@@ -22,34 +22,42 @@ import com.onyx.android.sdk.pen.data.TouchPointList;
 
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * One board's live ink. TouchHelper raw/scribble stays on this surface
- * while the board is the one being drawn.
+ * Live ink for a vertical stack of pages. One SurfaceView + TouchHelper
+ * covers the drawing area; it paints whichever pages are scrolled into view.
+ * Page i starts at content y = i * pageStride. Strokes are stored in
+ * page-local coordinates.
  */
-final class BoardView extends FrameLayout {
+final class PageInkView extends FrameLayout {
     interface Listener {
-        void onBoardChanged(Board board);
+        void onPageChanged(Board page);
 
-        void onBecameNonEmpty(Board board);
+        void onPageBecameNonEmpty(Board page);
     }
+
+    private static final int BITMAP_CACHE_SIZE = 3;
 
     private final SurfaceView surfaceView;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final ArrayList<Rect> excludeRects = new ArrayList<>();
+    private final ArrayList<Board> pages = new ArrayList<>();
+    private final LinkedHashMap<String, Bitmap> bitmaps = new LinkedHashMap<>(8, 0.75f, true);
     private TouchHelper touchHelper;
-    private Bitmap bitmap;
-    private Canvas bitmapCanvas;
-    private Board board = Board.blank();
     private Listener listener;
-    private View fingerPassthrough;
+    private int pageHeight = 1;
+    private int pageStride = 1;
+    private int scrollY;
     private boolean live;
+    private boolean held;
     private boolean eraserMode;
     private boolean erasingStroke;
     private List<Rect> extraExcludeRects = new ArrayList<>();
 
-    BoardView(Context context) {
+    PageInkView(Context context) {
         super(context);
         paint.setStyle(Paint.Style.STROKE);
         paint.setColor(Color.BLACK);
@@ -66,38 +74,43 @@ final class BoardView extends FrameLayout {
         this.listener = listener;
     }
 
-    void setFingerPassthrough(View target) {
-        fingerPassthrough = target;
-    }
-
-    @Override
-    public boolean dispatchTouchEvent(MotionEvent ev) {
-        if (fingerPassthrough != null && !isStylus(ev)) {
-            return fingerPassthrough.dispatchTouchEvent(ev);
-        }
-        return super.dispatchTouchEvent(ev);
-    }
-
-    private static boolean isStylus(MotionEvent event) {
+    static boolean isStylus(MotionEvent event) {
         int tool = event.getToolType(0);
         return tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER;
     }
 
-    Board getBoard() {
-        return board;
+    void setPages(List<Board> next, int pageHeight, int pageStride) {
+        pages.clear();
+        pages.addAll(next);
+        this.pageHeight = Math.max(1, pageHeight);
+        this.pageStride = Math.max(this.pageHeight, pageStride);
+        Iterator<Map.Entry<String, Bitmap>> it = bitmaps.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, Bitmap> entry = it.next();
+            if (indexOfPage(entry.getKey()) < 0 || entry.getValue().getHeight() != this.pageHeight) {
+                entry.getValue().recycle();
+                it.remove();
+            }
+        }
+        redrawAll();
     }
 
-    void bind(Board board) {
-        this.board = board == null ? Board.blank() : board;
-        paint.setStrokeWidth(InkRenderer.BASE_WIDTH_PX);
-        if (live) {
-            pauseScribble();
+    void setContentScrollY(int y) {
+        scrollY = Math.max(0, y);
+        redrawAll();
+    }
+
+    void invalidatePage(String pageId) {
+        Bitmap bitmap = bitmaps.remove(pageId);
+        if (bitmap != null) {
+            bitmap.recycle();
         }
-        rebuildBitmap();
-        if (live && surfaceView.getHolder().getSurface().isValid()) {
-            restoreBitmap();
-            resumeScribble();
-        }
+    }
+
+    void redrawAll() {
+        pauseScribble();
+        blit(null, false);
+        resumeScribble();
     }
 
     void setExtraExcludeRects(List<Rect> rects) {
@@ -112,19 +125,6 @@ final class BoardView extends FrameLayout {
         }
     }
 
-    void wipe() {
-        board.strokes.clear();
-        ensureBitmap();
-        if (bitmap != null) {
-            bitmap.eraseColor(Color.WHITE);
-        }
-        pauseScribble();
-        fillWhite();
-        restoreBitmap();
-        resumeScribble();
-        notifyChanged();
-    }
-
     void setLive(boolean on) {
         if (live == on) {
             if (on) {
@@ -135,14 +135,25 @@ final class BoardView extends FrameLayout {
         live = on;
         if (on) {
             if (surfaceView.getHolder().getSurface().isValid()) {
-                ensureBitmap();
-                rebuildBitmap();
-                restoreBitmap();
+                blit(null, false);
                 openRawDrawing();
             }
         } else {
             closeRawDrawing();
         }
+    }
+
+    /** Scrolling or a popup is up: stop raw ink until {@link #release()}. */
+    void hold() {
+        held = true;
+        if (touchHelper != null) {
+            touchHelper.setRawDrawingEnabled(false);
+        }
+    }
+
+    void release() {
+        held = false;
+        resumeScribble();
     }
 
     void pauseLive() {
@@ -152,24 +163,21 @@ final class BoardView extends FrameLayout {
     }
 
     void resumeLive() {
-        if (live && touchHelper != null) {
-            applyLiveInk();
-            touchHelper.setRawDrawingEnabled(true);
-        }
+        resumeScribble();
     }
 
     void close() {
         closeRawDrawing();
-        recycleBitmap();
+        for (Bitmap bitmap : bitmaps.values()) {
+            bitmap.recycle();
+        }
+        bitmaps.clear();
     }
 
     private final SurfaceHolder.Callback surfaceCallback = new SurfaceHolder.Callback() {
         @Override
         public void surfaceCreated(SurfaceHolder holder) {
-            ensureBitmap();
-            rebuildBitmap();
-            fillWhite();
-            restoreBitmap();
+            blit(null, false);
             if (live) {
                 openRawDrawing();
             }
@@ -177,7 +185,6 @@ final class BoardView extends FrameLayout {
 
         @Override
         public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-            ensureBitmap();
             updateExcludeRects();
         }
 
@@ -204,7 +211,7 @@ final class BoardView extends FrameLayout {
         touchHelper.setPenUpRefreshEnabled(true);
         touchHelper.enableFingerTouch(false);
         touchHelper.enableSideBtnErase(true);
-        touchHelper.setRawDrawingEnabled(true);
+        touchHelper.setRawDrawingEnabled(canInk());
     }
 
     private void closeRawDrawing() {
@@ -212,6 +219,10 @@ final class BoardView extends FrameLayout {
             touchHelper.closeRawDrawing();
             touchHelper = null;
         }
+    }
+
+    private boolean canInk() {
+        return live && !held && !pages.isEmpty();
     }
 
     private void applyLiveInk() {
@@ -284,7 +295,7 @@ final class BoardView extends FrameLayout {
         @Override
         public void onPenUpRefresh(RectF refreshRect) {
             surfaceView.post(() -> {
-                blit(refreshRect);
+                blit(refreshRect, true);
                 applyLiveInk();
                 erasingStroke = eraserMode;
             });
@@ -295,58 +306,124 @@ final class BoardView extends FrameLayout {
         if (points == null || points.isEmpty()) {
             return;
         }
-        boolean wasBlank = board.isBlank();
-        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(points);
-        board.strokes.add(stroke);
-        ensureBitmap();
-        InkRenderer.draw(bitmapCanvas, paint, stroke);
-        notifyChanged();
+        int index = pageIndexAt(points.get(0).y);
+        if (index < 0) {
+            return;
+        }
+        Board page = pages.get(index);
+        boolean wasBlank = page.isBlank();
+        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(toPage(points, index));
+        page.strokes.add(stroke);
+        Bitmap cached = bitmaps.get(page.id);
+        if (cached != null) {
+            InkRenderer.draw(new Canvas(cached), paint, stroke);
+        }
+        notifyChanged(page);
         if (wasBlank && listener != null) {
-            listener.onBecameNonEmpty(board);
+            listener.onPageBecameNonEmpty(page);
         }
     }
 
     private void eraseStrokes(List<TouchPoint> eraserPath) {
-        if (eraserPath == null || eraserPath.isEmpty() || board.strokes.isEmpty()) {
+        if (eraserPath == null || eraserPath.isEmpty()) {
             return;
         }
-        ArrayList<TouchPoint> path = InkRenderer.copyPoints(eraserPath);
-        boolean removed = false;
-        Iterator<InkRenderer.InkStroke> iterator = board.strokes.iterator();
-        while (iterator.hasNext()) {
-            if (InkRenderer.hits(iterator.next(), path)) {
-                iterator.remove();
-                removed = true;
+        ArrayList<Board> changed = new ArrayList<>();
+        for (int index = firstVisible(); index <= lastVisible(); index++) {
+            Board page = pages.get(index);
+            if (page.strokes.isEmpty()) {
+                continue;
+            }
+            List<TouchPoint> path = toPage(eraserPath, index);
+            boolean removed = false;
+            Iterator<InkRenderer.InkStroke> iterator = page.strokes.iterator();
+            while (iterator.hasNext()) {
+                if (InkRenderer.hits(iterator.next(), path)) {
+                    iterator.remove();
+                    removed = true;
+                }
+            }
+            if (removed) {
+                invalidatePage(page.id);
+                changed.add(page);
             }
         }
-        if (removed) {
-            rebuildBitmap();
-            pauseScribble();
-            blit(null);
-            resumeScribble();
-            notifyChanged();
+        if (!changed.isEmpty()) {
+            redrawAll();
+            for (Board page : changed) {
+                notifyChanged(page);
+            }
         }
     }
 
-    private void notifyChanged() {
+    private List<TouchPoint> toPage(List<TouchPoint> surfacePoints, int index) {
+        ArrayList<TouchPoint> copy = InkRenderer.copyPoints(surfacePoints);
+        float dy = scrollY - (float) index * pageStride;
+        for (TouchPoint point : copy) {
+            point.y += dy;
+        }
+        return copy;
+    }
+
+    private int pageIndexAt(float surfaceY) {
+        if (pages.isEmpty()) {
+            return -1;
+        }
+        int index = (int) Math.floor((surfaceY + scrollY) / pageStride);
+        return index < 0 || index >= pages.size() ? -1 : index;
+    }
+
+    private int firstVisible() {
+        return Math.min(pages.size(), Math.max(0, scrollY / pageStride));
+    }
+
+    private int lastVisible() {
+        int bottom = scrollY + Math.max(1, surfaceView.getHeight());
+        return Math.min(pages.size() - 1, bottom / pageStride);
+    }
+
+    private int indexOfPage(String id) {
+        for (int i = 0; i < pages.size(); i++) {
+            if (pages.get(i).id.equals(id)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private void notifyChanged(Board page) {
         if (listener != null) {
-            listener.onBoardChanged(board);
+            listener.onPageChanged(page);
         }
     }
 
-    private void rebuildBitmap() {
-        ensureBitmap();
-        if (bitmap == null) {
-            return;
+    private Bitmap bitmapFor(Board page) {
+        Bitmap bitmap = bitmaps.get(page.id);
+        if (bitmap != null) {
+            return bitmap;
         }
+        int width = surfaceView.getWidth();
+        if (width <= 0) {
+            return null;
+        }
+        while (bitmaps.size() >= BITMAP_CACHE_SIZE) {
+            Iterator<Map.Entry<String, Bitmap>> it = bitmaps.entrySet().iterator();
+            it.next().getValue().recycle();
+            it.remove();
+        }
+        bitmap = Bitmap.createBitmap(width, pageHeight, Bitmap.Config.ARGB_8888);
         bitmap.eraseColor(Color.WHITE);
-        for (InkRenderer.InkStroke stroke : board.strokes) {
-            InkRenderer.draw(bitmapCanvas, paint, stroke);
+        Canvas canvas = new Canvas(bitmap);
+        for (InkRenderer.InkStroke stroke : page.strokes) {
+            InkRenderer.draw(canvas, paint, stroke);
         }
+        bitmaps.put(page.id, bitmap);
+        return bitmap;
     }
 
-    private void blit(RectF refreshRect) {
-        if (bitmap == null || surfaceView.getHolder() == null) {
+    private void blit(RectF refreshRect, boolean handwritingMode) {
+        SurfaceHolder holder = surfaceView.getHolder();
+        if (holder == null || !holder.getSurface().isValid()) {
             return;
         }
         Rect renderRect = new Rect();
@@ -357,39 +434,31 @@ final class BoardView extends FrameLayout {
         } else {
             renderRect.set(0, 0, surfaceView.getWidth(), surfaceView.getHeight());
         }
-        EpdController.setViewDefaultUpdateMode(surfaceView, UpdateMode.HAND_WRITING_REPAINT_MODE);
-        Canvas canvas = surfaceView.getHolder().lockCanvas(renderRect);
+        if (handwritingMode) {
+            EpdController.setViewDefaultUpdateMode(surfaceView, UpdateMode.HAND_WRITING_REPAINT_MODE);
+        }
+        Canvas canvas = holder.lockCanvas(renderRect);
         if (canvas == null) {
-            EpdController.resetViewUpdateMode(surfaceView);
+            if (handwritingMode) {
+                EpdController.resetViewUpdateMode(surfaceView);
+            }
             return;
         }
         try {
-            canvas.drawBitmap(bitmap, 0f, 0f, null);
+            canvas.drawColor(Color.WHITE);
+            int last = lastVisible();
+            for (int index = firstVisible(); index <= last; index++) {
+                Bitmap bitmap = bitmapFor(pages.get(index));
+                if (bitmap != null) {
+                    canvas.drawBitmap(bitmap, 0f, (float) index * pageStride - scrollY, null);
+                }
+            }
         } finally {
-            surfaceView.getHolder().unlockCanvasAndPost(canvas);
-            EpdController.resetViewUpdateMode(surfaceView);
+            holder.unlockCanvasAndPost(canvas);
+            if (handwritingMode) {
+                EpdController.resetViewUpdateMode(surfaceView);
+            }
         }
-    }
-
-    private void fillWhite() {
-        Canvas canvas = surfaceView.getHolder().lockCanvas();
-        if (canvas == null) {
-            return;
-        }
-        canvas.drawColor(Color.WHITE);
-        surfaceView.getHolder().unlockCanvasAndPost(canvas);
-    }
-
-    private void restoreBitmap() {
-        Canvas canvas = surfaceView.getHolder().lockCanvas();
-        if (canvas == null) {
-            return;
-        }
-        canvas.drawColor(Color.WHITE);
-        if (bitmap != null) {
-            canvas.drawBitmap(bitmap, 0f, 0f, null);
-        }
-        surfaceView.getHolder().unlockCanvasAndPost(canvas);
     }
 
     private void pauseScribble() {
@@ -401,11 +470,11 @@ final class BoardView extends FrameLayout {
     }
 
     private void resumeScribble() {
-        if (!live || touchHelper == null) {
+        if (touchHelper == null) {
             return;
         }
         applyLiveInk();
-        touchHelper.setRawDrawingEnabled(true);
+        touchHelper.setRawDrawingEnabled(canInk());
     }
 
     private void updateExcludeRects() {
@@ -423,31 +492,5 @@ final class BoardView extends FrameLayout {
             limit.set(0, 0, Math.max(surfaceView.getWidth(), 1), Math.max(surfaceView.getHeight(), 1));
         }
         return limit;
-    }
-
-    private void ensureBitmap() {
-        int width = surfaceView.getWidth();
-        int height = surfaceView.getHeight();
-        if (width <= 0 || height <= 0) {
-            return;
-        }
-        if (bitmap != null && bitmap.getWidth() == width && bitmap.getHeight() == height) {
-            return;
-        }
-        recycleBitmap();
-        bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        bitmap.eraseColor(Color.WHITE);
-        bitmapCanvas = new Canvas(bitmap);
-        for (InkRenderer.InkStroke stroke : board.strokes) {
-            InkRenderer.draw(bitmapCanvas, paint, stroke);
-        }
-    }
-
-    private void recycleBitmap() {
-        if (bitmap != null) {
-            bitmap.recycle();
-            bitmap = null;
-            bitmapCanvas = null;
-        }
     }
 }

@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Boox Pen POC</string>
-    <string name="inbox">Inbox</string>
-    <string name="file">File</string>
+    <string name="scratchpad">Scratchpad</string>
+    <string name="notebooks">Notebooks</string>
+    <string name="pen">Pen</string>
     <string name="eraser">Eraser</string>
+    <string name="move">Move</string>
     <string name="wipe">Wipe</string>
+    <string name="empty_notebook">No pages yet.\nUse Move on a Scratchpad page to add one here.</string>
 </resources>
