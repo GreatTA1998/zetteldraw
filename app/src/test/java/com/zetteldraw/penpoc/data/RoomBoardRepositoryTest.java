@@ -107,6 +107,38 @@ public class RoomBoardRepositoryTest {
     }
 
     @Test
+    public void lassoMoveSavesLikeAPenUpAndKeepsStrokeIds() {
+        Board page = repo.scratchpadPages().get(0);
+        TestInk.draw(page, 10f);
+        TestInk.draw(page, 200f);
+        repo.saveInk(page);
+        BoardEntity before = device.db.dao().board(page.id);
+        String hashBefore = before.inkHash;
+        long updatedBefore = before.updatedAt;
+        String movedId = page.strokes.get(0).id;
+        String keptId = page.strokes.get(1).id;
+        device.db.dao().deleteOutbox(OutboxEntry.BOARD, page.id);
+
+        device.tick();
+        page.strokes.set(0, page.strokes.get(0).translated(25f, 40f));
+        repo.saveInk(page);
+
+        BoardEntity after = device.db.dao().board(page.id);
+        assertFalse(hashBefore.equals(after.inkHash));
+        assertTrue(after.updatedAt > updatedBefore);
+        assertNotNull("queued for sync", device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+
+        device.reopen();
+        Board reloaded = device.repo.scratchpadPages().get(0);
+        assertEquals(page.id, reloaded.id);
+        assertEquals(movedId, reloaded.strokes.get(0).id);
+        assertEquals(keptId, reloaded.strokes.get(1).id);
+        assertEquals(10f + 25f, reloaded.strokes.get(0).points.get(0).x, 0f);
+        assertEquals(50f + 40f, reloaded.strokes.get(0).points.get(0).y, 0f);
+        assertEquals(200f, reloaded.strokes.get(1).points.get(0).x, 0f);
+    }
+
+    @Test
     public void moveAppendsAsNewestInNotebook() {
         Board a = inkedScratchpadPage(10f);
         Board b = inkedScratchpadPage(20f);

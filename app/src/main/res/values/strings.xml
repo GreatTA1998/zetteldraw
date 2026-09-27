@@ -5,6 +5,15 @@
     <string name="notebooks">Notebooks</string>
     <string name="pen">Pen</string>
     <string name="eraser">Eraser</string>
+    <string name="lasso">Lasso</string>
+    <string name="undo_move">Undo move</string>
+    <string name="lasso_hint">Circle ink to select it</string>
+    <string name="lasso_nothing">Nothing selected</string>
+    <plurals name="lasso_selected">
+        <item quantity="one">1 stroke selected. Drag it, or tap outside to cancel</item>
+        <item quantity="other">%1$d strokes selected. Drag them, or tap outside to cancel</item>
+    </plurals>
+    <string name="undo_nothing">Nothing left to undo</string>
     <string name="move">Move</string>
     <string name="wipe">Wipe</string>
     <string name="empty_notebook">No pages yet.\nUse Move on a Scratchpad page to add one here.</string>

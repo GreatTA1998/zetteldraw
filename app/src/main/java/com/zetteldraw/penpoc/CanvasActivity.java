@@ -61,6 +61,12 @@ public final class CanvasActivity extends Activity {
     private Button notebooksTab;
     private Button penButton;
     private Button eraserButton;
+    private Button lassoButton;
+    private Button undoButton;
+    private TextView toolHint;
+    /** Last committed lasso move; the Undo button puts it back. */
+    private Lasso.Move lastMove;
+    private final Runnable clearHint = () -> toolHint.setText("");
     private final ArrayList<Button> notebookButtons = new ArrayList<>();
     private final ArrayList<PageSlot> slots = new ArrayList<>();
 
@@ -120,6 +126,28 @@ public final class CanvasActivity extends Activity {
                     }
                 }
             }
+
+            @Override
+            public void onLassoSelected(int selected) {
+                if (selected == 0) {
+                    showHint(getString(R.string.lasso_nothing), true);
+                } else {
+                    showHint(getResources().getQuantityString(R.plurals.lasso_selected, selected, selected), false);
+                }
+            }
+
+            @Override
+            public void onLassoMoved(Lasso.Move move) {
+                lastMove = move;
+                syncUndo();
+                showHint("", false);
+                setTool(PageInkView.Tool.PEN);
+            }
+
+            @Override
+            public void onLassoCancelled() {
+                showHint("", false);
+            }
         });
         drawingArea.addView(inkView, matchMatch());
 
@@ -165,7 +193,8 @@ public final class CanvasActivity extends Activity {
 
         setContentView(root);
         repository.setRemoteChangeListener(this::onRemoteChange);
-        setEraserMode(false);
+        setTool(PageInkView.Tool.PEN);
+        syncUndo();
         syncNav();
         inkView.setLive(true);
     }
@@ -186,6 +215,7 @@ public final class CanvasActivity extends Activity {
     protected void onDestroy() {
         repository.setRemoteChangeListener(null);
         scroller.removeCallbacks(scrollSettled);
+        toolHint.removeCallbacks(clearHint);
         inkView.close();
         super.onDestroy();
     }
@@ -209,15 +239,59 @@ public final class CanvasActivity extends Activity {
 
     private View buildToolbar() {
         LinearLayout toolbar = row(Gravity.CENTER_VERTICAL | Gravity.END);
+        toolHint = new TextView(this);
+        toolHint.setTextColor(Color.DKGRAY);
+        toolHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        toolHint.setSingleLine(true);
+        toolHint.setEllipsize(TextUtils.TruncateAt.END);
+        toolbar.addView(toolHint, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        undoButton = tinyButton(getString(R.string.undo_move), 13);
+        undoButton.setOnClickListener(v -> undoLastMove());
         penButton = tinyButton(getString(R.string.pen), 13);
         eraserButton = tinyButton(getString(R.string.eraser), 13);
-        penButton.setOnClickListener(v -> setEraserMode(false));
-        eraserButton.setOnClickListener(v -> setEraserMode(true));
+        lassoButton = tinyButton(getString(R.string.lasso), 13);
+        penButton.setOnClickListener(v -> setTool(PageInkView.Tool.PEN));
+        eraserButton.setOnClickListener(v -> setTool(PageInkView.Tool.ERASER));
+        lassoButton.setOnClickListener(v -> setTool(PageInkView.Tool.LASSO));
+        LinearLayout.LayoutParams undoLp = wrap();
+        undoLp.leftMargin = dp(6);
+        undoLp.rightMargin = dp(12);
+        toolbar.addView(undoButton, undoLp);
         toolbar.addView(penButton, wrap());
         LinearLayout.LayoutParams lp = wrap();
         lp.leftMargin = dp(6);
         toolbar.addView(eraserButton, lp);
+        LinearLayout.LayoutParams lassoLp = wrap();
+        lassoLp.leftMargin = dp(6);
+        toolbar.addView(lassoButton, lassoLp);
         return toolbar;
+    }
+
+    private void undoLastMove() {
+        Lasso.Move move = lastMove;
+        lastMove = null;
+        syncUndo();
+        if (move == null) {
+            return;
+        }
+        if (!inkView.undo(move)) {
+            showHint(getString(R.string.undo_nothing), true);
+        }
+    }
+
+    private void syncUndo() {
+        boolean enabled = lastMove != null;
+        undoButton.setEnabled(enabled);
+        undoButton.setAlpha(enabled ? 1f : 0.35f);
+    }
+
+    private void showHint(String text, boolean brief) {
+        toolHint.removeCallbacks(clearHint);
+        toolHint.setText(text);
+        if (brief) {
+            toolHint.postDelayed(clearHint, 2500);
+        }
     }
 
     /** Scrolling notebook tabs (five fit on screen) with fixed ⋯ and + on the right. */
@@ -658,10 +732,16 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    private void setEraserMode(boolean on) {
-        styleButton(penButton, !on);
-        styleButton(eraserButton, on);
-        inkView.setEraserMode(on);
+    private void setTool(PageInkView.Tool tool) {
+        styleButton(penButton, tool == PageInkView.Tool.PEN);
+        styleButton(eraserButton, tool == PageInkView.Tool.ERASER);
+        styleButton(lassoButton, tool == PageInkView.Tool.LASSO);
+        inkView.setTool(tool);
+        if (tool == PageInkView.Tool.LASSO) {
+            showHint(getString(R.string.lasso_hint), false);
+        } else if (!inkView.hasSelection()) {
+            showHint("", false);
+        }
     }
 
     private void syncNav() {

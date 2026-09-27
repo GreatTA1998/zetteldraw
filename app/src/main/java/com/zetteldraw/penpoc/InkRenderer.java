@@ -11,6 +11,7 @@ import com.onyx.android.sdk.data.note.TouchPoint;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Variable-width freeze renderer: pressure when it varies, Excalidraw-like
@@ -42,9 +43,13 @@ public final class InkRenderer {
     }
 
     public static InkStroke strokeFrom(List<TouchPoint> points) {
+        return strokeFrom(UUID.randomUUID().toString(), points);
+    }
+
+    public static InkStroke strokeFrom(String id, List<TouchPoint> points) {
         ArrayList<TouchPoint> copy = copyPoints(points);
         float[] widths = widthsFor(copy);
-        return new InkStroke(copy, widths);
+        return new InkStroke(id, copy, widths);
     }
 
     static void draw(Canvas canvas, Paint paint, InkStroke stroke) {
@@ -264,12 +269,15 @@ public final class InkRenderer {
     }
 
     public static final class InkStroke {
+        /** Stable across moves and sync; only a duplicate gets a new one. */
+        public final String id;
         public final ArrayList<TouchPoint> points;
         final float[] widths;
         final RectF bounds;
         final float maxWidth;
 
-        InkStroke(ArrayList<TouchPoint> points, float[] widths) {
+        InkStroke(String id, ArrayList<TouchPoint> points, float[] widths) {
+            this.id = id;
             this.points = points;
             this.widths = widths;
             float max = InkRenderer.BASE_WIDTH_PX;
@@ -280,6 +288,16 @@ public final class InkRenderer {
             }
             this.maxWidth = max;
             this.bounds = boundsOf(points, max * 0.5f + 2f);
+        }
+
+        /** Same id and widths, every point shifted. */
+        public InkStroke translated(float dx, float dy) {
+            ArrayList<TouchPoint> moved = copyPoints(points);
+            for (TouchPoint point : moved) {
+                point.x += dx;
+                point.y += dy;
+            }
+            return new InkStroke(id, moved, widths);
         }
     }
 }

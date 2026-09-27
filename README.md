@@ -9,11 +9,18 @@ Standard `View` / `onTouch` drawing is too delayed on Boox. This app uses the **
 Top to bottom:
 
 1. **Scratchpad | Notebooks**: top-level nav, always visible.
-2. **Pen / Eraser**: drawing toolbar.
+2. **Undo move · Pen / Eraser / Lasso**: drawing toolbar. A hint line on its left says what the Lasso is doing.
 3. Drawing area: a continuous vertical scroll of pages separated by a dashed line. Finger scrolls; the stylus draws.
    - **Scratchpad**: blank pages top to bottom, always ending with a blank page. Opens on that last page.
    - **Notebooks**: a row of notebook tabs (seeded with **comedy**, **journal**, **actions.life**, **miscellaneous**), then that notebook's pages in order. Five tabs fit; more scroll sideways. **+** creates a notebook. **⋯** (or long-press a tab) renames or deletes the open notebook. Deleting asks first, and the notebook's pages move back to the end of the Scratchpad. No page is deleted.
 4. Bottom-right of every page: **Move** and **Wipe**. Move opens a menu of notebooks plus **+ New notebook**. Tapping one appends the page as the newest page of that notebook. Wipe clears that page only. Both are disabled on blank pages.
+
+**Lasso** (select and move ink on one page):
+
+- Tap **Lasso**, then circle ink. The firmware draws the outline dashed, with no lag. A stroke is selected when at least half its points are inside; a dot when its point is inside.
+- The selection gets a dashed box, and raw drawing pauses. Drag the box with the pen or a finger. During the drag only a moved bitmap is repainted, in fast monochrome mode. The box stays on its page.
+- On release the strokes' points are rewritten (stroke ids kept), the area gets one clean partial refresh, the page is saved through the repository like a pen-up, and the tool switches back to **Pen**. Raw drawing resumes after 500 ms, and the side-button eraser is set up again.
+- Tap outside the box to cancel. **Undo move** puts the last lasso move back (one level).
 
 Live ink uses `TouchHelper.create` → `openRawDrawing` → `setRawDrawingEnabled(true)` on one `SurfaceView` under the page stack, with hardware render on. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`**, base width **0.50mm** (Notes default) via `TypedValue.COMPLEX_UNIT_MM`. TouchHelper has no public setter for Notes pressure 30% or stroke stabilization 60%, so those stay firmware-default.
 
@@ -24,7 +31,7 @@ Completed strokes freeze to a per-page bitmap on pen-up. Eraser deletes whole st
 Local-first, as designed in the project's storage design doc:
 
 - **SQLite (Room)** is the source of truth on the device. Every pen-up writes one row plus one ink file before returning, and never waits on the network.
-- **Ink files**: one compact binary stroke file per board in `files/ink/<board-id>.zdi`, with a deflated body of float32 points. Rows keep only the sha256 and the size.
+- **Ink files**: one compact binary stroke file per board in `files/ink/<board-id>.zdi`, with a deflated body of float32 points. Rows keep only the sha256 and the size. Format version 2 stores a stable 128-bit id per stroke; version 1 files still load, with ids derived from each stroke's index and points so every device gets the same ones (layout in `data/InkCodec`).
 - Tables `notebooks` and `boards` match Postgres column for column (`server/migrations/`). A unit test fails if they drift. There are also device-only tables: `outbox` (rows still to push) and `sync_state` (the pull cursor).
 - Ids are client UUIDs. Order uses fractional `position` keys (`a0`, `a0V`, …), so appending as newest or moving a page touches one row.
 - Deletes are tombstones (`deleted_at`). Conflicts are last-write-wins per row. A losing board with different ink is kept as a hidden conflict copy (`conflict_of`), so ink is never dropped.
@@ -118,9 +125,10 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 ## Layout
 
 - `PenApp` — Hidden API bypass required by Onyx on Android 11+.
-- `CanvasActivity` — Scratchpad | Notebooks nav, Pen / Eraser toolbar, notebook tabs, page slots with Move / Wipe.
-- `PageScroller` — finger scroll over the page stack; forwards stylus gestures to the ink surface.
-- `PageInkView` — `SurfaceView` + `TouchHelper` live ink; paints the visible pages at the current scroll offset.
+- `CanvasActivity` — Scratchpad | Notebooks nav, Pen / Eraser / Lasso / Undo toolbar, notebook tabs, page slots with Move / Wipe.
+- `PageScroller` — finger scroll over the page stack; forwards stylus gestures to the ink surface, and every touch while a lasso selection is up.
+- `PageInkView` — `SurfaceView` + `TouchHelper` live ink; paints the visible pages at the current scroll offset. Owns raw-drawing pause/resume, and the lasso selection, drag preview and commit.
+- `Lasso` — lasso hit-test, offset clamping, move (rewrites points, keeps ids) and single-level undo.
 - `InkRenderer` — pressure + end-taper freeze strokes and eraser hit-tests.
 - `data/BoardRepository` — what the UI calls: list scratchpad and notebook pages, save ink, move, wipe, and create / rename / delete notebooks. `RoomBoardRepository` implements it with Room, ink files and the Documents mirror.
 - `data/LegacyBoardImporter` — one-time import of the old `zetteldraw-boards.json`.
