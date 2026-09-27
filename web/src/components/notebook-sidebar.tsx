@@ -19,7 +19,8 @@ interface Props {
   dragging: boolean;
   onSelect: (id: string) => void;
   onRename: (notebook: Notebook) => void;
-  onSignOut: () => void;
+  /** Omitted when the site uses a shared token and has no sign-in. */
+  onSignOut?: () => void;
 }
 
 export function NotebookSidebar({ notebooks, selectedId, dragging, onSelect, onRename, onSignOut }: Props) {
@@ -68,12 +69,14 @@ export function NotebookSidebar({ notebooks, selectedId, dragging, onSelect, onR
       >
         Drop on a notebook to move the page there.
       </div>
-      <div className="border-t p-2">
-        <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground" onClick={onSignOut}>
-          <LogOut />
-          Sign out
-        </Button>
-      </div>
+      {onSignOut && (
+        <div className="border-t p-2">
+          <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground" onClick={onSignOut}>
+            <LogOut />
+            Sign out
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,10 +9,17 @@ export function serverUrl(): string {
 }
 
 /**
- * The device token for this browser: the sign-in cookie, or ZD_DEVICE_TOKEN when
- * the operator wants the overview open without signing in (a trusted LAN screen).
+ * Set on a public or wall-display deployment: every visitor uses this token and
+ * there is no sign-in. It wins over any leftover sign-in cookie.
  */
+export function sharedToken(): string | null {
+  return process.env.ZD_DEVICE_TOKEN || null;
+}
+
+/** The device token for this request: the shared one, else the sign-in cookie. */
 export async function deviceToken(): Promise<string | null> {
+  const shared = sharedToken();
+  if (shared) return shared;
   const jar = await cookies();
-  return jar.get(TOKEN_COOKIE)?.value || process.env.ZD_DEVICE_TOKEN || null;
+  return jar.get(TOKEN_COOKIE)?.value || null;
 }

@@ -74,7 +74,7 @@ docker compose run --rm sync node dist/scripts/seed.js     # optional: demo note
 open http://localhost:43917                                # device token: dev-device-token
 ```
 
-For a wall display on a trusted network, `ZD_DEVICE_TOKEN=dev-device-token docker compose up -d` skips the sign-in screen.
+Set `ZD_DEVICE_TOKEN` on the web service to drop sign-in entirely: the Next server uses that token for every call, and anyone who can open the site sees and can reorder the library. The hosted site at zetteldraw.com runs this way. Locally: `ZD_DEVICE_TOKEN=dev-device-token docker compose up -d`.
 
 Dev mode, against a running sync server:
 

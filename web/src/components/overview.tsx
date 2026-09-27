@@ -62,7 +62,9 @@ function usePersistent<T>(key: string, initial: T): [T, (v: T) => void] {
 }
 
 export function Overview() {
-  const session = useSWR<{ authenticated: boolean }>("/api/session", fetcher, { revalidateOnFocus: false });
+  const session = useSWR<{ authenticated: boolean; shared?: boolean }>("/api/session", fetcher, {
+    revalidateOnFocus: false,
+  });
 
   if (session.error) {
     return (
@@ -80,13 +82,30 @@ export function Overview() {
       </div>
     );
   }
+  if (session.data.shared) {
+    if (!session.data.authenticated) {
+      return (
+        <CenteredMessage
+          title="The library is unavailable"
+          body="The sync server rejected this site's device token (ZD_DEVICE_TOKEN)."
+          onRetry={() => session.mutate()}
+        />
+      );
+    }
+    return <Library onSignedOut={() => session.mutate()} />;
+  }
   if (!session.data.authenticated) {
     return <SignIn onSignedIn={() => session.mutate({ authenticated: true }, { revalidate: false })} />;
   }
-  return <Library onSignedOut={() => session.mutate({ authenticated: false }, { revalidate: false })} />;
+  return (
+    <Library
+      canSignOut
+      onSignedOut={() => session.mutate({ authenticated: false }, { revalidate: false })}
+    />
+  );
 }
 
-function Library({ onSignedOut }: { onSignedOut: () => void }) {
+function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void; canSignOut?: boolean }) {
   const { mutate: mutateKey } = useSWRConfig();
   const [selectedId, setSelectedId] = usePersistent<string>("zd.notebook", SCRATCHPAD);
   const [columns, setColumns] = usePersistent<number>("zd.columns", 8);
@@ -249,7 +268,7 @@ function Library({ onSignedOut }: { onSignedOut: () => void }) {
       dragging={activeId !== null}
       onSelect={select}
       onRename={setRenaming}
-      onSignOut={signOut}
+      onSignOut={canSignOut ? signOut : undefined}
     />
   );
 

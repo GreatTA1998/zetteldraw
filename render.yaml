@@ -33,9 +33,9 @@ services:
       - key: S3_SECRET_ACCESS_KEY
         sync: false
 
-  # Web overview (Next.js). Talks to the sync server over its public URL; the
-  # browser only ever sees this service. Sign-in uses the device token, so
-  # ZD_DEVICE_TOKEN is deliberately not set on this public service.
+  # Web overview (Next.js) at zetteldraw.com. Talks to the sync server over its
+  # public URL; the browser only ever sees this service. ZD_DEVICE_TOKEN is used
+  # server-side for every proxied call, so the site is public with no sign-in.
   - type: web
     name: zetteldraw-web
     runtime: node
@@ -54,3 +54,5 @@ services:
         value: "1"
       - key: ZD_SERVER_URL
         value: https://zetteldraw-sync.onrender.com
+      - key: ZD_DEVICE_TOKEN
+        sync: false

@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { deviceToken, serverUrl, TOKEN_COOKIE } from "@/lib/server-config";
+import { deviceToken, serverUrl, sharedToken, TOKEN_COOKIE } from "@/lib/server-config";
 
 async function check(token: string): Promise<"ok" | "unauthorized" | "unreachable"> {
   try {
@@ -15,13 +15,14 @@ async function check(token: string): Promise<"ok" | "unauthorized" | "unreachabl
 }
 
 export async function GET() {
+  const shared = sharedToken() !== null;
   const token = await deviceToken();
-  if (!token) return Response.json({ authenticated: false });
+  if (!token) return Response.json({ authenticated: false, shared });
   const status = await check(token);
   if (status === "unreachable") {
     return Response.json({ error: "server_unreachable" }, { status: 502 });
   }
-  return Response.json({ authenticated: status === "ok" });
+  return Response.json({ authenticated: status === "ok", shared });
 }
 
 export async function POST(request: Request) {

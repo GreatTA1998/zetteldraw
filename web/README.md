@@ -11,5 +11,5 @@ npm test && npm run lint && npm run typecheck
 | Env | Default | |
 | --- | --- | --- |
 | `ZD_SERVER_URL` | `http://127.0.0.1:8787` | Sync server, as seen from the Next.js server |
-| `ZD_DEVICE_TOKEN` | unset | If set, no sign-in screen (trusted networks only) |
+| `ZD_DEVICE_TOKEN` | unset | If set, used for every call and there is no sign-in (the site is public) |
 | `ZD_DEV_ORIGINS` | unset | Extra hosts allowed to open the dev server, comma-separated |

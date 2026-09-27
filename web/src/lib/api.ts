@@ -65,7 +65,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const fetcher = <T,>(path: string) => request<T>(path);
 
 export const api = {
-  session: () => request<{ authenticated: boolean }>("/api/session"),
+  session: () => request<{ authenticated: boolean; shared?: boolean }>("/api/session"),
   signIn: (token: string) =>
     request<{ authenticated: boolean }>("/api/session", { method: "POST", body: JSON.stringify({ token }) }),
   signOut: () => request<{ authenticated: boolean }>("/api/session", { method: "DELETE" }),
