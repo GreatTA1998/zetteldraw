@@ -12,12 +12,10 @@ import android.os.Bundle;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
-import android.view.Menu;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.PopupMenu;
 import android.widget.TextView;
 
 import java.util.ArrayList;
@@ -37,6 +35,8 @@ public final class CanvasActivity extends Activity {
     private final HashMap<String, Integer> scrollByCollection = new HashMap<>();
 
     private FrameLayout root;
+    private FrameLayout drawingArea;
+    private FrameLayout moveMenu;
     private PageInkView inkView;
     private PageScroller scroller;
     private LinearLayout pageColumn;
@@ -81,7 +81,7 @@ public final class CanvasActivity extends Activity {
         notebookTabsRule = rule();
         column.addView(notebookTabsRule, ruleLp());
 
-        FrameLayout drawingArea = new FrameLayout(this);
+        drawingArea = new FrameLayout(this);
         column.addView(drawingArea, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -227,6 +227,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private void openCollection(String id) {
+        dismissMoveMenu();
         if (pageHeight == 0) {
             collectionId = id;
             syncNav();
@@ -283,21 +284,77 @@ public final class CanvasActivity extends Activity {
         inkView.release();
     }
 
+    /**
+     * In-window menu rather than a PopupMenu: a separate popup window does not
+     * appear on the Boox over the TouchHelper surface.
+     */
     private void showMoveMenu(PageSlot slot) {
-        PopupMenu menu = new PopupMenu(this, slot.moveButton, Gravity.END);
-        Notebook[] all = Notebook.values();
-        for (int i = 0; i < all.length; i++) {
-            menu.getMenu().add(Menu.NONE, i, i, all[i].label);
+        dismissMoveMenu();
+        FrameLayout scrim = new FrameLayout(this);
+        scrim.setClickable(true);
+        scrim.setOnClickListener(v -> dismissMoveMenu());
+
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(6), dp(6), dp(6), dp(6));
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(dp(4));
+        background.setColor(Color.WHITE);
+        background.setStroke(dp(1), Color.BLACK);
+        list.setBackground(background);
+        list.setClickable(true);
+        for (Notebook each : Notebook.values()) {
+            Button item = tinyButton(each.label, 15);
+            item.setMinimumHeight(dp(40));
+            item.setOnClickListener(v -> {
+                dismissMoveMenu();
+                store.persistBoard(slot.page);
+                store.moveTo(slot.page.id, each);
+                reloadPages(scroller.getScrollY());
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (list.getChildCount() > 0) {
+                lp.topMargin = dp(6);
+            }
+            list.addView(item, lp);
         }
-        menu.setOnMenuItemClickListener(item -> {
-            store.persistBoard(slot.page);
-            store.moveTo(slot.page.id, all[item.getItemId()]);
-            reloadPages(scroller.getScrollY());
-            return true;
-        });
-        menu.setOnDismissListener(m -> inkView.release());
+
+        list.measure(View.MeasureSpec.makeMeasureSpec(drawingArea.getWidth(), View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(drawingArea.getHeight(), View.MeasureSpec.AT_MOST));
+        int[] area = new int[2];
+        int[] button = new int[2];
+        drawingArea.getLocationOnScreen(area);
+        slot.moveButton.getLocationOnScreen(button);
+        int buttonTop = button[1] - area[1];
+        int buttonBottom = buttonTop + slot.moveButton.getHeight();
+        int top = buttonTop - dp(6) - list.getMeasuredHeight();
+        if (top < 0) {
+            top = Math.min(buttonBottom + dp(6), Math.max(0, drawingArea.getHeight() - list.getMeasuredHeight()));
+        }
+        FrameLayout.LayoutParams listLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        listLp.gravity = Gravity.TOP | Gravity.END;
+        listLp.topMargin = top;
+        listLp.rightMargin = dp(10);
+        scrim.addView(list, listLp);
+
+        moveMenu = scrim;
         inkView.hold();
-        menu.show();
+        drawingArea.addView(scrim, matchMatch());
+        updateExcludeRects();
+    }
+
+    private void dismissMoveMenu() {
+        if (moveMenu == null) {
+            return;
+        }
+        drawingArea.removeView(moveMenu);
+        moveMenu = null;
+        updateExcludeRects();
+        inkView.release();
     }
 
     private void wipe(PageSlot slot) {
@@ -331,6 +388,11 @@ public final class CanvasActivity extends Activity {
 
     private void updateExcludeRects() {
         ArrayList<Rect> rects = new ArrayList<>();
+        if (moveMenu != null) {
+            rects.add(new Rect(0, 0, inkView.getWidth(), inkView.getHeight()));
+            inkView.setExtraExcludeRects(rects);
+            return;
+        }
         int[] origin = new int[2];
         int[] loc = new int[2];
         inkView.getLocationOnScreen(origin);
