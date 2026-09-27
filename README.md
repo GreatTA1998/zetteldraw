@@ -6,13 +6,20 @@ Standard `View` / `onTouch` drawing is too delayed on Boox. This app uses the **
 
 ## What it does
 
-1. Always opens on an **Inbox** of boards (the in-tray). A board is the atomic page. The inbox always ends with a blank board; finger-scroll down for more.
-2. Live ink uses `TouchHelper.create` → `openRawDrawing` → `setRawDrawingEnabled(true)` on the board being drawn, with hardware render on. Pen, **Eraser**, and **Wipe** stay.
-3. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`** (same id as `EpdController.STROKE_STYLE_BRUSH`). Base width is **0.50mm** (Notes default), converted to device pixels via `TypedValue.COMPLEX_UNIT_MM`. TouchHelper has no public setter for Notes pressure 30% or stroke stabilization 60%, so those stay firmware-default for `FOUNTAIN`.
-4. Two taps file the current board into a notebook: **File**, then **comedy** / **journal** / **actions.life** / **miscellaneous**. Notebooks are ordered sequences of boards, stored in `zetteldraw-boards.json` on device. Tap **Inbox** to open a notebook without filing.
-5. Completed strokes freeze to a bitmap on pen-up. Eraser deletes whole strokes. Wipe clears the page.
+Top to bottom:
 
-Live drawing stays on TouchHelper. The bitmap freeze is not the live drawing path.
+1. **Scratchpad | Notebooks**: top-level nav, always visible.
+2. **Pen / Eraser**: drawing toolbar.
+3. Drawing area: a continuous vertical scroll of pages separated by a dashed line. Finger scrolls; the stylus draws.
+   - **Scratchpad**: blank pages top to bottom, always ending with a blank page. Opens on that last page.
+   - **Notebooks**: a row of notebook tabs (**comedy**, **journal**, **actions.life**, **miscellaneous**), then that notebook's pages in order.
+4. Bottom-right of every page: **Move** and **Wipe**. Move opens a menu of notebooks; tapping one appends the page as the newest page of that notebook. Wipe clears that page only. Both are disabled on blank pages.
+
+Live ink uses `TouchHelper.create` → `openRawDrawing` → `setRawDrawingEnabled(true)` on one `SurfaceView` under the page stack, with hardware render on. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`**, base width **0.50mm** (Notes default) via `TypedValue.COMPLEX_UNIT_MM`. TouchHelper has no public setter for Notes pressure 30% or stroke stabilization 60%, so those stay firmware-default.
+
+Completed strokes freeze to a per-page bitmap on pen-up. Eraser deletes whole strokes. Raw drawing pauses while scrolling or while the Move menu is open.
+
+Pages are stored locally in `files/zetteldraw-boards.json`. Boards from v4 (the Inbox build) load as Scratchpad pages; filed boards stay in their notebooks.
 
 Tested target: Boox Go 7 Color II (Android 13, Kaleido 3, optional InkSense stylus).
 
@@ -30,6 +37,8 @@ export ANDROID_HOME=/path/to/android-sdk
 APK:
 
 `app/build/outputs/apk/debug/app-debug.apk`
+
+Debug builds are signed with the committed `app/debug.keystore` (standard `android` / `androiddebugkey` debug credentials), so a build from any machine installs over any other without uninstalling.
 
 The Boox Maven host is HTTP-only. Gradle is already allowed to use that insecure repo. Do not switch it to HTTPS; the server does not serve the artifacts that way.
 
@@ -52,7 +61,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Sideload without adb: copy the APK to internal storage and open it in **Storage**. Allow install from that source if prompted.
 
-4. Open **Boox Pen POC**. You land on Inbox. Draw with the stylus. Scroll down for the next blank board. **File** then a notebook name files the current board. Use **Eraser** to delete strokes, **Wipe** to clear the page.
+4. Open **Boox Pen POC**. You land on the last blank Scratchpad page. Draw with the stylus; finger-scroll through pages. **Move** on a page, then a notebook name, files it. **Eraser** deletes strokes; **Wipe** clears one page.
 
 If the screen stays white and nothing appears under the pen:
 
@@ -73,7 +82,8 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 ## Layout
 
 - `PenApp` — Hidden API bypass required by Onyx on Android 11+.
-- `CanvasActivity` — Inbox / notebook pager, File tray, Eraser, Wipe.
-- `BoardView` — `SurfaceView` + `TouchHelper` live ink on the current board.
-- `BoardStore` — local inbox + notebooks JSON.
+- `CanvasActivity` — Scratchpad | Notebooks nav, Pen / Eraser toolbar, notebook tabs, page slots with Move / Wipe.
+- `PageScroller` — finger scroll over the page stack; forwards stylus gestures to the ink surface.
+- `PageInkView` — `SurfaceView` + `TouchHelper` live ink; paints the visible pages at the current scroll offset.
+- `BoardStore` — local scratchpad + notebooks JSON.
 - `InkRenderer` — pressure + end-taper freeze strokes and eraser hit-tests.
