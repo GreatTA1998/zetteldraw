@@ -5,10 +5,12 @@ import com.zetteldraw.penpoc.Board;
 import java.util.List;
 
 /**
- * What the UI calls. Every write finishes locally (SQLite row + ink file)
- * before returning and never touches the network. Returned {@link Board}
- * instances are shared: the same id always maps to the same object, so the
- * UI can mutate {@code strokes} and then call {@link #saveInk}.
+ * What the UI calls. Nothing here touches the network or waits on sync.
+ * Structural writes (move, wipe, delete, notebooks) finish before returning;
+ * {@link #saveInk} is write-behind. Returned {@link Board} instances are
+ * shared: the same id always maps to the same object, so the UI thread can
+ * mutate {@code strokes} and then call {@link #saveInk}. Only the UI thread
+ * mutates {@code strokes}.
  */
 public interface BoardRepository {
     List<NotebookInfo> notebooks();
@@ -29,7 +31,11 @@ public interface BoardRepository {
         return pages(notebookId);
     }
 
-    /** Persist the page's current strokes. No-op when nothing changed. */
+    /**
+     * Persist the page's current strokes: takes an immutable snapshot now and
+     * writes it in the background, newest snapshot per page wins. Never blocks
+     * on ink encoding or file writes. No-op on disk when nothing changed.
+     */
     void saveInk(Board page);
 
     /** Append the page as the newest page of the notebook. */
