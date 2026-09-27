@@ -35,7 +35,8 @@ Completed strokes freeze to a per-page bitmap on pen-up. Eraser deletes whole st
 
 Local-first, as designed in the project's storage design doc:
 
-- **SQLite (Room)** is the source of truth on the device. Every pen-up writes one row plus one ink file before returning, and never waits on the network.
+- **SQLite (Room)** is the source of truth on the device. A pen-up snapshots the page's strokes and returns; one writer thread writes the ink file (staged and fsync'd) and then commits it with its row, newest snapshot per page wins. The UI thread never waits on ink writes, sync or the network.
+- **Strokes and navigation**: the Onyx SDK posts pen callbacks to the main thread, so each stroke is converted with the page layout and scroll that were on screen when it was drawn (`InkViewport`), and scrolls or page-list changes apply only after strokes already queued. Debug builds log main-thread I/O (StrictMode) and stalls (`adb logcat -s zd-stall zd-repo`).
 - **Ink files**: one compact binary stroke file per board in `files/ink/<board-id>.zdi`, with a deflated body of float32 points. Rows keep only the sha256 and the size. Format version 2 stores a stable 128-bit id per stroke; version 1 files still load, with ids derived from each stroke's index and points so every device gets the same ones (layout in `data/InkCodec`).
 - Tables `notebooks` and `boards` match Postgres column for column (`server/migrations/`). A unit test fails if they drift. There are also device-only tables: `outbox` (rows still to push) and `sync_state` (the pull cursor).
 - Ids are client UUIDs. Order uses fractional `position` keys (`a0`, `a0V`, …), so appending as newest or moving a page touches one row.
