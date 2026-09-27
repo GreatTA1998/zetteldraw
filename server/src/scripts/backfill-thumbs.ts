@@ -4,13 +4,18 @@
  *
  *   docker compose run --rm sync node dist/scripts/backfill-thumbs.js
  */
+import { existsSync } from "node:fs";
 import { loadConfig } from "../config.js";
 import { createPool } from "../db.js";
 import { S3InkStorage } from "../storage.js";
 import { Thumbnailer } from "../thumbs.js";
 
+if (existsSync(".env")) {
+  process.loadEnvFile(".env");
+}
+
 const config = loadConfig();
-const pool = createPool(config.databaseUrl);
+const pool = createPool(config.databaseUrl, config.databaseCaCert);
 const storage = S3InkStorage.fromConfig(config.s3);
 const thumbs = new Thumbnailer(storage, config.page);
 

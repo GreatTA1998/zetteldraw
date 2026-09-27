@@ -41,7 +41,7 @@ export async function POST(request: Request) {
   jar.set(TOKEN_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: request.url.startsWith("https:"),
+    secure: request.url.startsWith("https:") || request.headers.get("x-forwarded-proto") === "https",
     path: "/",
     maxAge: 60 * 60 * 24 * 365,
   });

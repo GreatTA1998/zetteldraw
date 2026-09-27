@@ -32,3 +32,25 @@ services:
         sync: false
       - key: S3_SECRET_ACCESS_KEY
         sync: false
+
+  # Web overview (Next.js). Talks to the sync server over its public URL; the
+  # browser only ever sees this service. Sign-in uses the device token, so
+  # ZD_DEVICE_TOKEN is deliberately not set on this public service.
+  - type: web
+    name: zetteldraw-web
+    runtime: node
+    rootDir: web
+    region: singapore
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    # "/" renders without calling the sync server, so a sleeping sync service cannot fail web deploys.
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: ZD_SERVER_URL
+        value: https://zetteldraw-sync.onrender.com
