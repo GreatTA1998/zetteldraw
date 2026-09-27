@@ -55,6 +55,8 @@ function ink(seed: number) {
 }
 
 const now = Date.now() - 60_000;
+// Unique per run, so notebooks left by earlier runs against the same database never interleave.
+const notebookKey = `zz${Date.now().toString(36)}`;
 const notebookA = randomUUID();
 const notebookB = randomUUID();
 const pages = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
@@ -108,7 +110,7 @@ beforeAll(async () => {
   const res = await call("POST", "/sync/push", {
     schema_version: schema,
     device_id: "web-test",
-    notebooks: [notebook(notebookA, "Web test A", "zz"), notebook(notebookB, "Web test B", "zzV")],
+    notebooks: [notebook(notebookA, "Web test A", notebookKey), notebook(notebookB, "Web test B", `${notebookKey}V`)],
     boards: [board(0, notebookA, "a0"), board(1, notebookA, "a1"), board(2, notebookA, "a2"), board(3, notebookB, "a0")],
     blobs: Object.fromEntries(inks.map((k) => [k.hash, k.bytes.toString("base64")])),
   });
@@ -167,6 +169,12 @@ describe("web reads", () => {
     expect(full.bytes!.readUInt32BE(16)).toBe(1264);
 
     expect((await call("GET", `/web/thumbs/${"0".repeat(64)}.png`)).status).toBe(404);
+
+    const junk = Buffer.from(`ZDI\u0009not ink ${randomUUID()}`, "latin1");
+    await storage.put(sha256Hex(junk), junk);
+    const unreadable = await call("GET", `/web/thumbs/${sha256Hex(junk)}.png`);
+    expect(unreadable.status).toBe(422);
+    expect(unreadable.json.error).toBe("unreadable_ink");
     expect((await call("GET", `/web/thumbs/../../etc.png`)).status).toBe(404);
   });
 });

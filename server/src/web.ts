@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type pg from "pg";
+import { InkFormatError } from "./ink.js";
 import type { BoardRow, NotebookRow } from "./lww.js";
 import { planMove, type MoveTarget } from "./order.js";
 import { PUSH_LOCK } from "./sync.js";
@@ -267,7 +268,15 @@ export function registerWebRoutes(app: FastifyInstance, pool: pg.Pool, thumbs: T
       if (!match) {
         throw new NotFound("image not found");
       }
-      const png = await thumbs.image(kind, match[1]);
+      let png: Buffer | null;
+      try {
+        png = await thumbs.image(kind, match[1]);
+      } catch (err) {
+        if (err instanceof InkFormatError) {
+          return reply.code(422).send({ error: "unreadable_ink", message: err.message });
+        }
+        throw err;
+      }
       if (!png) {
         throw new NotFound("ink not found");
       }

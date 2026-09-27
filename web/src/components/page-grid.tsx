@@ -3,7 +3,7 @@
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { FolderInput, MoreHorizontal } from "lucide-react";
-import { memo } from "react";
+import { memo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -38,9 +38,14 @@ export function PageGridSkeleton({ columns }: { columns: number }) {
 
 export function PageImage({ page, className }: { page: Page; className?: string }) {
   const src = proxied(page.thumb_url);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
   return (
     <div className={cn("relative w-full overflow-hidden bg-white", className)} style={{ aspectRatio: PAGE_ASPECT }}>
-      {src ? (
+      {src && failedSrc === src ? (
+        <div className="absolute inset-0 flex items-center justify-center p-2 text-center text-[0.7rem] text-neutral-400">
+          Preview unavailable
+        </div>
+      ) : src ? (
         // eslint-disable-next-line @next/next/no-img-element -- auth-proxied PNGs; next/image would refetch them without the cookie
         <img
           src={src}
@@ -48,6 +53,7 @@ export function PageImage({ page, className }: { page: Page; className?: string 
           loading="lazy"
           decoding="async"
           draggable={false}
+          onError={() => setFailedSrc(src)}
           className="absolute inset-0 size-full object-contain"
         />
       ) : (

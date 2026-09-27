@@ -19,24 +19,25 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange }: Props
   const open = index !== null && index < pages.length;
   const page = open ? pages[index] : null;
 
-  useEffect(() => {
+  // On the popup rather than window: the dialog keeps focus inside and its key handling stops propagation.
+  const onKeyDown = (e: React.KeyboardEvent) => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown") {
-        e.preventDefault();
-        onIndexChange(Math.min(pages.length - 1, index + 1));
-      } else if (e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "PageUp") {
-        e.preventDefault();
-        onIndexChange(Math.max(0, index - 1));
-      } else if (e.key === "Home") {
-        onIndexChange(0);
-      } else if (e.key === "End") {
-        onIndexChange(pages.length - 1);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, index, pages.length, onIndexChange]);
+    const last = pages.length - 1;
+    const to =
+      e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown"
+        ? Math.min(last, index + 1)
+        : e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "PageUp"
+          ? Math.max(0, index - 1)
+          : e.key === "Home"
+            ? 0
+            : e.key === "End"
+              ? last
+              : null;
+    if (to !== null) {
+      e.preventDefault();
+      onIndexChange(to);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -50,6 +51,7 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange }: Props
     <Dialog open={open} onOpenChange={(next) => !next && onIndexChange(null)}>
       <DialogContent
         showCloseButton={false}
+        onKeyDown={onKeyDown}
         className="flex h-dvh w-screen max-w-none flex-col gap-0 rounded-none bg-neutral-900 p-0 text-neutral-100 ring-0 sm:max-w-none"
       >
         {page && index !== null && (
@@ -86,6 +88,7 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange }: Props
 
 function FullPage({ page }: { page: Page }) {
   const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
   const thumb = proxied(page.thumb_url);
   const full = proxied(page.render_url);
   return (
@@ -93,16 +96,21 @@ function FullPage({ page }: { page: Page }) {
       className="relative h-full max-w-full overflow-hidden rounded-sm bg-white shadow-2xl"
       style={{ aspectRatio: PAGE_ASPECT }}
     >
-      {thumb && (
+      {thumb && !failed && (
         // eslint-disable-next-line @next/next/no-img-element -- auth-proxied PNG
         <img src={thumb} alt="" aria-hidden className="absolute inset-0 size-full object-contain" />
       )}
-      {full ? (
+      {full && failed ? (
+        <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-neutral-500">
+          This page&apos;s ink could not be rendered.
+        </div>
+      ) : full ? (
         // eslint-disable-next-line @next/next/no-img-element -- auth-proxied PNG
         <img
           src={full}
           alt="Page"
           onLoad={() => setLoaded(true)}
+          onError={() => setFailed(true)}
           className="absolute inset-0 size-full object-contain transition-opacity duration-150"
           style={{ opacity: loaded ? 1 : 0 }}
         />
