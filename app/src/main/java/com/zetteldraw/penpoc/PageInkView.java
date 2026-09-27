@@ -8,6 +8,8 @@ import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
@@ -29,13 +31,22 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
  * Live ink for a vertical stack of pages. One SurfaceView + TouchHelper
  * covers the drawing area; it paints whichever pages are scrolled into view.
- * Pages stack top to bottom, each with its own height and a fixed gap
- * below it. Strokes are stored in page-local coordinates.
+ * Strokes are stored in page-local coordinates.
+ *
+ * <p>Geometry is an immutable {@link InkViewport}. {@link #shown} is what the
+ * surface displays and the only thing pen points are converted with. A new
+ * scroll or page list is {@link #requestViewport requested}: raw drawing
+ * pauses first (unless every shown page keeps its place), then the change is
+ * applied by a message posted to the back of the main queue. The Onyx SDK
+ * posts each pen callback to that same queue, so every stroke drawn on the
+ * old picture is converted with the old geometry before the new one takes
+ * over, however late the main thread gets to it.
  */
 final class PageInkView extends FrameLayout {
     interface Listener {
@@ -66,16 +77,21 @@ final class PageInkView extends FrameLayout {
     private final SurfaceView surfaceView;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final ArrayList<Rect> excludeRects = new ArrayList<>();
-    private final ArrayList<Board> pages = new ArrayList<>();
     private final LinkedHashMap<String, Bitmap> bitmaps = new LinkedHashMap<>(8, 0.75f, true);
     private final InkHistory history = new InkHistory();
+    private final Handler main = new Handler(Looper.getMainLooper());
     private TouchHelper touchHelper;
     private Listener listener;
-    /** Content y of each page's top edge, and each page's height. */
-    private int[] tops = new int[0];
-    private int[] heights = new int[0];
-    private int pageGap;
-    private int scrollY;
+    /** What the surface shows; pen points convert through this only. Main thread. */
+    private InkViewport shown = InkViewport.EMPTY;
+    /** Next viewport, or null; {@link #applyViewport} installs it behind queued pen callbacks. */
+    private InkViewport requested;
+    private boolean applyPosted;
+    private final Runnable applyViewport = this::applyViewport;
+    /** What raw drawing was last set to, so repeated calls cost no Onyx IPC. */
+    private boolean rawOn;
+    private Rect appliedLimit;
+    private List<Rect> appliedExcludes;
     private boolean live;
     private boolean held;
     private boolean paused;
@@ -126,38 +142,70 @@ final class PageInkView extends FrameLayout {
                 listener.onLassoCancelled();
             }
         }
-        pages.clear();
-        pages.addAll(next);
-        pageGap = Math.max(0, gap);
-        tops = new int[pages.size()];
-        heights = new int[pages.size()];
-        int y = 0;
-        for (int i = 0; i < pages.size(); i++) {
-            tops[i] = y;
-            heights[i] = Math.max(1, pageHeights[i]);
-            y += heights[i] + pageGap;
-        }
-        Iterator<Map.Entry<String, Bitmap>> it = bitmaps.entrySet().iterator();
-        while (it.hasNext()) {
-            Map.Entry<String, Bitmap> entry = it.next();
-            int index = indexOfPage(entry.getKey());
-            if (index < 0 || entry.getValue().getHeight() != heights[index]) {
-                entry.getValue().recycle();
-                it.remove();
-            }
-        }
-        HashSet<String> ids = new HashSet<>();
-        for (Board page : pages) {
-            ids.add(page.id);
-        }
-        history.retainPages(ids);
-        historyChanged();
-        redrawAll();
+        requestViewport(target().withLayout(new InkViewport.Layout(next, pageHeights, gap)));
     }
 
     void setContentScrollY(int y) {
-        scrollY = Math.max(0, y);
+        requestViewport(target().withScroll(y));
+    }
+
+    /** The viewport the surface is heading to: the pending one, else the shown one. */
+    private InkViewport target() {
+        return requested != null ? requested : shown;
+    }
+
+    /**
+     * Schedules {@code next} behind every pen callback already queued. When
+     * the change would move a shown page, raw drawing pauses now so no stroke
+     * is drawn on a picture that no longer matches the geometry it will be
+     * converted with.
+     */
+    private void requestViewport(InkViewport next) {
+        requested = next;
+        boolean inkWasLive = rawOn;
+        if (!next.mapsLike(shown)) {
+            pauseScribble();
+        }
+        if (!applyPosted || inkWasLive) {
+            // Re-post so the change also lands behind strokes the pen sent since the last post.
+            main.removeCallbacks(applyViewport);
+            main.post(applyViewport);
+            applyPosted = true;
+        }
+    }
+
+    private void applyViewport() {
+        applyPosted = false;
+        InkViewport next = requested;
+        requested = null;
+        if (next == null) {
+            return;
+        }
+        boolean newLayout = next.layout != shown.layout;
+        shown = next;
+        if (newLayout) {
+            Iterator<Map.Entry<String, Bitmap>> it = bitmaps.entrySet().iterator();
+            while (it.hasNext()) {
+                Map.Entry<String, Bitmap> entry = it.next();
+                int index = shown.layout.indexOf(entry.getKey());
+                if (index < 0 || entry.getValue().getHeight() != shown.layout.heights[index]) {
+                    entry.getValue().recycle();
+                    it.remove();
+                }
+            }
+            HashSet<String> ids = new HashSet<>();
+            for (Board page : shown.layout.pages) {
+                ids.add(page.id);
+            }
+            history.retainPages(ids);
+            historyChanged();
+        }
         redrawAll();
+    }
+
+    /** True while a requested viewport would convert pen points differently from the shown one. */
+    private boolean geometryPending() {
+        return requested != null && !requested.mapsLike(shown);
     }
 
     void invalidatePage(String pageId) {
@@ -271,9 +319,7 @@ final class PageInkView extends FrameLayout {
     /** Scrolling or a popup is up: stop raw ink until {@link #release()}. */
     void hold() {
         held = true;
-        if (touchHelper != null) {
-            touchHelper.setRawDrawingEnabled(false);
-        }
+        syncRaw();
     }
 
     void release() {
@@ -283,9 +329,7 @@ final class PageInkView extends FrameLayout {
 
     void pauseLive() {
         paused = true;
-        if (touchHelper != null) {
-            touchHelper.setRawDrawingEnabled(false);
-        }
+        syncRaw();
     }
 
     void resumeLive() {
@@ -296,6 +340,8 @@ final class PageInkView extends FrameLayout {
     void close() {
         removeCallbacks(resumeAfterLasso);
         removeCallbacks(dragFrame);
+        main.removeCallbacks(applyViewport);
+        applyPosted = false;
         endSelection();
         closeRawDrawing();
         for (Bitmap bitmap : bitmaps.values()) {
@@ -337,11 +383,14 @@ final class PageInkView extends FrameLayout {
                 .setStrokeColor(Color.BLACK)
                 .setLimitRect(limit, excludeRects)
                 .openRawDrawing();
+        appliedLimit = limit;
+        appliedExcludes = new ArrayList<>(excludeRects);
         applyLiveInk();
         touchHelper.setPenUpRefreshEnabled(true);
         touchHelper.enableFingerTouch(false);
         touchHelper.enableSideBtnErase(true);
-        touchHelper.setRawDrawingEnabled(canInk());
+        rawOn = canInk();
+        touchHelper.setRawDrawingEnabled(rawOn);
     }
 
     private void closeRawDrawing() {
@@ -349,11 +398,35 @@ final class PageInkView extends FrameLayout {
             touchHelper.closeRawDrawing();
             touchHelper = null;
         }
+        rawOn = false;
+        appliedLimit = null;
+        appliedExcludes = null;
     }
 
     /** The single gate for raw drawing: every resume path asks this. */
     private boolean canInk() {
-        return live && !held && !paused && !resumePending && selection == null && !pages.isEmpty();
+        return live && !held && !paused && !resumePending && selection == null && !geometryPending()
+                && !shown.isEmpty();
+    }
+
+    /** Brings raw drawing in line with {@link #canInk()}; no IPC when it already is. */
+    private void syncRaw() {
+        if (touchHelper == null) {
+            return;
+        }
+        boolean on = canInk();
+        if (on == rawOn) {
+            return;
+        }
+        rawOn = on;
+        if (on) {
+            applyLiveInk();
+            touchHelper.setRawDrawingEnabled(true);
+            // Enabling raw drawing resets the side-button eraser channel.
+            touchHelper.enableSideBtnErase(true);
+        } else {
+            touchHelper.setRawDrawingEnabled(false);
+        }
     }
 
     private void applyLiveInk() {
@@ -369,18 +442,33 @@ final class PageInkView extends FrameLayout {
         touchHelper.setRawDrawingRenderEnabled(!eraser);
     }
 
+    /**
+     * On a stylus Boox the SDK already posts every callback to the main
+     * thread; other renderers call from their reader thread. Either way all
+     * ink state is touched on the main thread only, in callback order.
+     */
+    private void onMain(Runnable action) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            action.run();
+        } else {
+            main.post(action);
+        }
+    }
+
     private final RawInputCallback rawInputCallback = new RawInputCallback() {
         @Override
         public void onBeginRawDrawing(boolean shortcutErase, TouchPoint point) {
-            erasingStroke = tool == Tool.ERASER || shortcutErase;
-            if (erasingStroke && touchHelper != null) {
-                touchHelper.setRawDrawingRenderEnabled(false);
-            }
+            onMain(() -> {
+                erasingStroke = tool == Tool.ERASER || shortcutErase;
+                if (erasingStroke && touchHelper != null) {
+                    touchHelper.setRawDrawingRenderEnabled(false);
+                }
+            });
         }
 
         @Override
         public void onEndRawDrawing(boolean shortcutErase, TouchPoint point) {
-            erasingStroke = tool == Tool.ERASER || shortcutErase;
+            onMain(() -> erasingStroke = tool == Tool.ERASER || shortcutErase);
         }
 
         @Override
@@ -392,28 +480,31 @@ final class PageInkView extends FrameLayout {
             if (touchPointList == null) {
                 return;
             }
-            List<TouchPoint> points = touchPointList.getPoints();
-            if (erasingStroke || tool == Tool.ERASER) {
-                eraseStrokes(points);
-            } else if (tool == Tool.LASSO) {
-                ArrayList<TouchPoint> outline = InkRenderer.copyPoints(points);
-                surfaceView.post(() -> finishLasso(outline));
-            } else {
-                addStroke(points);
-            }
+            ArrayList<TouchPoint> points = InkRenderer.copyPoints(touchPointList.getPoints());
+            onMain(() -> {
+                if (erasingStroke || tool == Tool.ERASER) {
+                    eraseStrokes(points);
+                } else if (tool == Tool.LASSO) {
+                    finishLasso(points);
+                } else {
+                    addStroke(points);
+                }
+            });
         }
 
         @Override
         public void onBeginRawErasing(boolean shortcutErase, TouchPoint point) {
-            erasingStroke = true;
-            if (touchHelper != null) {
-                touchHelper.setRawDrawingRenderEnabled(false);
-            }
+            onMain(() -> {
+                erasingStroke = true;
+                if (touchHelper != null) {
+                    touchHelper.setRawDrawingRenderEnabled(false);
+                }
+            });
         }
 
         @Override
         public void onEndRawErasing(boolean shortcutErase, TouchPoint point) {
-            erasingStroke = true;
+            onMain(() -> erasingStroke = true);
         }
 
         @Override
@@ -425,12 +516,13 @@ final class PageInkView extends FrameLayout {
             if (touchPointList == null) {
                 return;
             }
-            eraseStrokes(touchPointList.getPoints());
+            ArrayList<TouchPoint> points = InkRenderer.copyPoints(touchPointList.getPoints());
+            onMain(() -> eraseStrokes(points));
         }
 
         @Override
         public void onPenUpRefresh(RectF refreshRect) {
-            surfaceView.post(() -> {
+            main.post(() -> {
                 blit(refreshRect, UpdateMode.HAND_WRITING_REPAINT_MODE);
                 applyLiveInk();
                 erasingStroke = tool == Tool.ERASER;
@@ -438,18 +530,22 @@ final class PageInkView extends FrameLayout {
         }
     };
 
-    /** {@code points} are in surface coordinates, as TouchHelper reports them. */
+    /**
+     * {@code points} are in surface coordinates, as TouchHelper reports them.
+     * The stroke is bound to the page under its first point and converted to
+     * that page's coordinates here, once, with the shown viewport.
+     */
     void addStroke(List<TouchPoint> points) {
         if (points == null || points.isEmpty()) {
             return;
         }
-        int index = pageIndexAt(points.get(0).y);
+        int index = shown.pageIndexAt(points.get(0).y);
         if (index < 0) {
             return;
         }
-        Board page = pages.get(index);
+        Board page = shown.page(index);
         boolean wasBlank = page.isBlank();
-        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(toPage(points, index));
+        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(shown.toPage(points, index));
         page.strokes.add(stroke);
         history.record(InkHistory.Edit.of(InkHistory.Part.added(page, stroke)));
         historyChanged();
@@ -470,12 +566,14 @@ final class PageInkView extends FrameLayout {
         }
         ArrayList<Board> changed = new ArrayList<>();
         InkHistory.Edit edit = new InkHistory.Edit();
-        for (int index = firstVisible(); index <= lastVisible(); index++) {
-            Board page = pages.get(index);
+        InkViewport view = shown;
+        int last = view.lastVisible(surfaceView.getHeight());
+        for (int index = view.firstVisible(); index <= last; index++) {
+            Board page = view.page(index);
             if (page.strokes.isEmpty()) {
                 continue;
             }
-            List<TouchPoint> path = toPage(eraserPath, index);
+            List<TouchPoint> path = view.toPage(eraserPath, index);
             ArrayList<InkHistory.Placed> removed = new ArrayList<>();
             for (int i = 0; i < page.strokes.size(); i++) {
                 if (InkRenderer.hits(page.strokes.get(i), path)) {
@@ -499,56 +597,6 @@ final class PageInkView extends FrameLayout {
                 notifyChanged(page);
             }
         }
-    }
-
-    private List<TouchPoint> toPage(List<TouchPoint> surfacePoints, int index) {
-        ArrayList<TouchPoint> copy = InkRenderer.copyPoints(surfacePoints);
-        float dy = scrollY - (float) tops[index];
-        for (TouchPoint point : copy) {
-            point.y += dy;
-        }
-        return copy;
-    }
-
-    private int pageIndexAt(float surfaceY) {
-        if (pages.isEmpty()) {
-            return -1;
-        }
-        float y = surfaceY + scrollY;
-        if (y < 0) {
-            return -1;
-        }
-        int index = 0;
-        while (index + 1 < pages.size() && tops[index + 1] <= y) {
-            index++;
-        }
-        return y < tops[index] + heights[index] + pageGap ? index : -1;
-    }
-
-    private int firstVisible() {
-        int index = 0;
-        while (index < pages.size() && tops[index] + heights[index] + pageGap <= scrollY) {
-            index++;
-        }
-        return index;
-    }
-
-    private int lastVisible() {
-        int bottom = scrollY + Math.max(1, surfaceView.getHeight());
-        int index = pages.size() - 1;
-        while (index > 0 && tops[index] > bottom) {
-            index--;
-        }
-        return index;
-    }
-
-    private int indexOfPage(String id) {
-        for (int i = 0; i < pages.size(); i++) {
-            if (pages.get(i).id.equals(id)) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private void notifyChanged(Board page) {
@@ -607,14 +655,15 @@ final class PageInkView extends FrameLayout {
         }
         try {
             canvas.drawColor(Color.WHITE);
-            int last = lastVisible();
-            for (int index = firstVisible(); index <= last; index++) {
-                float top = (float) tops[index] - scrollY;
+            InkViewport view = shown;
+            int last = view.lastVisible(surfaceView.getHeight());
+            for (int index = view.firstVisible(); index <= last && !view.isEmpty(); index++) {
+                float top = view.pageTop(index);
                 if (selection != null && selection.index == index) {
                     drawSelection(canvas, top);
                     continue;
                 }
-                Bitmap bitmap = bitmapFor(pages.get(index), heights[index]);
+                Bitmap bitmap = bitmapFor(view.page(index), view.layout.heights[index]);
                 if (bitmap != null) {
                     canvas.drawBitmap(bitmap, 0f, top, null);
                 }
@@ -629,19 +678,33 @@ final class PageInkView extends FrameLayout {
 
     // ---- Lasso ----
 
-    /** {@code outline} is in surface coordinates, as TouchHelper reports it. */
+    /**
+     * {@code outline} is in surface coordinates, as TouchHelper reports it. It
+     * is bound to its page now; selecting runs a moment later, outside the pen
+     * callback, and only if that page is still shown.
+     */
     void finishLasso(List<TouchPoint> outline) {
         if (tool != Tool.LASSO || selection != null || outline.size() < 3) {
             reportLasso(0);
             return;
         }
-        int index = pageIndexAt(outline.get(0).y);
+        int index = shown.pageIndexAt(outline.get(0).y);
         if (index < 0) {
             reportLasso(0);
             return;
         }
-        Board page = pages.get(index);
-        List<InkRenderer.InkStroke> picked = Lasso.select(page.strokes, toPage(outline, index));
+        Board page = shown.page(index);
+        List<TouchPoint> local = shown.toPage(outline, index);
+        main.post(() -> selectOnPage(page, local));
+    }
+
+    private void selectOnPage(Board page, List<TouchPoint> outline) {
+        int index = shown.layout.indexOf(page.id);
+        if (tool != Tool.LASSO || selection != null || index < 0) {
+            reportLasso(0);
+            return;
+        }
+        List<InkRenderer.InkStroke> picked = Lasso.select(page.strokes, outline);
         if (picked.isEmpty()) {
             reportLasso(0);
             return;
@@ -668,7 +731,7 @@ final class PageInkView extends FrameLayout {
         Rect spriteRect = new Rect();
         bounds.roundOut(spriteRect);
 
-        Bitmap base = Bitmap.createBitmap(width, heights[index], Bitmap.Config.ARGB_8888);
+        Bitmap base = Bitmap.createBitmap(width, shown.layout.heights[index], Bitmap.Config.ARGB_8888);
         base.eraseColor(Color.WHITE);
         Canvas baseCanvas = new Canvas(base);
         for (InkRenderer.InkStroke stroke : page.strokes) {
@@ -703,7 +766,7 @@ final class PageInkView extends FrameLayout {
 
     private RectF boxOnSurface(Selection s, float dx, float dy) {
         RectF box = new RectF(s.bounds);
-        box.offset(dx, (float) tops[s.index] - scrollY + dy);
+        box.offset(dx, shown.pageTop(s.index) + dy);
         float pad = 4f * getResources().getDisplayMetrics().density;
         box.inset(-pad, -pad);
         return box;
@@ -745,7 +808,7 @@ final class PageInkView extends FrameLayout {
             case MotionEvent.ACTION_MOVE:
                 if (s.dragging) {
                     float[] offset = Lasso.clampOffset(s.bounds, x - s.downX, y - s.downY,
-                            surfaceView.getWidth(), heights[s.index]);
+                            surfaceView.getWidth(), shown.layout.heights[s.index]);
                     s.dx = offset[0];
                     s.dy = offset[1];
                     scheduleDragFrame();
@@ -904,33 +967,34 @@ final class PageInkView extends FrameLayout {
         }
     }
 
+    /** Raw drawing off regardless of {@link #canInk()}, e.g. while the surface is repainted. */
     private void pauseScribble() {
-        if (touchHelper == null) {
+        if (touchHelper == null || !rawOn) {
             return;
         }
+        rawOn = false;
         touchHelper.setRawDrawingEnabled(false);
         touchHelper.setRawDrawingRenderEnabled(false);
     }
 
     private void resumeScribble() {
-        if (touchHelper == null) {
-            return;
-        }
-        applyLiveInk();
-        boolean on = canInk();
-        touchHelper.setRawDrawingEnabled(on);
-        if (on) {
-            // Enabling raw drawing resets the side-button eraser channel.
-            touchHelper.enableSideBtnErase(true);
-        }
+        syncRaw();
     }
 
+    /** Only calls into TouchHelper when the limit or exclusions actually changed. */
     private void updateExcludeRects() {
         excludeRects.clear();
         excludeRects.addAll(extraExcludeRects);
-        if (touchHelper != null) {
-            touchHelper.setLimitRect(canvasLimit(), excludeRects);
+        if (touchHelper == null) {
+            return;
         }
+        Rect limit = canvasLimit();
+        if (limit.equals(appliedLimit) && Objects.equals(excludeRects, appliedExcludes)) {
+            return;
+        }
+        appliedLimit = limit;
+        appliedExcludes = new ArrayList<>(excludeRects);
+        touchHelper.setLimitRect(limit, excludeRects);
     }
 
     private Rect canvasLimit() {
