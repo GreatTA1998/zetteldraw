@@ -99,7 +99,7 @@ public class ScreenshotRenderTest {
         menus.get(0).performClick();
         idle();
         assertNotNull(find(content, "Delete page"));
-        save(render(content), "page-menu-v10.png");
+        save(render(content), "ui-v12.png");
         controller.pause().stop().destroy();
     }
 

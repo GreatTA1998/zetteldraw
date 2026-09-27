@@ -6,10 +6,13 @@ import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorFilter;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.text.InputType;
@@ -61,7 +64,7 @@ public final class CanvasActivity extends Activity {
     private LinearLayout pageColumn;
     private HorizontalScrollView notebookScroll;
     private LinearLayout notebookStrip;
-    private Button scratchpadTab;
+    private ImageButton scratchpadTab;
     private Button addButton;
     private ImageButton penButton;
     private ImageButton eraserButton;
@@ -233,10 +236,9 @@ public final class CanvasActivity extends Activity {
      */
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
-        scratchpadTab = new Button(this, null, android.R.attr.borderlessButtonStyle);
-        styleTabLabel(scratchpadTab, getString(R.string.scratchpad));
+        scratchpadTab = iconButton(R.drawable.ic_scratchpad, R.string.scratchpad);
         scratchpadTab.setOnClickListener(v -> openCollection(SCRATCHPAD));
-        bar.addView(scratchpadTab, wrap());
+        bar.addView(scratchpadTab, iconLp(0));
         bar.addView(barDivider(), barDividerLp());
 
         notebookScroll = new HorizontalScrollView(this);
@@ -252,7 +254,7 @@ public final class CanvasActivity extends Activity {
         bar.addView(barDivider(), barDividerLp());
         addButton = tinyButton(getString(R.string.add_notebook), 22);
         addButton.setContentDescription(getString(R.string.new_notebook));
-        addButton.setMinimumWidth(dp(56));
+        addButton.setMinimumWidth(dp(48));
         addButton.setMinimumHeight(dp(48));
         addButton.setPadding(dp(8), 0, dp(8), dp(2));
         addButton.setOnClickListener(v -> showNameForm(null, null, addButton));
@@ -326,14 +328,10 @@ public final class CanvasActivity extends Activity {
         return lp;
     }
 
-    /** Active tool: black tile with a white icon. Others: black icon on white with a thin outline. */
+    /** Borderless icon; the active one gets a 2 dp black underline. */
     private void styleTool(ImageButton button, boolean selected) {
-        GradientDrawable background = new GradientDrawable();
-        background.setCornerRadius(dp(6));
-        background.setColor(selected ? Color.BLACK : Color.WHITE);
-        background.setStroke(dp(selected ? 2 : 1), Color.BLACK);
-        button.setBackground(background);
-        button.setImageTintList(ColorStateList.valueOf(selected ? Color.WHITE : Color.BLACK));
+        button.setBackground(selected ? new Underline(dp(2), dp(10)) : null);
+        button.setImageTintList(ColorStateList.valueOf(Color.BLACK));
         button.setSelected(selected);
     }
 
@@ -592,10 +590,10 @@ public final class CanvasActivity extends Activity {
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         Button cancel = tinyButton(getString(R.string.cancel), 15);
-        cancel.setMinimumHeight(dp(44));
+        cancel.setMinimumHeight(dp(48));
         cancel.setOnClickListener(v -> dismissOverlay());
         Button confirm = tinyButton(getString(delete ? R.string.delete : R.string.wipe), 15);
-        confirm.setMinimumHeight(dp(44));
+        confirm.setMinimumHeight(dp(48));
         styleButton(confirm, true);
         confirm.setOnClickListener(v -> {
             dismissOverlay();
@@ -762,14 +760,15 @@ public final class CanvasActivity extends Activity {
         showOverlay(box, anchoredLp(anchor, box), root);
     }
 
+    /** The one frame of a menu or form; its rows and buttons are borderless. */
     private LinearLayout panel() {
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
-        list.setPadding(dp(10), dp(8), dp(10), dp(8));
+        list.setPadding(dp(6), dp(4), dp(6), dp(4));
         GradientDrawable background = new GradientDrawable();
-        background.setCornerRadius(dp(4));
+        background.setCornerRadius(dp(6));
         background.setColor(Color.WHITE);
-        background.setStroke(dp(2), Color.BLACK);
+        background.setStroke(dp(1), Color.BLACK);
         list.setBackground(background);
         list.setClickable(true);
         return list;
@@ -800,9 +799,6 @@ public final class CanvasActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        if (list.getChildCount() > 0) {
-            lp.topMargin = dp(6);
-        }
         list.addView(item, lp);
     }
 
@@ -891,19 +887,15 @@ public final class CanvasActivity extends Activity {
 
     private void styleTabs() {
         boolean scratch = SCRATCHPAD.equals(collectionId);
-        styleTab(scratchpadTab, scratch);
-        inkLabel(scratchpadTab, scratch);
+        styleTool(scratchpadTab, scratch);
         for (NotebookTab tab : notebookTabs) {
             tab.setCurrent(!scratch && tab.id.equals(collectionId));
         }
     }
 
-    /** E-ink selection: inverted and bold, no greys. */
+    /** E-ink selection without fills: a 2 dp black underline (and bold label). */
     private void styleTab(View tab, boolean selected) {
-        GradientDrawable background = new GradientDrawable();
-        background.setCornerRadius(dp(4));
-        background.setColor(selected ? Color.BLACK : Color.WHITE);
-        tab.setBackground(background);
+        tab.setBackground(selected ? new Underline(dp(2), dp(12)) : null);
         tab.setSelected(selected);
     }
 
@@ -923,7 +915,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private static void inkLabel(TextView label, boolean selected) {
-        label.setTextColor(selected ? Color.WHITE : Color.BLACK);
+        label.setTextColor(Color.BLACK);
         label.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
     }
 
@@ -934,7 +926,6 @@ public final class CanvasActivity extends Activity {
     private final class NotebookTab extends LinearLayout {
         final String id;
         final Button label;
-        final View divider;
         final Button more;
 
         NotebookTab(Context context, BoardRepository.NotebookInfo info) {
@@ -953,15 +944,11 @@ public final class CanvasActivity extends Activity {
             });
             addView(label, wrap());
 
-            divider = new View(context);
-            divider.setBackgroundColor(Color.WHITE);
-            addView(divider, new LinearLayout.LayoutParams(dp(1), dp(24)));
-
             more = new Button(context, null, android.R.attr.borderlessButtonStyle);
             styleTabLabel(more, getString(R.string.notebook_options));
             more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
             more.setMinimumWidth(dp(48));
-            more.setPadding(dp(10), 0, dp(12), dp(4));
+            more.setPadding(dp(4), 0, dp(12), dp(4));
             more.setContentDescription(getString(R.string.notebook_menu, info.title));
             more.setOnClickListener(v -> showNotebookMenu(id));
             addView(more, wrap());
@@ -972,7 +959,6 @@ public final class CanvasActivity extends Activity {
             styleTab(this, current);
             inkLabel(label, current);
             inkLabel(more, current);
-            divider.setVisibility(current ? VISIBLE : GONE);
             more.setVisibility(current ? VISIBLE : GONE);
         }
     }
@@ -1066,9 +1052,9 @@ public final class CanvasActivity extends Activity {
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
             moveButton = tinyButton(getString(R.string.move), 14);
-            moveButton.setMinimumHeight(dp(44));
+            moveButton.setMinimumHeight(dp(48));
             moreButton = tinyButton(getString(R.string.notebook_options), 18);
-            moreButton.setMinimumHeight(dp(44));
+            moreButton.setMinimumHeight(dp(48));
             moreButton.setMinimumWidth(dp(48));
             moreButton.setPadding(dp(10), 0, dp(10), dp(4));
             moreButton.setContentDescription(getString(R.string.page_options));
@@ -1166,21 +1152,51 @@ public final class CanvasActivity extends Activity {
         button.setTextSize(TypedValue.COMPLEX_UNIT_SP, textSp);
         button.setMinHeight(0);
         button.setMinWidth(0);
-        button.setMinimumHeight(dp(32));
-        button.setMinimumWidth(0);
-        button.setPadding(dp(12), dp(4), dp(12), dp(4));
+        button.setMinimumHeight(dp(48));
+        button.setMinimumWidth(dp(48));
+        button.setPadding(dp(12), 0, dp(12), 0);
+        button.setStateListAnimator(null);
         styleButton(button, false);
         return button;
     }
 
-    private void styleButton(Button button, boolean selected) {
-        GradientDrawable background = new GradientDrawable();
-        background.setCornerRadius(dp(4));
-        background.setStroke(dp(1), Color.BLACK);
-        background.setColor(selected ? Color.BLACK : Color.WHITE);
-        button.setTextColor(selected ? Color.WHITE : Color.BLACK);
-        button.setBackground(background);
-        button.setSelected(selected);
+    /** Borderless text button; the primary action of a form is bold. */
+    private void styleButton(Button button, boolean primary) {
+        button.setBackground(null);
+        button.setTextColor(Color.BLACK);
+        button.setTypeface(Typeface.DEFAULT, primary ? Typeface.BOLD : Typeface.NORMAL);
+    }
+
+    /** A black bar along the bottom edge, inset from the sides: the active tool or tab. */
+    private static final class Underline extends Drawable {
+        private final Paint paint = new Paint();
+        private final int thickness;
+        private final int inset;
+
+        Underline(int thickness, int inset) {
+            this.thickness = thickness;
+            this.inset = inset;
+            paint.setColor(Color.BLACK);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Rect b = getBounds();
+            canvas.drawRect(b.left + inset, b.bottom - thickness, b.right - inset, b.bottom, paint);
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter filter) {
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
     }
 
     private int dp(int value) {

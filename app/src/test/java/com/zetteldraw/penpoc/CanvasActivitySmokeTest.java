@@ -52,9 +52,12 @@ public class CanvasActivitySmokeTest {
         assertTrue("no tab ⋯ while the Scratchpad is open", tabMenus(root).isEmpty());
         assertNull("no separate Notebooks row", find(root, "Notebooks"));
         click(root, "comedy");
-        assertTrue(find(root, "comedy").getParent() instanceof View);
-        assertTrue("selected tab is inverted", ((View) find(root, "comedy").getParent()).isSelected());
-        assertFalse(find(root, "Scratchpad").isSelected());
+        View comedyTab = (View) find(root, "comedy").getParent();
+        assertTrue("open tab is marked", comedyTab.isSelected());
+        assertTrue("open tab is underlined, not filled", comedyTab.getBackground() != null
+                && !(comedyTab.getBackground() instanceof android.graphics.drawable.GradientDrawable));
+        assertNull("other tabs have no background", ((View) find(root, "journal").getParent()).getBackground());
+        assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
         assertEquals("only the selected tab carries ⋯", 1, tabMenus(root).size());
 
         click(root, "+");
@@ -119,8 +122,8 @@ public class CanvasActivitySmokeTest {
         assertNotNull(find(root, "diary"));
         assertNull(find(root, "journal"));
 
-        click(root, "Scratchpad");
-        assertTrue(find(root, "Scratchpad").isSelected());
+        clickDesc(root, "Scratchpad");
+        assertTrue(byDescription(root, "Scratchpad").get(0).isSelected());
         assertTrue(tabMenus(root).isEmpty());
         controller.pause().stop().destroy();
     }
@@ -215,7 +218,7 @@ public class CanvasActivitySmokeTest {
         assertEquals(1, byDescription(root, "Page 1").size());
         assertTrue(byDescription(root, "Page 2").isEmpty());
 
-        click(root, "Scratchpad");
+        clickDesc(root, "Scratchpad");
         assertEquals(1, byDescription(root, "Page 1").size());
         controller.pause().stop().destroy();
     }
