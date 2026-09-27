@@ -1,6 +1,7 @@
 package com.zetteldraw.penpoc;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
@@ -15,6 +16,7 @@ import androidx.room.Room;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.onyx.android.sdk.data.note.TouchPoint;
+import com.onyx.android.sdk.pen.data.TouchPointList;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.InkCodec;
 import com.zetteldraw.penpoc.data.InkFileStore;
@@ -36,9 +38,11 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -63,6 +67,71 @@ public class InkNavigationTest {
     public void setUp() {
         context = ApplicationProvider.getApplicationContext();
         ZettelData.resetForTest();
+        UiExecutors.useSynchronousForTest();
+    }
+
+    @Test
+    public void aStrokeKeepsThePictureItsPenWentDownOn() {
+        Board a = new Board("a", 1L);
+        Board b = new Board("b", 2L);
+        PageInkView ink = new PageInkView(context);
+        ink.setPages(Arrays.asList(a, b), new int[]{1000, 1000}, 24);
+        idle();
+
+        ink.rawInput().onBeginRawDrawing(false, points(100f, 900f).get(0));
+        ink.setContentScrollY(800);
+        idle();
+        ink.rawInput().onRawDrawingTouchPointListReceived(list(points(100f, 900f)));
+        ink.rawInput().onEndRawDrawing(false, points(100f, 900f).get(0));
+        idle();
+
+        assertEquals("pen-up after the scroll applied still maps with pen-down's picture", 1, a.strokes.size());
+        assertTrue(b.isBlank());
+        assertEquals(900f, a.strokes.get(0).points.get(0).y, 0f);
+    }
+
+    @Test
+    public void callbacksFromTheReaderThreadMapWithThePenDownPicture() throws Exception {
+        Board a = new Board("a", 1L);
+        Board b = new Board("b", 2L);
+        PageInkView ink = new PageInkView(context);
+        ink.setPages(Arrays.asList(a, b), new int[]{1000, 1000}, 24);
+        idle();
+
+        Thread reader = new Thread(() -> {
+            ink.rawInput().onBeginRawDrawing(false, points(100f, 900f).get(0));
+            ink.rawInput().onRawDrawingTouchPointListReceived(list(points(100f, 900f)));
+            ink.rawInput().onEndRawDrawing(false, points(100f, 900f).get(0));
+        }, "raw-input-reader");
+        reader.start();
+        reader.join(5_000);
+        ink.setContentScrollY(800);
+        idle();
+
+        assertEquals("a non-stylus renderer calls from its own thread; same result", 1, a.strokes.size());
+        assertEquals(900f, a.strokes.get(0).points.get(0).y, 0f);
+        assertTrue(b.isBlank());
+    }
+
+    @Test
+    public void eachReasonToHoldThePenIsReleasedOnItsOwn() {
+        PageInkView ink = new PageInkView(context);
+        ink.setPages(Arrays.asList(new Board("a", 1L)), new int[]{1000}, 24);
+        ink.setLive(true);
+        idle();
+        assertTrue(ink.inkEnabled());
+
+        ink.hold(PageInkView.Hold.OVERLAY);
+        ink.hold(PageInkView.Hold.SCROLL);
+        ink.release(PageInkView.Hold.SCROLL);
+        assertFalse("a scroll settling under an open menu keeps the pen off", ink.inkEnabled());
+        ink.release(PageInkView.Hold.OVERLAY);
+        assertTrue(ink.inkEnabled());
+
+        ink.setContentScrollY(300);
+        assertFalse("off until the scrolled picture is up", ink.inkEnabled());
+        idle();
+        assertTrue(ink.inkEnabled());
     }
 
     @Test
@@ -182,6 +251,115 @@ public class InkNavigationTest {
             writer.awaitTermination(10, TimeUnit.SECONDS);
             db.close();
         }
+    }
+
+    @Test
+    public void quickTabTapsNeverWaitForStorageAndInkFollowsWhatIsShown() throws Exception {
+        BoardRepository repo = ZettelData.repository(context);
+        seed(repo, Notebook.COMEDY.uuid);
+        seed(repo, Notebook.JOURNAL.uuid);
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        settle();
+        PageInkView ink = findInk(root);
+        Board scratch = repo.scratchpadPages().get(0);
+        assertTrue(ink.inkEnabled());
+
+        ExecutorService loader = Executors.newSingleThreadExecutor();
+        UiExecutors.loader = loader;
+        Object lock = repositoryLock(repo);
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(1);
+        Thread sync = new Thread(() -> {
+            synchronized (lock) {
+                holding.countDown();
+                try {
+                    done.await(20, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }, "sync-worker");
+        sync.start();
+        assertTrue(holding.await(5, TimeUnit.SECONDS));
+        try {
+            long slowest = 0;
+            for (String tab : new String[]{"comedy", "journal", "comedy", "journal", "comedy"}) {
+                long before = System.nanoTime();
+                assertTrue(findText(root, tab).performClick());
+                idle();
+                slowest = Math.max(slowest, (System.nanoTime() - before) / 1_000_000);
+                assertTrue(tab + " is marked at once", ((View) findText(root, tab).getParent()).isSelected());
+            }
+            assertTrue("a tap never waits for storage (slowest " + slowest + " ms)", slowest < 500);
+            assertFalse("pen held while the new list loads", ink.inkEnabled());
+        } finally {
+            done.countDown();
+            sync.join(5_000);
+        }
+
+        loader.submit(() -> { }).get(10, TimeUnit.SECONDS);
+        settle();
+        UiExecutors.useSynchronousForTest();
+        loader.shutdown();
+        List<String> labels = CanvasActivitySmokeTest.pageLabels(root);
+        assertEquals("only the last tap's list is shown", 41, labels.size());
+        assertEquals("41/41", labels.get(40));
+        assertTrue(ink.inkEnabled());
+        Board firstComedy = repo.notebookPages(Notebook.COMEDY.uuid).get(0);
+        int before = firstComedy.strokes.size();
+        ink.addStroke(points(120f, 200f));
+        idle();
+        assertEquals(before + 1, firstComedy.strokes.size());
+        assertEquals(200f, firstComedy.strokes.get(before).points.get(0).y, 0f);
+        assertTrue(scratch.strokes.isEmpty());
+        controller.pause().stop().destroy();
+    }
+
+    private static void seed(BoardRepository repo, String notebookId) {
+        for (int p = 0; p < 40; p++) {
+            Board page = repo.notebookPages(notebookId).get(p);
+            for (int s = 0; s < 60; s++) {
+                page.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f + (s % 10) * 50f, 20f + (s / 10) * 60f));
+            }
+            repo.saveInk(page);
+        }
+    }
+
+    private static Object repositoryLock(BoardRepository repo) throws Exception {
+        Field field = RoomBoardRepository.class.getDeclaredField("lock");
+        field.setAccessible(true);
+        return field.get(repo);
+    }
+
+    private static TouchPointList list(List<TouchPoint> points) {
+        TouchPointList list = new TouchPointList();
+        for (TouchPoint point : points) {
+            list.add(point);
+        }
+        return list;
+    }
+
+    /** Runs delayed main-thread work too (the scroll-settle timer). */
+    private static void settle() {
+        ShadowLooper.idleMainLooper(2, TimeUnit.SECONDS);
+    }
+
+    private static List<View> byDescription(View view, String description) {
+        List<View> out = new ArrayList<>();
+        if (view.getVisibility() != View.VISIBLE) {
+            return out;
+        }
+        if (description.contentEquals(String.valueOf(view.getContentDescription()))) {
+            out.add(view);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                out.addAll(byDescription(group.getChildAt(i), description));
+            }
+        }
+        return out;
     }
 
     private static final class SavingListener implements PageInkView.Listener {

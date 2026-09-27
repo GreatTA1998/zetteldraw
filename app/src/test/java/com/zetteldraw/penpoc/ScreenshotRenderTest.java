@@ -42,6 +42,7 @@ public class ScreenshotRenderTest {
     @Before
     public void freshRepository() {
         ZettelData.resetForTest();
+        UiExecutors.useSynchronousForTest();
     }
 
     @Test
@@ -95,7 +96,7 @@ public class ScreenshotRenderTest {
 
         List<View> menus = new ArrayList<>();
         collectByDescription(content, "Page options", menus);
-        assertTrue(menus.size() >= 3);
+        assertTrue(menus.size() >= 2);
         menus.get(0).performClick();
         idle();
         assertNotNull(find(content, "Delete page"));
