@@ -15,11 +15,25 @@ export interface InkStorage {
   get(hash: string): Promise<Buffer>;
 }
 
+/** Arbitrary objects by key (derived images such as thumb/<ink_hash>.png). */
+export interface ObjectStore {
+  hasObject(key: string): Promise<boolean>;
+  putObject(key: string, bytes: Buffer, contentType: string): Promise<void>;
+  /** null when the key does not exist. */
+  getObject(key: string): Promise<Buffer | null>;
+}
+
 export function inkKey(hash: string): string {
   return `ink/${hash}`;
 }
 
-export class S3InkStorage implements InkStorage {
+function isNotFound(err: unknown): boolean {
+  const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+  const name = (err as Error).name;
+  return status === 404 || name === "NotFound" || name === "NoSuchKey";
+}
+
+export class S3InkStorage implements InkStorage, ObjectStore {
   constructor(
     private readonly s3: S3Client,
     private readonly bucket: string,
@@ -47,13 +61,32 @@ export class S3InkStorage implements InkStorage {
   }
 
   async has(hash: string): Promise<boolean> {
+    return this.hasObject(inkKey(hash));
+  }
+
+  async hasObject(key: string): Promise<boolean> {
     try {
-      await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: inkKey(hash) }));
+      await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
       return true;
     } catch (err) {
-      const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
-      if (status === 404 || (err as Error).name === "NotFound") {
+      if (isNotFound(err)) {
         return false;
+      }
+      throw err;
+    }
+  }
+
+  async putObject(key: string, bytes: Buffer, contentType: string): Promise<void> {
+    await this.s3.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType }));
+  }
+
+  async getObject(key: string): Promise<Buffer | null> {
+    try {
+      const res = await this.s3.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+      return res.Body ? Buffer.from(await res.Body.transformToByteArray()) : null;
+    } catch (err) {
+      if (isNotFound(err)) {
+        return null;
       }
       throw err;
     }

@@ -26,11 +26,15 @@ Without Docker: `npm ci && DATABASE_URL=... S3_ENDPOINT=... S3_BUCKET=... S3_ACC
 ## Tests
 
 ```bash
-npm test                                 # unit: LWW resolver, request validation, migration numbering
-npm run test:integration                 # compose up → push/pull round trip → compose down
+npm test                                 # unit: LWW, validation, migrations, .zdi v1/v2 codec, rendering, reorder keys
+npm run test:integration                 # compose up → push/pull round trip + web endpoints → compose down
 WITH_ANDROID=1 npm run test:integration  # also runs the Android client against it (two simulated devices)
 KEEP=1 npm run test:integration          # leave the stack running afterwards
 ```
+
+## Web endpoints and thumbnails
+
+`/web/*` serves the web overview (`../web`): notebooks, pages in order, PNG thumbnails and full renders made from the ink, page move/reorder and notebook rename. See the [root README](../README.md#web-overview-web). Scripts: `node dist/scripts/seed.js` (demo library) and `node dist/scripts/backfill-thumbs.js`; in dev, `npx tsx src/scripts/<name>.ts`.
 
 ## Schema
 

@@ -12,7 +12,7 @@ import type { InkStorage } from "./storage.js";
 import { BadRequest, type PushBody } from "./validate.js";
 
 /** Serializes pushes so revs commit in order and a pull never skips one. */
-const PUSH_LOCK = 42_4242;
+export const PUSH_LOCK = 42_4242;
 
 const BOARD_COLS = [
   "id",
