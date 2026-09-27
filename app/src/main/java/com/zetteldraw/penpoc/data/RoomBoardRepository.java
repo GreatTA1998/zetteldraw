@@ -150,7 +150,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     @Override
     public void movePageToNotebook(String boardId, String notebookId) {
         synchronized (lock) {
-            if (dao.notebook(notebookId) == null) {
+            NotebookEntity target = dao.notebook(notebookId);
+            if (target == null || target.deletedAt != null) {
                 return;
             }
             BoardEntity row = dao.board(boardId);
@@ -192,6 +193,70 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             saveInk(board);
             trimTrailingBlanksLocked();
             ensureTrailingBlankLocked();
+        }
+    }
+
+    @Override
+    public NotebookInfo createNotebook(String title) {
+        String clean = cleanTitle(title);
+        if (clean == null) {
+            return null;
+        }
+        synchronized (lock) {
+            long now = clock.getAsLong();
+            NotebookEntity row = new NotebookEntity();
+            row.id = UUID.randomUUID().toString();
+            row.title = clean;
+            row.position = Positions.after(dao.lastNotebookPosition());
+            row.createdAt = now;
+            row.updatedAt = now;
+            db.runInTransaction(() -> {
+                dao.upsertNotebook(row);
+                queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+            });
+            scheduleIndex();
+            return new NotebookInfo(row.id, row.title);
+        }
+    }
+
+    @Override
+    public void renameNotebook(String notebookId, String title) {
+        String clean = cleanTitle(title);
+        if (clean == null) {
+            return;
+        }
+        synchronized (lock) {
+            NotebookEntity row = dao.notebook(notebookId);
+            if (row == null || row.deletedAt != null || row.title.equals(clean)) {
+                return;
+            }
+            row.title = clean;
+            row.updatedAt = clock.getAsLong();
+            db.runInTransaction(() -> {
+                dao.upsertNotebook(row);
+                queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+            });
+            scheduleIndex();
+        }
+    }
+
+    @Override
+    public void deleteNotebook(String notebookId) {
+        synchronized (lock) {
+            NotebookEntity row = dao.notebook(notebookId);
+            if (row == null || row.deletedAt != null) {
+                return;
+            }
+            long now = clock.getAsLong();
+            row.deletedAt = now;
+            row.updatedAt = now;
+            db.runInTransaction(() -> {
+                dao.upsertNotebook(row);
+                queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.DELETE);
+                returnPagesToScratchpadLocked(notebookId);
+            });
+            ensureTrailingBlankLocked();
+            scheduleIndex();
         }
     }
 
@@ -301,6 +366,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         }
                         for (BoardEntity remote : page.boards) {
                             applyRemoteBoardLocked(remote, page.blobs, refreshed, mirrorOps);
+                        }
+                        for (NotebookEntity remote : page.notebooks) {
+                            NotebookEntity now = dao.notebook(remote.id);
+                            if (now != null && now.deletedAt != null) {
+                                // Pages still filed here (e.g. moved in on this device after the
+                                // other device deleted it) go back to the scratchpad.
+                                returnPagesToScratchpadLocked(remote.id);
+                            }
                         }
                         SyncState state = dao.syncState();
                         if (state == null) {
@@ -435,6 +508,29 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     // region internals
 
+    private static String cleanTitle(String title) {
+        if (title == null) {
+            return null;
+        }
+        String t = title.trim().replaceAll("\\s+", " ");
+        return t.isEmpty() ? null : t;
+    }
+
+    /** Moves the notebook's live pages to the end of the scratchpad, keeping their order. */
+    private void returnPagesToScratchpadLocked(String notebookId) {
+        List<BoardEntity> pages = dao.notebookBoards(notebookId);
+        String last = dao.lastScratchpadPosition();
+        long now = clock.getAsLong();
+        for (BoardEntity page : pages) {
+            last = Positions.after(last);
+            page.notebookId = null;
+            page.position = last;
+            page.updatedAt = now;
+            dao.upsertBoard(page);
+            queueLocked(OutboxEntry.BOARD, page.id, OutboxEntry.UPSERT);
+        }
+    }
+
     private void seedNotebooks() {
         long now = clock.getAsLong();
         for (Notebook notebook : Notebook.values()) {
@@ -446,7 +542,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             row.title = notebook.label;
             row.position = Positions.after(dao.lastNotebookPosition());
             row.createdAt = now;
-            row.updatedAt = now;
+            // Seeds lose every LWW comparison, so a rename or delete from another
+            // device is never undone by a fresh install re-seeding the same id.
+            row.updatedAt = 0;
             dao.upsertNotebook(row);
             queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
         }
@@ -579,7 +677,13 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 throw new IOException("bad ink blob for " + remote.id);
             }
             writeInkLocked(remote.id, bytes);
-            refreshed.put(remote.id, InkCodec.decode(bytes));
+            try {
+                refreshed.put(remote.id, InkCodec.decode(bytes));
+            } catch (IOException e) {
+                // Kept byte-for-byte (e.g. a newer ink format); it must not block the rest of the pull.
+                Log.w(TAG, "undecodable ink for " + remote.id, e);
+                refreshed.put(remote.id, new ArrayList<>());
+            }
         }
         dao.upsertBoard(remote);
         dao.deleteOutbox(OutboxEntry.BOARD, remote.id);

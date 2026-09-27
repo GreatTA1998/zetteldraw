@@ -9,12 +9,17 @@ import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.text.InputType;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -32,20 +37,25 @@ import java.util.List;
 public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
     private static final String SCRATCHPAD = "scratchpad";
+    private static final String NO_NOTEBOOK = "no-notebook";
 
     private BoardRepository repository;
     private String collectionId = SCRATCHPAD;
-    private Notebook notebook = Notebook.values()[0];
+    /** Last opened notebook; null until one is chosen or when none exist. */
+    private String notebookId;
     private final HashMap<String, Integer> scrollByCollection = new HashMap<>();
 
     private FrameLayout root;
     private FrameLayout drawingArea;
-    private FrameLayout moveMenu;
+    /** In-window menu or form (Move, notebook options, name, delete confirm). */
+    private FrameLayout overlay;
     private PageInkView inkView;
     private PageScroller scroller;
     private LinearLayout pageColumn;
     private TextView emptyView;
     private LinearLayout notebookTabs;
+    private HorizontalScrollView notebookScroll;
+    private LinearLayout notebookStrip;
     private View notebookTabsRule;
     private Button scratchpadTab;
     private Button notebooksTab;
@@ -154,6 +164,7 @@ public final class CanvasActivity extends Activity {
         });
 
         setContentView(root);
+        repository.setRemoteChangeListener(this::onRemoteChange);
         setEraserMode(false);
         syncNav();
         inkView.setLive(true);
@@ -173,6 +184,7 @@ public final class CanvasActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        repository.setRemoteChangeListener(null);
         scroller.removeCallbacks(scrollSettled);
         inkView.close();
         super.onDestroy();
@@ -183,7 +195,7 @@ public final class CanvasActivity extends Activity {
         scratchpadTab = tinyButton(getString(R.string.scratchpad), 15);
         notebooksTab = tinyButton(getString(R.string.notebooks), 15);
         scratchpadTab.setOnClickListener(v -> openCollection(SCRATCHPAD));
-        notebooksTab.setOnClickListener(v -> openCollection(notebook.id));
+        notebooksTab.setOnClickListener(v -> openNotebooks());
         TextView divider = new TextView(this);
         divider.setText("|");
         divider.setTextColor(Color.BLACK);
@@ -208,29 +220,122 @@ public final class CanvasActivity extends Activity {
         return toolbar;
     }
 
+    /** Scrolling notebook tabs (five fit on screen) with fixed ⋯ and + on the right. */
     private LinearLayout buildNotebookTabs() {
         LinearLayout tabs = row(Gravity.CENTER_VERTICAL);
-        for (Notebook each : Notebook.values()) {
-            Button button = tinyButton(each.label, 13);
-            button.setSingleLine(true);
-            button.setEllipsize(TextUtils.TruncateAt.END);
-            button.setOnClickListener(v -> {
-                notebook = each;
-                openCollection(each.id);
-            });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
-                    LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            if (!notebookButtons.isEmpty()) {
-                lp.leftMargin = dp(6);
+        notebookScroll = new HorizontalScrollView(this);
+        notebookScroll.setHorizontalScrollBarEnabled(false);
+        notebookStrip = new LinearLayout(this);
+        notebookStrip.setOrientation(LinearLayout.HORIZONTAL);
+        notebookScroll.addView(notebookStrip, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        tabs.addView(notebookScroll, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button options = tinyButton(getString(R.string.notebook_options), 15);
+        options.setOnClickListener(v -> {
+            if (notebookId != null && !SCRATCHPAD.equals(collectionId)) {
+                showNotebookOptions(notebookId);
             }
-            tabs.addView(button, lp);
-            notebookButtons.add(button);
-        }
+        });
+        Button add = tinyButton(getString(R.string.add_notebook), 15);
+        add.setOnClickListener(v -> showNameForm(null, null));
+        LinearLayout.LayoutParams lp = wrap();
+        lp.leftMargin = dp(6);
+        tabs.addView(options, lp);
+        LinearLayout.LayoutParams addLp = wrap();
+        addLp.leftMargin = dp(6);
+        tabs.addView(add, addLp);
+        rebuildNotebookTabs();
         return tabs;
     }
 
+    private void rebuildNotebookTabs() {
+        notebookStrip.removeAllViews();
+        notebookButtons.clear();
+        int width = getResources().getDisplayMetrics().widthPixels;
+        int tabWidth = Math.max(dp(64), (width - dp(16) - dp(110) - 4 * dp(6)) / 5);
+        for (BoardRepository.NotebookInfo each : repository.notebooks()) {
+            Button button = tinyButton(each.title, 13);
+            button.setTag(each.id);
+            button.setSingleLine(true);
+            button.setEllipsize(TextUtils.TruncateAt.END);
+            button.setOnClickListener(v -> openNotebook(each.id));
+            button.setOnLongClickListener(v -> {
+                openNotebook(each.id);
+                showNotebookOptions(each.id);
+                return true;
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(tabWidth,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (!notebookButtons.isEmpty()) {
+                lp.leftMargin = dp(6);
+            }
+            notebookStrip.addView(button, lp);
+            notebookButtons.add(button);
+        }
+    }
+
+    /** Sync pulled changes: notebooks may have been added, renamed or deleted elsewhere. */
+    private void onRemoteChange() {
+        rebuildNotebookTabs();
+        if (!pagesLoaded) {
+            syncNav();
+            return;
+        }
+        if (!SCRATCHPAD.equals(collectionId) && tabFor(collectionId) == null) {
+            openNotebooks();
+        } else {
+            reloadPages(scroller.getScrollY());
+            syncNav();
+        }
+    }
+
+    private void openNotebooks() {
+        List<BoardRepository.NotebookInfo> notebooks = repository.notebooks();
+        String target = null;
+        for (BoardRepository.NotebookInfo each : notebooks) {
+            if (each.id.equals(notebookId)) {
+                target = each.id;
+            }
+        }
+        if (target == null && !notebooks.isEmpty()) {
+            target = notebooks.get(0).id;
+        }
+        openNotebook(target);
+    }
+
+    /** {@code id == null} shows the Notebooks section with no notebook (none exist). */
+    private void openNotebook(String id) {
+        notebookId = id;
+        openCollection(id == null ? NO_NOTEBOOK : id);
+        Button selected = tabFor(id);
+        if (selected != null) {
+            notebookScroll.post(() -> notebookScroll.smoothScrollTo(
+                    Math.max(0, selected.getLeft() - dp(24)), 0));
+        }
+    }
+
+    private Button tabFor(String id) {
+        for (Button button : notebookButtons) {
+            if (button.getTag().equals(id)) {
+                return button;
+            }
+        }
+        return null;
+    }
+
+    private String titleOf(String id) {
+        for (BoardRepository.NotebookInfo each : repository.notebooks()) {
+            if (each.id.equals(id)) {
+                return each.title;
+            }
+        }
+        return "";
+    }
+
     private void openCollection(String id) {
-        dismissMoveMenu();
+        dismissOverlay();
         if (pageHeight == 0) {
             collectionId = id;
             syncNav();
@@ -264,6 +369,7 @@ public final class CanvasActivity extends Activity {
             pageColumn.addView(slot, new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, stride()));
         }
+        emptyView.setText(NO_NOTEBOOK.equals(collectionId) ? R.string.no_notebooks : R.string.empty_notebook);
         emptyView.setVisibility(pages.isEmpty() ? View.VISIBLE : View.GONE);
         inkView.setPages(pages, pageHeight, stride());
         pendingScrollY = Math.max(0, targetScrollY);
@@ -274,8 +380,10 @@ public final class CanvasActivity extends Activity {
         if (SCRATCHPAD.equals(id)) {
             return repository.scratchpadPages();
         }
-        Notebook each = Notebook.fromId(id);
-        return each == null ? new ArrayList<>() : repository.notebookPages(each.uuid);
+        if (NO_NOTEBOOK.equals(id)) {
+            return new ArrayList<>();
+        }
+        return repository.notebookPages(id);
     }
 
     private void onScrolled(int scrollY) {
@@ -300,37 +408,11 @@ public final class CanvasActivity extends Activity {
      * appear on the Boox over the TouchHelper surface.
      */
     private void showMoveMenu(PageSlot slot) {
-        dismissMoveMenu();
-        FrameLayout scrim = new FrameLayout(this);
-        scrim.setClickable(true);
-        scrim.setOnClickListener(v -> dismissMoveMenu());
-
-        LinearLayout list = new LinearLayout(this);
-        list.setOrientation(LinearLayout.VERTICAL);
-        list.setPadding(dp(6), dp(6), dp(6), dp(6));
-        GradientDrawable background = new GradientDrawable();
-        background.setCornerRadius(dp(4));
-        background.setColor(Color.WHITE);
-        background.setStroke(dp(1), Color.BLACK);
-        list.setBackground(background);
-        list.setClickable(true);
-        for (Notebook each : Notebook.values()) {
-            Button item = tinyButton(each.label, 15);
-            item.setMinimumHeight(dp(40));
-            item.setOnClickListener(v -> {
-                dismissMoveMenu();
-                repository.saveInk(slot.page);
-                repository.movePageToNotebook(slot.page.id, each.uuid);
-                reloadPages(scroller.getScrollY());
-            });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT);
-            if (list.getChildCount() > 0) {
-                lp.topMargin = dp(6);
-            }
-            list.addView(item, lp);
+        LinearLayout list = panel();
+        for (BoardRepository.NotebookInfo each : repository.notebooks()) {
+            addPanelButton(list, each.title, () -> moveTo(slot, each.id));
         }
+        addPanelButton(list, getString(R.string.new_notebook_item), () -> showNameForm(null, slot));
 
         list.measure(View.MeasureSpec.makeMeasureSpec(drawingArea.getWidth(), View.MeasureSpec.AT_MOST),
                 View.MeasureSpec.makeMeasureSpec(drawingArea.getHeight(), View.MeasureSpec.AT_MOST));
@@ -350,20 +432,217 @@ public final class CanvasActivity extends Activity {
         listLp.gravity = Gravity.TOP | Gravity.END;
         listLp.topMargin = top;
         listLp.rightMargin = dp(10);
-        scrim.addView(list, listLp);
+        showOverlay(list, listLp);
+    }
 
-        moveMenu = scrim;
+    private void moveTo(PageSlot slot, String targetNotebookId) {
+        repository.saveInk(slot.page);
+        repository.movePageToNotebook(slot.page.id, targetNotebookId);
+        reloadPages(scroller.getScrollY());
+    }
+
+    private void showNotebookOptions(String id) {
+        LinearLayout list = panel();
+        TextView title = panelText(titleOf(id), 15);
+        list.addView(title);
+        addPanelButton(list, getString(R.string.rename), () -> showNameForm(id, null));
+        addPanelButton(list, getString(R.string.delete), () -> confirmDelete(id));
+        addPanelButton(list, getString(R.string.cancel), null);
+        showOverlay(list, topRightLp());
+    }
+
+    /**
+     * Create ({@code id == null}) or rename a notebook. With {@code moveAfter},
+     * the page is moved into the new notebook once it exists.
+     */
+    private void showNameForm(String id, PageSlot moveAfter) {
+        LinearLayout form = panel();
+        form.addView(panelText(getString(id == null ? R.string.new_notebook : R.string.rename_notebook), 15));
+        EditText name = new EditText(this);
+        name.setSingleLine(true);
+        name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        name.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        name.setHint(R.string.notebook_name_hint);
+        name.setTextColor(Color.BLACK);
+        name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        name.setMinWidth(dp(260));
+        if (id != null) {
+            name.setText(titleOf(id));
+            name.setSelectAllOnFocus(true);
+        }
+        form.addView(name, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        Runnable submit = () -> {
+            String text = name.getText().toString();
+            if (text.trim().isEmpty()) {
+                return;
+            }
+            dismissOverlay();
+            if (id != null) {
+                repository.renameNotebook(id, text);
+                rebuildNotebookTabs();
+                syncNav();
+                return;
+            }
+            BoardRepository.NotebookInfo created = repository.createNotebook(text);
+            rebuildNotebookTabs();
+            if (created == null) {
+                syncNav();
+            } else if (moveAfter != null) {
+                notebookId = created.id;
+                moveTo(moveAfter, created.id);
+                syncNav();
+            } else {
+                openNotebook(created.id);
+            }
+        };
+        name.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                submit.run();
+                return true;
+            }
+            return false;
+        });
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button cancel = tinyButton(getString(R.string.cancel), 15);
+        cancel.setOnClickListener(v -> dismissOverlay());
+        Button ok = tinyButton(getString(id == null ? R.string.create : R.string.save), 15);
+        styleButton(ok, true);
+        ok.setOnClickListener(v -> submit.run());
+        actions.addView(cancel, wrap());
+        LinearLayout.LayoutParams okLp = wrap();
+        okLp.leftMargin = dp(8);
+        actions.addView(ok, okLp);
+        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        actionsLp.topMargin = dp(8);
+        form.addView(actions, actionsLp);
+
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        lp.topMargin = dp(24);
+        showOverlay(form, lp);
+        name.requestFocus();
+        name.post(() -> {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(name, InputMethodManager.SHOW_IMPLICIT);
+            }
+        });
+    }
+
+    private void confirmDelete(String id) {
+        int pages = repository.notebookPages(id).size();
+        LinearLayout box = panel();
+        box.addView(panelText(getString(R.string.delete_notebook_title, titleOf(id)), 15));
+        box.addView(panelText(pages == 0
+                ? getString(R.string.delete_notebook_empty)
+                : getResources().getQuantityString(R.plurals.delete_notebook_pages, pages, pages), 13));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button cancel = tinyButton(getString(R.string.cancel), 15);
+        cancel.setOnClickListener(v -> dismissOverlay());
+        Button delete = tinyButton(getString(R.string.delete), 15);
+        styleButton(delete, true);
+        delete.setOnClickListener(v -> {
+            dismissOverlay();
+            repository.deleteNotebook(id);
+            scrollByCollection.remove(id);
+            rebuildNotebookTabs();
+            openNotebooks();
+        });
+        actions.addView(cancel, wrap());
+        LinearLayout.LayoutParams lp = wrap();
+        lp.leftMargin = dp(8);
+        actions.addView(delete, lp);
+        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        actionsLp.topMargin = dp(8);
+        box.addView(actions, actionsLp);
+        FrameLayout.LayoutParams boxLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        boxLp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        boxLp.topMargin = dp(24);
+        showOverlay(box, boxLp);
+    }
+
+    private LinearLayout panel() {
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(10), dp(8), dp(10), dp(8));
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(dp(4));
+        background.setColor(Color.WHITE);
+        background.setStroke(dp(1), Color.BLACK);
+        list.setBackground(background);
+        list.setClickable(true);
+        return list;
+    }
+
+    private TextView panelText(String text, int sp) {
+        TextView view = new TextView(this);
+        view.setText(text);
+        view.setTextColor(Color.BLACK);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
+        view.setPadding(dp(2), dp(4), dp(2), dp(4));
+        view.setMaxWidth(dp(320));
+        return view;
+    }
+
+    private void addPanelButton(LinearLayout list, String label, Runnable action) {
+        Button item = tinyButton(label, 15);
+        item.setMinimumHeight(dp(40));
+        item.setSingleLine(true);
+        item.setEllipsize(TextUtils.TruncateAt.END);
+        item.setOnClickListener(v -> {
+            dismissOverlay();
+            if (action != null) {
+                action.run();
+            }
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        if (list.getChildCount() > 0) {
+            lp.topMargin = dp(6);
+        }
+        list.addView(item, lp);
+    }
+
+    private FrameLayout.LayoutParams topRightLp() {
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP | Gravity.END;
+        lp.topMargin = dp(6);
+        lp.rightMargin = dp(10);
+        return lp;
+    }
+
+    private void showOverlay(View content, FrameLayout.LayoutParams lp) {
+        dismissOverlay();
+        FrameLayout scrim = new FrameLayout(this);
+        scrim.setClickable(true);
+        scrim.setOnClickListener(v -> dismissOverlay());
+        scrim.addView(content, lp);
+        overlay = scrim;
         inkView.hold();
         drawingArea.addView(scrim, matchMatch());
         updateExcludeRects();
     }
 
-    private void dismissMoveMenu() {
-        if (moveMenu == null) {
+    private void dismissOverlay() {
+        if (overlay == null) {
             return;
         }
-        drawingArea.removeView(moveMenu);
-        moveMenu = null;
+        InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (imm != null) {
+            imm.hideSoftInputFromWindow(overlay.getWindowToken(), 0);
+        }
+        drawingArea.removeView(overlay);
+        overlay = null;
         updateExcludeRects();
         inkView.release();
     }
@@ -391,15 +670,14 @@ public final class CanvasActivity extends Activity {
         styleButton(notebooksTab, !scratch);
         notebookTabs.setVisibility(scratch ? View.GONE : View.VISIBLE);
         notebookTabsRule.setVisibility(scratch ? View.GONE : View.VISIBLE);
-        Notebook[] all = Notebook.values();
-        for (int i = 0; i < all.length; i++) {
-            styleButton(notebookButtons.get(i), !scratch && all[i] == notebook);
+        for (Button button : notebookButtons) {
+            styleButton(button, !scratch && button.getTag().equals(collectionId));
         }
     }
 
     private void updateExcludeRects() {
         ArrayList<Rect> rects = new ArrayList<>();
-        if (moveMenu != null) {
+        if (overlay != null) {
             rects.add(new Rect(0, 0, inkView.getWidth(), inkView.getHeight()));
             inkView.setExtraExcludeRects(rects);
             return;

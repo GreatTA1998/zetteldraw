@@ -150,6 +150,69 @@ describe("sync round trip", () => {
     expect(page.boards.some((x) => x.conflict_of === boardId && x.ink_hash === v3.hash)).toBe(true);
   });
 
+  it("carries notebook create, rename and delete (tombstone) with its pages moved to the scratchpad", async () => {
+    const nbId = randomUUID();
+    const pageId = randomUUID();
+    const ink = blob(`notebook page ${pageId}`);
+    const notebook = (title: string, updated: number, baseRev: number, deletedAt: number | null = null) => ({
+      id: nbId,
+      title,
+      position: "b0",
+      created_at: 10,
+      updated_at: updated,
+      deleted_at: deletedAt,
+      base_rev: baseRev,
+    });
+    const before = (await pullAll(0)).cursor;
+
+    const created = await call("POST", "/sync/push", {
+      schema_version: schema,
+      device_id: "device-a",
+      notebooks: [notebook("ideas", 10, 0)],
+      boards: [boardRow(pageId, nbId, ink, 10, 0)],
+      blobs: { [ink.hash]: ink.b64 },
+    });
+    expect(created.json.results.map((r: any) => r.status)).toEqual(["applied", "applied"]);
+    const nbRev = created.json.results[0].rev;
+    const pageRev = created.json.results[1].rev;
+
+    const renamed = await call("POST", "/sync/push", {
+      schema_version: schema,
+      device_id: "device-b",
+      notebooks: [notebook("ideas, sorted", 20, nbRev)],
+    });
+    expect(renamed.json.results[0].status).toBe("applied");
+    const renamedRev = renamed.json.results[0].rev;
+    expect(renamedRev).toBeGreaterThan(nbRev);
+    let page = await pullAll(before);
+    expect(page.notebooks.filter((n) => n.id === nbId)).toEqual([
+      expect.objectContaining({ title: "ideas, sorted", rev: renamedRev, deleted_at: null }),
+    ]);
+
+    // The deleting device sends the tombstone plus its pages re-filed into the scratchpad.
+    const deleted = await call("POST", "/sync/push", {
+      schema_version: schema,
+      device_id: "device-a",
+      notebooks: [notebook("ideas, sorted", 30, renamedRev, 30)],
+      boards: [{ ...boardRow(pageId, null, ink, 30, pageRev), position: "a5" }],
+    });
+    expect(deleted.json.results.map((r: any) => r.status)).toEqual(["applied", "applied"]);
+    page = await pullAll(renamedRev);
+    expect(page.notebooks.find((n) => n.id === nbId)).toMatchObject({ deleted_at: 30 });
+    expect(page.boards.find((b) => b.id === pageId)).toMatchObject({ notebook_id: null, ink_hash: ink.hash });
+
+    // A stale rename from a device that missed the delete loses to the newer tombstone.
+    const stale = await call("POST", "/sync/push", {
+      schema_version: schema,
+      device_id: "device-c",
+      notebooks: [notebook("resurrected?", 25, nbRev)],
+    });
+    expect(stale.json.results[0].status).toBe("conflict_lost");
+    page = await pullAll(before);
+    const latest = page.notebooks.filter((n) => n.id === nbId).pop();
+    expect(latest).toMatchObject({ deleted_at: 30, title: "ideas, sorted" });
+  });
+
   it("reports missing blobs and rejects blobs that do not match their hash", async () => {
     const ghost = blob(`never uploaded ${randomUUID()}`);
     const missing = await call("POST", "/sync/push", {

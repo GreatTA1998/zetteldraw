@@ -35,6 +35,18 @@ public interface BoardRepository {
     /** Clear one page's ink. */
     void wipePage(String boardId);
 
+    /** New notebook, ordered after every existing one. Blank titles are rejected (returns null). */
+    NotebookInfo createNotebook(String title);
+
+    /** Blank titles are ignored. */
+    void renameNotebook(String notebookId, String title);
+
+    /**
+     * Tombstones the notebook. Its pages are not deleted: they move back to
+     * the Scratchpad, appended as newest in their notebook order.
+     */
+    void deleteNotebook(String notebookId);
+
     /** Runs on the UI thread after sync pulled changes in. Null to clear. */
     void setRemoteChangeListener(Runnable listener);
 

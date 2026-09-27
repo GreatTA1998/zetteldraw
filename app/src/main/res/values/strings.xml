@@ -8,4 +8,22 @@
     <string name="move">Move</string>
     <string name="wipe">Wipe</string>
     <string name="empty_notebook">No pages yet.\nUse Move on a Scratchpad page to add one here.</string>
+    <string name="no_notebooks">No notebooks yet.\nTap + to create one.</string>
+    <string name="add_notebook">+</string>
+    <string name="notebook_options">⋯</string>
+    <string name="new_notebook">New notebook</string>
+    <string name="new_notebook_item">+ New notebook</string>
+    <string name="rename">Rename</string>
+    <string name="delete">Delete</string>
+    <string name="cancel">Cancel</string>
+    <string name="create">Create</string>
+    <string name="save">Save</string>
+    <string name="notebook_name_hint">Notebook name</string>
+    <string name="rename_notebook">Rename notebook</string>
+    <string name="delete_notebook_title">Delete “%1$s”?</string>
+    <plurals name="delete_notebook_pages">
+        <item quantity="one">Its page moves back to the Scratchpad.</item>
+        <item quantity="other">Its %1$d pages move back to the Scratchpad.</item>
+    </plurals>
+    <string name="delete_notebook_empty">It has no pages.</string>
 </resources>
