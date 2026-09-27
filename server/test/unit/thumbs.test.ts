@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { demoLibrary } from "../../src/demo.js";
-import { decodeInk, encodeInk, InkFormatError, strokeWidths, BASE_WIDTH_PX, type InkStroke } from "../../src/ink.js";
+import { decodeInk, decodeInkFile, encodeInk, InkFormatError, strokeWidths, BASE_WIDTH_PX, type InkStroke } from "../../src/ink.js";
 import { pageBox, renderPng, DEFAULT_PAGE } from "../../src/render.js";
 import type { InkStorage, ObjectStore } from "../../src/storage.js";
 import { sha256Hex } from "../../src/sync.js";
@@ -21,6 +21,8 @@ const line = (x1: number, y1: number, x2: number, y2: number, n = 20): InkStroke
     tiltY: 0,
     t: 1_700_000_000_000 + i * 8,
   }));
+
+const ids = ["0f8fad5b-d9cb-469f-a165-70867728950e", "7c9e6679-7425-40de-944b-e07fc1f90ae7"];
 
 class MemoryStore implements InkStorage, ObjectStore {
   objects = new Map<string, Buffer>();
@@ -47,16 +49,37 @@ class MemoryStore implements InkStorage, ObjectStore {
 }
 
 describe("ink codec", () => {
-  it("round-trips the app's .zdi format", () => {
+  it.each([1, 2] as const)("round-trips version %i of the app's .zdi format", (version) => {
     const strokes = [line(10, 20, 300, 40), line(50, 500, 60, 900, 3)];
     strokes[1][2].tiltX = -12;
-    const decoded = decodeInk(encodeInk(strokes));
+    const file = decodeInkFile(encodeInk(strokes, { version, ids }));
+    expect(file.version).toBe(version);
+    expect(file.ids).toEqual(version === 2 ? ids : [null, null]);
+    const decoded = file.strokes;
     expect(decoded).toHaveLength(2);
     expect(decoded[1][2]).toEqual({ ...strokes[1][2], x: Math.fround(strokes[1][2].x), y: Math.fround(strokes[1][2].y) });
     expect(decoded[0][19].t - decoded[0][0].t).toBe(152);
   });
 
-  it("decodes a file the Java codec wrote (big-endian, zlib)", () => {
+  it("writes version 2 by default and needs an id per stroke for it", () => {
+    expect(encodeInk([line(0, 0, 10, 10)], { ids: [ids[0]] })[3]).toBe(2);
+    expect(() => encodeInk([line(0, 0, 10, 10)])).toThrow(InkFormatError);
+  });
+
+  it("decodes a version 2 file the Java codec wrote (stroke ids before the point count)", () => {
+    // InkCodec.encode (v2) of two one-point strokes with the ids above.
+    const hex =
+      "5a444902780163606060e2ef5f1b7df3b4dbfc85a9056de51a53f918181818811808985fd81f606070506060b06b6060b0076206e6ff7f802443cdbcb4ca1255877b53bc1fd41ffcc9f51c2804d3f312a41e9b1e00120e1af7";
+    const file = decodeInkFile(Buffer.from(hex, "hex"));
+    expect(file.version).toBe(2);
+    expect(file.ids).toEqual(ids);
+    expect(file.strokes).toEqual([
+      [{ x: 1.5, y: 2.5, pressure: 0.25, size: 1, tiltX: 3, tiltY: -4, t: 1000 }],
+      [{ x: 2.5, y: 2.5, pressure: 0.25, size: 1, tiltX: 3, tiltY: -4, t: 1001 }],
+    ]);
+  });
+
+  it("decodes a version 1 file the Java codec wrote (big-endian, zlib)", () => {
     // InkCodec.encode of one stroke with one point (x=1.5, y=2.5, p=0.25, size=1, tilt 3/-4, t=1000).
     const hex = "5a44490178016360606064806020c5fcc2fe000383830203835d0303833d103330ffff0324190054bb05c8";
     const stroke = decodeInk(Buffer.from(hex, "hex"));
@@ -65,7 +88,7 @@ describe("ink codec", () => {
 
   it("rejects other files", () => {
     expect(() => decodeInk(Buffer.from("nope"))).toThrow(InkFormatError);
-    expect(() => decodeInk(Buffer.from([0x5a, 0x44, 0x49, 9, 0]))).toThrow(/version 9/);
+    expect(() => decodeInk(Buffer.from([0x5a, 0x44, 0x49, 3, 0]))).toThrow(/version 3/);
   });
 
   it("tapers both ends like InkRenderer", () => {
@@ -97,7 +120,7 @@ describe("render", () => {
 describe("Thumbnailer", () => {
   it("renders once, stores under the ink hash and serves the cached copy", async () => {
     const store = new MemoryStore();
-    const ink = encodeInk([line(10, 10, 800, 900)]);
+    const ink = encodeInk([line(10, 10, 800, 900)], { ids: [ids[0]] });
     const hash = sha256Hex(ink);
     await store.put(hash, ink);
     const thumbs = new Thumbnailer(store);
@@ -121,8 +144,8 @@ describe("Thumbnailer", () => {
 
   it("renders enqueued thumbnails in the background and reports failures", async () => {
     const store = new MemoryStore();
-    const good = encodeInk([line(0, 0, 50, 50)]);
-    const bad = Buffer.from("ZDI\u0001garbage", "latin1");
+    const good = encodeInk([line(0, 0, 50, 50)], { version: 1 });
+    const bad = Buffer.from("ZDI\u0002garbage", "latin1");
     await store.put(sha256Hex(good), good);
     await store.put(sha256Hex(bad), bad);
     const errors: string[] = [];
@@ -138,7 +161,7 @@ describe("Thumbnailer", () => {
 });
 
 describe("demo library", () => {
-  it("is deterministic and valid", () => {
+  it("is deterministic, valid, and mixes ink versions 1 and 2", () => {
     const a = demoLibrary();
     const b = demoLibrary();
     expect(a.boards.map((x) => x.ink_hash)).toEqual(b.boards.map((x) => x.ink_hash));
@@ -150,5 +173,7 @@ describe("demo library", () => {
       }
     }
     expect(new Set(a.boards.map((x) => x.id)).size).toBe(a.boards.length);
+    const versions = new Set([...a.blobs.values()].map((bytes) => bytes[3]));
+    expect(versions).toEqual(new Set([1, 2]));
   });
 });

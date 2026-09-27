@@ -258,9 +258,14 @@ export function demoLibrary(): DemoLibrary {
       const created = BASE_TIME + (n * 9 + i) * DAY * 0.7;
       let inkHash: string | null = null;
       let inkBytes = 0;
-      const strokes = pageInk(kind, seed++);
+      const pageSeed = seed++;
+      const strokes = pageInk(kind, pageSeed);
       if (strokes.length > 0) {
-        const bytes = encodeInk(strokes);
+        // Older pages on a device are still version 1 files; mix both so each decoder path is exercised.
+        const bytes =
+          pageSeed % 3 === 0
+            ? encodeInk(strokes, { version: 1 })
+            : encodeInk(strokes, { version: 2, ids: strokes.map((_, k) => demoId(`stroke:${pageSeed}:${k}`)) });
         inkHash = sha256Hex(bytes);
         inkBytes = bytes.length;
         blobs.set(inkHash, bytes);

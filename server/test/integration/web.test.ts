@@ -49,7 +49,8 @@ function ink(seed: number) {
     tiltY: 0,
     t: 1_700_000_000_000 + i * 8,
   }));
-  const bytes = encodeInk([stroke]);
+  // Alternate versions: both are still on devices.
+  const bytes = Math.round(seed) % 2 ? encodeInk([stroke], { version: 1 }) : encodeInk([stroke], { ids: [randomUUID()] });
   return { bytes, hash: sha256Hex(bytes) };
 }
 
