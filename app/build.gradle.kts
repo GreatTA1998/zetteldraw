@@ -10,8 +10,8 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 33
-        versionCode = 12
-        versionName = "2.1"
+        versionCode = 13
+        versionName = "2.2"
         ndk {
             abiFilters += "arm64-v8a"
         }
