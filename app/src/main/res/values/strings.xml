@@ -27,7 +27,6 @@
     <string name="no_notebooks_bar">No notebooks yet. Tap + to add one.</string>
     <string name="add_notebook">+</string>
     <string name="notebook_options">⋯</string>
-    <string name="notebook_menu">%1$s: rename or delete</string>
     <string name="new_notebook">New notebook</string>
     <string name="new_notebook_item">+ New notebook</string>
     <string name="rename">Rename</string>

@@ -231,8 +231,8 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Scratchpad pinned left, + pinned right, notebook tabs scrolling between.
-     * Only the selected notebook's tab carries a ⋯; long-press works on any tab.
+     * Scratchpad pinned left; the notebook tabs scroll, with + after the last
+     * one. Long-press a tab for its Rename / Delete menu.
      */
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
@@ -251,14 +251,10 @@ public final class CanvasActivity extends Activity {
         bar.addView(notebookScroll, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        bar.addView(barDivider(), barDividerLp());
         addButton = tinyButton(getString(R.string.add_notebook), 22);
         addButton.setContentDescription(getString(R.string.new_notebook));
-        addButton.setMinimumWidth(dp(48));
-        addButton.setMinimumHeight(dp(48));
         addButton.setPadding(dp(8), 0, dp(8), dp(2));
         addButton.setOnClickListener(v -> showNameForm(null, null, addButton));
-        bar.addView(addButton, wrap());
         rebuildNotebookTabs();
         return bar;
     }
@@ -374,6 +370,9 @@ public final class CanvasActivity extends Activity {
             notebookStrip.addView(tab, lp);
             notebookTabs.add(tab);
         }
+        LinearLayout.LayoutParams addLp = wrap();
+        addLp.leftMargin = dp(4);
+        notebookStrip.addView(addButton, addLp);
         styleTabs();
     }
 
@@ -920,13 +919,12 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * One notebook in the top bar. Tap opens it, long-press opens it and its
-     * menu; while it is the open notebook it also shows a ⋯ for that menu.
+     * One notebook in the top bar. Tap opens it; long-press opens it and its
+     * Rename / Delete menu.
      */
     private final class NotebookTab extends LinearLayout {
         final String id;
         final Button label;
-        final Button more;
 
         NotebookTab(Context context, BoardRepository.NotebookInfo info) {
             super(context);
@@ -943,23 +941,12 @@ public final class CanvasActivity extends Activity {
                 return true;
             });
             addView(label, wrap());
-
-            more = new Button(context, null, android.R.attr.borderlessButtonStyle);
-            styleTabLabel(more, getString(R.string.notebook_options));
-            more.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-            more.setMinimumWidth(dp(48));
-            more.setPadding(dp(4), 0, dp(12), dp(4));
-            more.setContentDescription(getString(R.string.notebook_menu, info.title));
-            more.setOnClickListener(v -> showNotebookMenu(id));
-            addView(more, wrap());
             setCurrent(false);
         }
 
         void setCurrent(boolean current) {
             styleTab(this, current);
             inkLabel(label, current);
-            inkLabel(more, current);
-            more.setVisibility(current ? VISIBLE : GONE);
         }
     }
 

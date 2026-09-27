@@ -49,7 +49,7 @@ public class CanvasActivitySmokeTest {
         idle();
 
         assertNotNull("seed tabs share the top bar with Scratchpad", find(root, "comedy"));
-        assertTrue("no tab ⋯ while the Scratchpad is open", tabMenus(root).isEmpty());
+        assertTrue("no ⋯ in the top bar", tabMenus(root).isEmpty());
         assertNull("no separate Notebooks row", find(root, "Notebooks"));
         click(root, "comedy");
         View comedyTab = (View) find(root, "comedy").getParent();
@@ -58,7 +58,11 @@ public class CanvasActivitySmokeTest {
                 && !(comedyTab.getBackground() instanceof android.graphics.drawable.GradientDrawable));
         assertNull("other tabs have no background", ((View) find(root, "journal").getParent()).getBackground());
         assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
-        assertEquals("only the selected tab carries ⋯", 1, tabMenus(root).size());
+        assertTrue("still no tab ⋯ once a notebook is open", tabMenus(root).isEmpty());
+        View plus = find(root, "+");
+        assertSame("+ scrolls with the tabs", find(root, "comedy").getParent().getParent(), plus.getParent());
+        ViewGroup strip = (ViewGroup) plus.getParent();
+        assertSame("+ comes after the last notebook", plus, strip.getChildAt(strip.getChildCount() - 1));
 
         click(root, "+");
         EditText name = findEdit(root);
@@ -69,10 +73,10 @@ public class CanvasActivitySmokeTest {
         assertEquals(5, repo.notebooks().size());
         assertNotNull("new tab shown", find(root, "sketches"));
         assertTrue("new notebook opens", ((View) find(root, "sketches").getParent()).isSelected());
-        assertSame("⋯ sits inside the selected tab",
-                find(root, "sketches").getParent(), tabMenus(root).get(0).getParent());
+        assertSame("+ moves after the new tab", plus, strip.getChildAt(strip.getChildCount() - 1));
+        assertSame(find(root, "sketches").getParent(), strip.getChildAt(strip.getChildCount() - 2));
 
-        clickTabMenu(root);
+        longPress(root, "sketches");
         click(root, "Rename");
         name = findEdit(root);
         assertEquals("sketches", name.getText().toString());
@@ -81,13 +85,13 @@ public class CanvasActivitySmokeTest {
         assertEquals("drawings", repo.notebooks().get(4).title);
         assertNotNull(find(root, "drawings"));
 
-        clickTabMenu(root);
+        longPress(root, "drawings");
         click(root, "Delete");
         assertNotNull("confirmation shown", find(root, "Delete “drawings”?"));
         click(root, "Cancel");
         assertEquals(5, repo.notebooks().size());
 
-        clickTabMenu(root);
+        longPress(root, "drawings");
         click(root, "Delete");
         clickLast(root, "Delete");
         assertEquals(4, repo.notebooks().size());
@@ -124,7 +128,6 @@ public class CanvasActivitySmokeTest {
 
         clickDesc(root, "Scratchpad");
         assertTrue(byDescription(root, "Scratchpad").get(0).isSelected());
-        assertTrue(tabMenus(root).isEmpty());
         controller.pause().stop().destroy();
     }
 
@@ -405,21 +408,21 @@ public class CanvasActivitySmokeTest {
         controller.pause().stop().destroy();
     }
 
-    /** The ⋯ inside a notebook tab (pages have their own ⋯ with another description). */
+    /** Every ⋯ that is not a page's own menu button. */
     private static List<View> tabMenus(View root) {
         List<View> out = new ArrayList<>();
         for (TextView view : collectAll(root, "⋯")) {
-            if (String.valueOf(view.getContentDescription()).endsWith("rename or delete")) {
+            if (!"Page options".contentEquals(String.valueOf(view.getContentDescription()))) {
                 out.add(view);
             }
         }
         return out;
     }
 
-    private static void clickTabMenu(View root) {
-        List<View> menus = tabMenus(root);
-        assertEquals(1, menus.size());
-        assertTrue(menus.get(0).performClick());
+    private static void longPress(View root, String text) {
+        TextView view = find(root, text);
+        assertNotNull("no view with text " + text, view);
+        assertTrue(view.performLongClick());
         idle();
     }
 
