@@ -85,6 +85,9 @@ public final class CanvasActivity extends Activity {
     private boolean scrolling;
     private boolean pagesLoaded;
     private int pendingScrollY = -1;
+    /** Bumped by every page-list load; a background load whose number is stale is dropped. */
+    private int loadGeneration;
+    private int shownGeneration;
     private final Runnable scrollSettled = this::onScrollSettled;
 
     @Override
@@ -129,7 +132,8 @@ public final class CanvasActivity extends Activity {
                 }
                 // Erase or undo can empty the last page, redo can fill it: the trailing blank follows.
                 boolean last = !slots.isEmpty() && slots.get(slots.size() - 1) == slot;
-                if ((page.isBlank() || last) && pagesIn(collectionId).size() != slots.size()) {
+                if (slot != null && !loading() && (page.isBlank() || last)
+                        && pagesIn(collectionId).size() != slots.size()) {
                     reloadPages(scroller.getScrollY());
                 }
             }
@@ -137,7 +141,7 @@ public final class CanvasActivity extends Activity {
             @Override
             public void onPageBecameNonEmpty(Board page) {
                 // The first stroke stored the trailing blank, and the repository added a new one.
-                if (pagesIn(collectionId).size() != slots.size()) {
+                if (slotFor(page.id) != null && !loading() && pagesIn(collectionId).size() != slots.size()) {
                     reloadPages(scroller.getScrollY());
                 }
             }
@@ -477,33 +481,57 @@ public final class CanvasActivity extends Activity {
         pagesLoaded = true;
         collectionId = id;
         syncNav();
+        // The tab is marked now; its pages load off the main thread, so a tap never waits on
+        // storage. The old pages stay up with the pen held until the new ones replace them.
+        int generation = ++loadGeneration;
+        inkView.hold(PageInkView.Hold.LOADING);
+        String notebook = SCRATCHPAD.equals(id) ? null : id;
+        UiExecutors.loader.execute(() -> {
+            List<Board> pages = repository.pages(notebook);
+            root.post(() -> onPagesLoaded(generation, id, pages));
+        });
+    }
+
+    private void onPagesLoaded(int generation, String id, List<Board> pages) {
+        if (generation != loadGeneration || isDestroyed()) {
+            return;
+        }
         Integer saved = scrollByCollection.get(id);
-        int target;
+        int target = 0;
         if (saved != null) {
             target = saved;
         } else if (SCRATCHPAD.equals(id)) {
-            List<Board> pages = pagesIn(id);
-            target = 0;
             for (int i = 0; i < pages.size() - 1; i++) {
                 target += heightOf(pages.get(i)) + pageGap;
             }
-        } else {
-            target = 0;
         }
-        reloadPages(target);
+        showPages(pages, target);
+    }
+
+    private boolean loading() {
+        return loadGeneration != shownGeneration;
     }
 
     private void reloadPages(int targetScrollY) {
-        List<Board> pages = pagesIn(collectionId);
+        ++loadGeneration;
+        showPages(pagesIn(collectionId), targetScrollY);
+    }
+
+    private void showPages(List<Board> pages, int targetScrollY) {
+        shownGeneration = loadGeneration;
+        inkView.release(PageInkView.Hold.LOADING);
         pageColumn.removeAllViews();
         slots.clear();
         int[] heights = new int[pages.size()];
         for (int i = 0; i < pages.size(); i++) {
             heights[i] = heightOf(pages.get(i));
-            PageSlot slot = new PageSlot(this, pages.get(i), i + 1);
+            PageSlot slot = new PageSlot(this, pages.get(i), i + 1, pages.size());
             slots.add(slot);
             pageColumn.addView(slot, new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, heights[i] + pageGap));
+        }
+        for (PageSlot slot : slots) {
+            slot.syncEnabled();
         }
         inkView.setPages(pages, heights, pageGap);
         pendingScrollY = Math.max(0, targetScrollY);
@@ -517,7 +545,7 @@ public final class CanvasActivity extends Activity {
     private void onScrolled(int scrollY) {
         if (!scrolling) {
             scrolling = true;
-            inkView.hold();
+            inkView.hold(PageInkView.Hold.SCROLL);
         }
         inkView.setContentScrollY(scrollY);
         scroller.removeCallbacks(scrollSettled);
@@ -528,7 +556,7 @@ public final class CanvasActivity extends Activity {
         scrolling = false;
         inkView.setContentScrollY(scroller.getScrollY());
         updateExcludeRects();
-        inkView.release();
+        inkView.release(PageInkView.Hold.SCROLL);
     }
 
     /**
@@ -573,6 +601,9 @@ public final class CanvasActivity extends Activity {
 
     /** Wipe and Delete for one page, anchored to its ⋯; each confirms in the same spot. */
     private void showPageMenu(PageSlot slot) {
+        if (isTrailingBlank(slot)) {
+            return;
+        }
         LinearLayout menu = panel();
         menu.setMinimumWidth(dp(200));
         if (!slot.page.isBlank()) {
@@ -613,10 +644,23 @@ public final class CanvasActivity extends Activity {
         showOverlay(box, pageAnchoredLp(slot.moreButton, box), drawingArea);
     }
 
+    /** The page after it slides into its place, and the view scrolls so that page starts at the top. */
     private void deletePage(PageSlot slot) {
+        int index = slots.indexOf(slot);
         repository.deletePage(slot.page.id);
         inkView.invalidatePage(slot.page.id);
-        reloadPages(scroller.getScrollY());
+        List<Board> pages = pagesIn(collectionId);
+        int target = 0;
+        for (int i = 0; i < Math.min(index, pages.size() - 1); i++) {
+            target += heightOf(pages.get(i)) + pageGap;
+        }
+        ++loadGeneration;
+        showPages(pages, index < 0 ? scroller.getScrollY() : target);
+    }
+
+    /** The blank page that ends every list: it has nothing to wipe, move or delete. */
+    private boolean isTrailingBlank(PageSlot slot) {
+        return !slots.isEmpty() && slots.get(slots.size() - 1) == slot && slot.page.isBlank();
     }
 
     private void moveTo(PageSlot slot, String targetNotebookId) {
@@ -838,7 +882,7 @@ public final class CanvasActivity extends Activity {
         scrim.setOnClickListener(v -> dismissOverlay());
         scrim.addView(content, lp);
         overlay = scrim;
-        inkView.hold();
+        inkView.hold(PageInkView.Hold.OVERLAY);
         host.addView(scrim, matchMatch());
         updateExcludeRects();
     }
@@ -854,7 +898,7 @@ public final class CanvasActivity extends Activity {
         ((FrameLayout) overlay.getParent()).removeView(overlay);
         overlay = null;
         updateExcludeRects();
-        inkView.release();
+        inkView.release(PageInkView.Hold.OVERLAY);
     }
 
     private void wipe(PageSlot slot) {
@@ -966,18 +1010,20 @@ public final class CanvasActivity extends Activity {
             if (slot.getBottom() < top || slot.getTop() > bottom) {
                 continue;
             }
-            View actions = slot.actions;
-            if (actions.getWidth() <= 0) {
-                continue;
+            // No ink under a page's controls or its number, so neither can pass for page content.
+            for (View chrome : new View[]{slot.actions, slot.number}) {
+                if (chrome.getWidth() <= 0) {
+                    continue;
+                }
+                chrome.getLocationOnScreen(loc);
+                Rect rect = new Rect(
+                        loc[0] - origin[0],
+                        loc[1] - origin[1],
+                        loc[0] - origin[0] + chrome.getWidth(),
+                        loc[1] - origin[1] + chrome.getHeight());
+                rect.inset(-dp(6), -dp(6));
+                rects.add(rect);
             }
-            actions.getLocationOnScreen(loc);
-            Rect rect = new Rect(
-                    loc[0] - origin[0],
-                    loc[1] - origin[1],
-                    loc[0] - origin[0] + actions.getWidth(),
-                    loc[1] - origin[1] + actions.getHeight());
-            rect.inset(-dp(6), -dp(6));
-            rects.add(rect);
         }
         inkView.setExtraExcludeRects(rects);
     }
@@ -1012,30 +1058,32 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Transparent stand-in for one page above the ink surface: carries the
-     * page's number (bottom-left), Move and ⋯ (Wipe, Delete) (bottom-right)
-     * and the dashed separator below it.
+     * page's "k/n" number (top-left, n counting the trailing blank), Move and
+     * ⋯ (Wipe, Delete) (bottom-right) and the dashed separator below it.
+     * Slots are rebuilt whenever the list changes, so n is always current.
      */
     private final class PageSlot extends FrameLayout {
         final Board page;
+        final TextView number;
         final LinearLayout actions;
         final Button moveButton;
         final Button moreButton;
 
-        PageSlot(Context context, Board page, int number) {
+        PageSlot(Context context, Board page, int index, int total) {
             super(context);
             this.page = page;
-            TextView label = new TextView(context);
-            label.setText(String.valueOf(number));
-            label.setTextColor(Color.DKGRAY);
-            label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-            label.setContentDescription(getString(R.string.page_number, number));
+            number = new TextView(context);
+            number.setText(index + "/" + total);
+            number.setTextColor(Color.GRAY);
+            number.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            number.setContentDescription(getString(R.string.page_number, index, total));
             FrameLayout.LayoutParams labelLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
-            labelLp.gravity = Gravity.BOTTOM | Gravity.START;
-            labelLp.leftMargin = dp(14);
-            labelLp.bottomMargin = pageGap + dp(12);
-            addView(label, labelLp);
+            labelLp.gravity = Gravity.TOP | Gravity.START;
+            labelLp.leftMargin = dp(10);
+            labelLp.topMargin = dp(6);
+            addView(number, labelLp);
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
             moveButton = tinyButton(getString(R.string.move), 14);
@@ -1068,11 +1116,11 @@ public final class CanvasActivity extends Activity {
 
         void syncEnabled() {
             boolean enabled = !page.isBlank();
-            if (moveButton.isEnabled() == enabled) {
-                return;
+            if (moveButton.isEnabled() != enabled) {
+                moveButton.setEnabled(enabled);
+                moveButton.setAlpha(enabled ? 1f : 0.35f);
             }
-            moveButton.setEnabled(enabled);
-            moveButton.setAlpha(enabled ? 1f : 0.35f);
+            moreButton.setVisibility(isTrailingBlank(this) ? View.INVISIBLE : View.VISIBLE);
         }
     }
 

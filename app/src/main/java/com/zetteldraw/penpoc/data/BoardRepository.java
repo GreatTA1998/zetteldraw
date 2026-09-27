@@ -45,8 +45,9 @@ public interface BoardRepository {
     void wipePage(String boardId);
 
     /**
-     * Tombstones the page (blank or not) so the delete syncs. A list's
-     * trailing blank page is never lost: deleting it just leaves a fresh one.
+     * Tombstones the page (blank or not) so the delete syncs. Every list ends
+     * in exactly one blank page; that page cannot be deleted (a no-op), so a
+     * delete never looks like it undid itself.
      */
     void deletePage(String boardId);
 

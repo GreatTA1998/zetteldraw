@@ -269,6 +269,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         scheduleIndex();
     }
 
+    /** The stored blank that ends its list; the unsaved trailing blank has no row at all. */
+    private boolean isTrailingBlankLocked(BoardEntity row) {
+        if (!isBlankLocked(row) || trailingBlanks.containsKey(listKey(row.notebookId))) {
+            return false;
+        }
+        List<BoardEntity> rows = rowsLocked(row.notebookId);
+        return !rows.isEmpty() && rows.get(rows.size() - 1).id.equals(row.id);
+    }
+
     /** A blank board has no ink on disk and no unwritten strokes. */
     private boolean isBlankLocked(BoardEntity row) {
         PendingInk pending = pendingInk.get(row.id);
@@ -377,7 +386,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     public void deletePage(String boardId) {
         synchronized (lock) {
             BoardEntity row = dao.board(boardId);
-            if (row == null || row.deletedAt != null || row.conflictOf != null) {
+            if (row == null || row.deletedAt != null || row.conflictOf != null || isTrailingBlankLocked(row)) {
                 return;
             }
             tombstoneLocked(row);

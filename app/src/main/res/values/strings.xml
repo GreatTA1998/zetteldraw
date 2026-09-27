@@ -18,7 +18,7 @@
     <string name="move">Move</string>
     <string name="wipe">Wipe</string>
     <string name="page_options">Page options</string>
-    <string name="page_number">Page %1$d</string>
+    <string name="page_number">Page %1$d of %2$d</string>
     <string name="delete_page">Delete page</string>
     <string name="wipe_page_title">Wipe this page?</string>
     <string name="wipe_page_body">Its ink is cleared. The page stays.</string>

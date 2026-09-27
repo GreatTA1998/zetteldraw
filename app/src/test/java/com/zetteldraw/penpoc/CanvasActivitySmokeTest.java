@@ -38,6 +38,7 @@ public class CanvasActivitySmokeTest {
     @Before
     public void freshRepository() {
         ZettelData.resetForTest();
+        UiExecutors.useSynchronousForTest();
     }
 
     @Test
@@ -146,7 +147,8 @@ public class CanvasActivitySmokeTest {
         View root = controller.get().getWindow().getDecorView();
         idle();
         List<View> menus = byDescription(root, "Page options");
-        assertEquals("every page has a ⋯, blank ones too", 3, menus.size());
+        assertEquals("every page but the trailing blank has a ⋯", 2, menus.size());
+        assertEquals(java.util.Arrays.asList("1/3", "2/3", "3/3"), pageLabels(root));
         assertNull("Wipe lives in the menu now", find(root, "Wipe"));
 
         menus.get(0).performClick();
@@ -171,16 +173,17 @@ public class CanvasActivitySmokeTest {
         assertEquals(2, pages.size());
         assertEquals(second.id, pages.get(0).id);
         assertTrue(pages.get(1).isBlank());
-        assertEquals(2, byDescription(root, "Page options").size());
+        assertEquals("the trailing blank offers no Wipe or Delete", 1, byDescription(root, "Page options").size());
 
-        byDescription(root, "Page options").get(1).performClick();
+        byDescription(root, "Page options").get(0).performClick();
         idle();
         click(root, "Delete page");
         clickLast(root, "Delete");
         pages = repo.scratchpadPages();
-        assertEquals("the trailing blank page regenerates", 2, pages.size());
-        assertTrue(pages.get(1).isBlank());
-        assertEquals(2, byDescription(root, "Page options").size());
+        assertEquals("the inked last page goes; the blank takes its place", 1, pages.size());
+        assertTrue(pages.get(0).isBlank());
+        assertEquals("the count shrinks with the list", java.util.Arrays.asList("1/1"), pageLabels(root));
+        assertTrue(byDescription(root, "Page options").isEmpty());
         controller.pause().stop().destroy();
     }
 
@@ -193,9 +196,9 @@ public class CanvasActivitySmokeTest {
         idle();
 
         click(root, "comedy");
-        assertEquals("an empty notebook shows one blank page", 1, byDescription(root, "Page options").size());
-        assertEquals(1, byDescription(root, "Page 1").size());
-        assertNotNull(find(root, "1"));
+        assertTrue("an empty notebook's one blank page has no ⋯", byDescription(root, "Page options").isEmpty());
+        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
+        assertEquals(1, byDescription(root, "Page 1 of 1").size());
         assertNull("no empty-notebook hint any more", find(root, "No notebooks yet. Tap + to add one."));
 
         PageInkView ink = findInk(root);
@@ -208,8 +211,8 @@ public class CanvasActivitySmokeTest {
         assertEquals(2, pages.size());
         assertFalse(pages.get(0).isBlank());
         assertTrue(pages.get(1).isBlank());
-        assertEquals("a new blank page follows", 2, byDescription(root, "Page options").size());
-        assertEquals(1, byDescription(root, "Page 2").size());
+        assertEquals("a new blank page follows", 1, byDescription(root, "Page options").size());
+        assertEquals("a new page updates every count", java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
 
         byDescription(root, "Page options").get(0).performClick();
         idle();
@@ -218,11 +221,10 @@ public class CanvasActivitySmokeTest {
         pages = repo.notebookPages(Notebook.COMEDY.uuid);
         assertEquals("the notebook keeps one blank page", 1, pages.size());
         assertTrue(pages.get(0).isBlank());
-        assertEquals(1, byDescription(root, "Page 1").size());
-        assertTrue(byDescription(root, "Page 2").isEmpty());
+        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
 
         clickDesc(root, "Scratchpad");
-        assertEquals(1, byDescription(root, "Page 1").size());
+        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
         controller.pause().stop().destroy();
     }
 
@@ -242,21 +244,21 @@ public class CanvasActivitySmokeTest {
         idle();
         assertEquals(2, page.strokes.size());
         assertEquals("first ink grew a new blank page", 2, repo.scratchpadPages().size());
-        assertEquals(2, byDescription(root, "Page options").size());
+        assertEquals(java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
 
         clickDesc(root, "Undo");
         assertEquals(1, page.strokes.size());
         clickDesc(root, "Undo");
         assertTrue(page.isBlank());
         assertEquals("undoing to blank collapses the extra page", 1, repo.scratchpadPages().size());
-        assertEquals(1, byDescription(root, "Page options").size());
+        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
         assertFalse(byDescription(root, "Undo").get(0).isEnabled());
 
         clickDesc(root, "Redo");
         clickDesc(root, "Redo");
         assertEquals(2, page.strokes.size());
         assertEquals("redo stores the page again and a blank follows", 2, repo.scratchpadPages().size());
-        assertEquals(2, byDescription(root, "Page options").size());
+        assertEquals(java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
         assertEquals(2, repo.scratchpadPages().get(0).strokes.size());
 
         InkRenderer.InkStroke first = page.strokes.get(0);
@@ -310,9 +312,11 @@ public class CanvasActivitySmokeTest {
         View root = controller.get().getWindow().getDecorView();
         idle();
 
+        assertEquals(java.util.Arrays.asList("1/3", "2/3", "3/3"), pageLabels(root));
         clickFirstEnabled(root, "Move");
         clickLast(root, "journal");
         assertEquals(2, repo.notebookPages(Notebook.JOURNAL.uuid).size());
+        assertEquals("moving a page away updates the count", java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
 
         clickFirstEnabled(root, "Move");
         click(root, "+ New notebook");
@@ -430,6 +434,25 @@ public class CanvasActivitySmokeTest {
         List<TextView> all = new ArrayList<>();
         collect(root, text, all);
         return all;
+    }
+
+    /** Visible page numbers top to bottom, e.g. ["1/2", "2/2"]. */
+    static List<String> pageLabels(View view) {
+        List<String> out = new ArrayList<>();
+        if (view.getVisibility() != View.VISIBLE) {
+            return out;
+        }
+        CharSequence description = view.getContentDescription();
+        if (view instanceof TextView && description != null && description.toString().matches("Page \\d+ of \\d+")) {
+            out.add(((TextView) view).getText().toString());
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                out.addAll(pageLabels(group.getChildAt(i)));
+            }
+        }
+        return out;
     }
 
     private static List<View> byDescription(View view, String description) {
