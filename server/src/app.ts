@@ -3,7 +3,9 @@ import Fastify, { type FastifyInstance } from "fastify";
 import type pg from "pg";
 import type { InkStorage } from "./storage.js";
 import { pull, push } from "./sync.js";
+import type { Thumbnailer } from "./thumbs.js";
 import { BadRequest, parsePushBody } from "./validate.js";
+import { NotFound, registerWebRoutes } from "./web.js";
 
 export const SCHEMA_HEADER = "x-zetteldraw-schema";
 
@@ -12,6 +14,8 @@ export interface AppDeps {
   storage: InkStorage;
   schemaVersion: number;
   deviceTokens: string[];
+  /** Renders page images; enables the /web/* endpoints and thumbnails on push. */
+  thumbs?: Thumbnailer;
   logger?: boolean;
 }
 
@@ -33,13 +37,18 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.get("/healthz", async () => ({ ok: true, schema_version: deps.schemaVersion }));
 
   app.addHook("onRequest", async (req, reply) => {
-    if (!req.url.startsWith("/sync/")) {
+    const isSync = req.url.startsWith("/sync/");
+    if (!isSync && !req.url.startsWith("/web/")) {
       return;
     }
     const auth = req.headers.authorization ?? "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     if (!token || !tokenMatches(token, deps.deviceTokens)) {
       return reply.code(401).send({ error: "unauthorized" });
+    }
+    // The web overview reads through its own endpoints and is not bound to a Room schema.
+    if (!isSync) {
+      return;
     }
     const clientSchema = Number(req.headers[SCHEMA_HEADER]);
     if (clientSchema !== deps.schemaVersion) {
@@ -50,6 +59,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   app.setErrorHandler((err, _req, reply) => {
+    if (err instanceof NotFound) {
+      return reply.code(404).send({ error: "not_found", message: err.message });
+    }
     if (err instanceof BadRequest) {
       return reply.code(400).send({ error: "bad_request", message: err.message });
     }
@@ -67,6 +79,14 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       throw new BadRequest(`schema_version ${body.schema_version} != ${deps.schemaVersion}`);
     }
     const results = await push(deps.pool, deps.storage, body);
+    if (deps.thumbs) {
+      const stored = new Set(results.filter((r) => r.entity === "board" && r.status !== "missing_blob").map((r) => r.id));
+      for (const board of body.boards) {
+        if (board.ink_hash && board.deleted_at === null && stored.has(board.id)) {
+          deps.thumbs.enqueue(board.ink_hash);
+        }
+      }
+    }
     req.log.info(
       { device: body.device_id, notebooks: body.notebooks.length, boards: body.boards.length },
       "push",
@@ -82,6 +102,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
     return pull(deps.pool, deps.storage, deps.schemaVersion, since, limit);
   });
+
+  if (deps.thumbs) {
+    app.get("/web/session", async () => ({ ok: true, schema_version: deps.schemaVersion }));
+    registerWebRoutes(app, deps.pool, deps.thumbs);
+  }
 
   return app;
 }

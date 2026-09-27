@@ -11,6 +11,8 @@ export interface Config {
     secretAccessKey: string | undefined;
   };
   migrationsDir: string;
+  /** Page size in device pixels assumed when rendering ink (the file does not record it). */
+  page: { width: number; height: number };
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -42,5 +44,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       secretAccessKey: env.S3_SECRET_KEY || undefined,
     },
     migrationsDir: env.MIGRATIONS_DIR ?? new URL("../migrations", import.meta.url).pathname,
+    page: {
+      width: Number(env.PAGE_WIDTH ?? 1264),
+      height: Number(env.PAGE_HEIGHT ?? 1680),
+    },
   };
 }
