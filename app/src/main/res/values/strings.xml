@@ -5,7 +5,8 @@
     <string name="pen">Pen</string>
     <string name="eraser">Eraser</string>
     <string name="lasso">Lasso</string>
-    <string name="undo_move">Undo move</string>
+    <string name="undo">Undo</string>
+    <string name="redo">Redo</string>
     <string name="lasso_hint">Circle ink to select it</string>
     <string name="lasso_nothing">Nothing selected</string>
     <plurals name="lasso_selected">
@@ -13,6 +14,7 @@
         <item quantity="other">%1$d strokes selected. Drag them, or tap outside to cancel</item>
     </plurals>
     <string name="undo_nothing">Nothing left to undo</string>
+    <string name="redo_nothing">Nothing left to redo</string>
     <string name="move">Move</string>
     <string name="wipe">Wipe</string>
     <string name="page_options">Page options</string>

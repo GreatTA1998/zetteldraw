@@ -168,11 +168,11 @@ public class LassoTest {
         Lasso.Move move = Lasso.move(page, Lasso.idsOf(List.of(a)), 33.33f, 17.77f);
         assertNotSame(a, page.strokes.get(0));
 
-        assertTrue(move.undo());
+        assertTrue(move.historyPart().revert());
 
         assertSame(a, page.strokes.get(0));
         assertSame(b, page.strokes.get(1));
-        assertFalse("second undo is a no-op", move.undo());
+        assertFalse("second undo is a no-op", move.historyPart().revert());
     }
 
     @Test
@@ -186,7 +186,7 @@ public class LassoTest {
         InkRenderer.InkStroke drawnAfter = line(700f, 700f, 3);
         page.strokes.add(drawnAfter);
 
-        assertTrue(move.undo());
+        assertTrue(move.historyPart().revert());
 
         assertEquals(2, page.strokes.size());
         assertSame(a, page.strokes.get(0));
@@ -200,7 +200,7 @@ public class LassoTest {
         page.strokes.add(a);
         Lasso.Move move = Lasso.move(page, Lasso.idsOf(List.of(a)), 10f, 10f);
         page.strokes.clear();
-        assertFalse(move.undo());
+        assertFalse(move.historyPart().revert());
         assertTrue(page.isBlank());
     }
 }

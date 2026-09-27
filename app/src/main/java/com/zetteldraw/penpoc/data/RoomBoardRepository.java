@@ -107,25 +107,21 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             byte[] bytes = page.isBlank() ? null : InkCodec.encode(page.strokes);
             String hash = bytes == null ? null : InkFileStore.sha256(bytes);
             BoardEntity row = dao.board(page.id);
-            String grewList = null;
-            boolean grew = false;
             if (row == null) {
                 if (bytes == null) {
                     return;
                 }
                 String key = listOfBlankLocked(page.id);
-                grewList = key == null ? null : notebookOfKey(key);
-                grew = true;
                 if (key != null) {
                     trailingBlanks.remove(key);
                 }
                 row = new BoardEntity();
                 row.id = page.id;
-                row.notebookId = grewList;
-                row.position = Positions.after(lastPositionLocked(grewList));
+                row.notebookId = key == null ? null : notebookOfKey(key);
+                row.position = Positions.after(lastPositionLocked(row.notebookId));
                 row.createdAt = page.createdAt;
                 cache.put(page.id, page);
-            } else if (Objects.equals(row.inkHash, hash)) {
+            } else if (row.deletedAt != null || Objects.equals(row.inkHash, hash)) {
                 return;
             }
             try {
@@ -142,9 +138,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 dao.upsertBoard(toSave);
                 queueLocked(OutboxEntry.BOARD, toSave.id, OutboxEntry.UPSERT);
             });
-            if (grew) {
-                ensureTrailingBlankLocked(grewList);
+            // Ink on the last page grows a new blank; emptying it (erase, undo) collapses the tail again.
+            if (bytes == null) {
+                trimTrailingBlanksLocked(toSave.notebookId);
             }
+            ensureTrailingBlankLocked(toSave.notebookId);
             scheduleIndex();
         }
     }

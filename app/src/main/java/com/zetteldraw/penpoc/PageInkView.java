@@ -24,6 +24,7 @@ import com.onyx.android.sdk.pen.TouchHelper;
 import com.onyx.android.sdk.pen.data.TouchPointList;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,6 +51,9 @@ final class PageInkView extends FrameLayout {
 
         /** The selection went away without moving. */
         void onLassoCancelled();
+
+        /** Undo / redo availability may have changed. */
+        void onHistoryChanged();
     }
 
     enum Tool { PEN, ERASER, LASSO }
@@ -64,6 +68,7 @@ final class PageInkView extends FrameLayout {
     private final ArrayList<Rect> excludeRects = new ArrayList<>();
     private final ArrayList<Board> pages = new ArrayList<>();
     private final LinkedHashMap<String, Bitmap> bitmaps = new LinkedHashMap<>(8, 0.75f, true);
+    private final InkHistory history = new InkHistory();
     private TouchHelper touchHelper;
     private Listener listener;
     /** Content y of each page's top edge, and each page's height. */
@@ -141,6 +146,12 @@ final class PageInkView extends FrameLayout {
                 it.remove();
             }
         }
+        HashSet<String> ids = new HashSet<>();
+        for (Board page : pages) {
+            ids.add(page.id);
+        }
+        history.retainPages(ids);
+        historyChanged();
         redrawAll();
     }
 
@@ -190,21 +201,53 @@ final class PageInkView extends FrameLayout {
         return selection != null;
     }
 
-    /** Puts a lasso move back. Returns false when none of its strokes are left. */
-    boolean undo(Lasso.Move move) {
-        if (move == null) {
-            return false;
-        }
+    boolean canUndo() {
+        return history.canUndo();
+    }
+
+    boolean canRedo() {
+        return history.canRedo();
+    }
+
+    /** Forget every edit, e.g. when another page list opens. */
+    void clearHistory() {
+        history.clear();
+        historyChanged();
+    }
+
+    /** Reverts the newest stroke, erase or lasso edit. False when it changed nothing. */
+    boolean undo() {
         if (selection != null) {
             cancelSelection();
         }
-        if (!move.undo()) {
-            return false;
+        return applyHistory(history.undo());
+    }
+
+    boolean redo() {
+        if (selection != null) {
+            cancelSelection();
         }
-        invalidatePage(move.page.id);
-        redrawAll();
-        notifyChanged(move.page);
-        return true;
+        return applyHistory(history.redo());
+    }
+
+    private boolean applyHistory(Set<Board> changed) {
+        for (Board page : changed) {
+            invalidatePage(page.id);
+        }
+        if (!changed.isEmpty()) {
+            redrawAll();
+        }
+        historyChanged();
+        for (Board page : changed) {
+            notifyChanged(page);
+        }
+        return !changed.isEmpty();
+    }
+
+    private void historyChanged() {
+        if (listener != null) {
+            listener.onHistoryChanged();
+        }
     }
 
     void setLive(boolean on) {
@@ -408,6 +451,8 @@ final class PageInkView extends FrameLayout {
         boolean wasBlank = page.isBlank();
         InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(toPage(points, index));
         page.strokes.add(stroke);
+        history.record(InkHistory.Edit.of(InkHistory.Part.added(page, stroke)));
+        historyChanged();
         Bitmap cached = bitmaps.get(page.id);
         if (cached != null) {
             InkRenderer.draw(new Canvas(cached), paint, stroke);
@@ -418,31 +463,37 @@ final class PageInkView extends FrameLayout {
         }
     }
 
-    private void eraseStrokes(List<TouchPoint> eraserPath) {
+    /** {@code eraserPath} is in surface coordinates. */
+    void eraseStrokes(List<TouchPoint> eraserPath) {
         if (eraserPath == null || eraserPath.isEmpty()) {
             return;
         }
         ArrayList<Board> changed = new ArrayList<>();
+        InkHistory.Edit edit = new InkHistory.Edit();
         for (int index = firstVisible(); index <= lastVisible(); index++) {
             Board page = pages.get(index);
             if (page.strokes.isEmpty()) {
                 continue;
             }
             List<TouchPoint> path = toPage(eraserPath, index);
-            boolean removed = false;
-            Iterator<InkRenderer.InkStroke> iterator = page.strokes.iterator();
-            while (iterator.hasNext()) {
-                if (InkRenderer.hits(iterator.next(), path)) {
-                    iterator.remove();
-                    removed = true;
+            ArrayList<InkHistory.Placed> removed = new ArrayList<>();
+            for (int i = 0; i < page.strokes.size(); i++) {
+                if (InkRenderer.hits(page.strokes.get(i), path)) {
+                    removed.add(new InkHistory.Placed(page.strokes.get(i), i));
                 }
             }
-            if (removed) {
+            if (!removed.isEmpty()) {
+                for (int i = removed.size() - 1; i >= 0; i--) {
+                    page.strokes.remove(removed.get(i).index);
+                }
+                edit.add(InkHistory.Part.removed(page, removed));
                 invalidatePage(page.id);
                 changed.add(page);
             }
         }
         if (!changed.isEmpty()) {
+            history.record(edit);
+            historyChanged();
             redrawAll();
             for (Board page : changed) {
                 notifyChanged(page);
@@ -756,6 +807,8 @@ final class PageInkView extends FrameLayout {
             }
             return;
         }
+        history.record(InkHistory.Edit.of(move.historyPart()));
+        historyChanged();
         notifyChanged(s.page);
         if (listener != null) {
             listener.onLassoMoved(move);

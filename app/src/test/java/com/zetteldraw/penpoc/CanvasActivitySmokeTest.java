@@ -221,6 +221,75 @@ public class CanvasActivitySmokeTest {
     }
 
     @Test
+    public void penStrokesAndEraseUndoAndRedoAndTheTrailingBlankFollows() {
+        Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+        PageInkView ink = findInk(root);
+        Board page = repo.scratchpadPages().get(0);
+
+        ink.addStroke(points(100f, 100f));
+        idle();
+        ink.addStroke(points(300f, 300f));
+        idle();
+        assertEquals(2, page.strokes.size());
+        assertEquals("first ink grew a new blank page", 2, repo.scratchpadPages().size());
+        assertEquals(2, byDescription(root, "Page options").size());
+
+        clickDesc(root, "Undo");
+        assertEquals(1, page.strokes.size());
+        clickDesc(root, "Undo");
+        assertTrue(page.isBlank());
+        assertEquals("undoing to blank collapses the extra page", 1, repo.scratchpadPages().size());
+        assertEquals(1, byDescription(root, "Page options").size());
+        assertFalse(byDescription(root, "Undo").get(0).isEnabled());
+
+        clickDesc(root, "Redo");
+        clickDesc(root, "Redo");
+        assertEquals(2, page.strokes.size());
+        assertEquals("redo stores the page again and a blank follows", 2, repo.scratchpadPages().size());
+        assertEquals(2, byDescription(root, "Page options").size());
+        assertEquals(2, repo.scratchpadPages().get(0).strokes.size());
+
+        InkRenderer.InkStroke first = page.strokes.get(0);
+        clickDesc(root, "Eraser");
+        assertTrue(byDescription(root, "Eraser").get(0).isSelected());
+        ink.eraseStrokes(points(100f, 100f));
+        idle();
+        assertEquals(1, page.strokes.size());
+        clickDesc(root, "Undo");
+        assertEquals(2, page.strokes.size());
+        assertSame("erased stroke comes back in its place", first, page.strokes.get(0));
+        clickDesc(root, "Redo");
+        assertEquals(1, page.strokes.size());
+
+        ink.addStroke(points(500f, 500f));
+        idle();
+        assertFalse("a new edit clears redo", byDescription(root, "Redo").get(0).isEnabled());
+
+        click(root, "comedy");
+        assertFalse("history is per page list", byDescription(root, "Undo").get(0).isEnabled());
+        controller.pause().stop().destroy();
+    }
+
+    private static ArrayList<TouchPoint> points(float x, float y) {
+        ArrayList<TouchPoint> list = new ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            list.add(new TouchPoint(x + i * 6f, y + i * 4f, 0.5f, 1f, 0, 0, 1L + i));
+        }
+        return list;
+    }
+
+    private static void clickDesc(View root, String description) {
+        List<View> views = byDescription(root, description);
+        assertEquals(description, 1, views.size());
+        assertTrue(description + " clickable", views.get(0).performClick());
+        idle();
+    }
+
+    @Test
     public void moveFilesPagesIntoExistingAndNewNotebooks() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
@@ -254,7 +323,7 @@ public class CanvasActivitySmokeTest {
     }
 
     @Test
-    public void lassoDragMovesStrokesThenUndoPutsThemBack() {
+    public void lassoDragMovesStrokesThenUndoAndRedo() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         Board page = repo.scratchpadPages().get(0);
@@ -273,9 +342,12 @@ public class CanvasActivitySmokeTest {
         PageInkView ink = findInk(root);
         assertNotNull(ink);
 
-        TextView undo = find(root, "Undo move");
+        View undo = byDescription(root, "Undo").get(0);
+        View redo = byDescription(root, "Redo").get(0);
         assertFalse("nothing to undo yet", undo.isEnabled());
-        click(root, "Lasso");
+        assertFalse(redo.isEnabled());
+        clickDesc(root, "Lasso");
+        assertTrue("active tool is inverted", byDescription(root, "Lasso").get(0).isSelected());
         assertEquals(PageInkView.Tool.LASSO, ink.tool());
         assertNotNull(find(root, "Circle ink to select it"));
 
@@ -304,11 +376,19 @@ public class CanvasActivitySmokeTest {
         assertSame(other, page.strokes.get(1));
         assertTrue(undo.isEnabled());
 
-        click(root, "Undo move");
+        InkRenderer.InkStroke moved = page.strokes.get(0);
+        clickDesc(root, "Undo");
         assertSame(original, page.strokes.get(0));
         assertFalse(undo.isEnabled());
+        assertTrue(redo.isEnabled());
+        assertEquals("undo saves through the repository",
+                original.points.get(0).y, repo.notebookPages(notebook.id).get(0).strokes.get(0).points.get(0).y, 0.001f);
+        clickDesc(root, "Redo");
+        assertSame(moved, page.strokes.get(0));
+        clickDesc(root, "Undo");
+        assertSame(original, page.strokes.get(0));
 
-        click(root, "Lasso");
+        clickDesc(root, "Lasso");
         ink.finishLasso(outline);
         idle();
         assertTrue(ink.hasSelection());

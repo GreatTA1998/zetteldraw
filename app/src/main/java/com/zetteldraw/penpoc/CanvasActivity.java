@@ -3,6 +3,7 @@ package com.zetteldraw.penpoc;
 import android.app.Activity;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.DashPathEffect;
@@ -22,6 +23,7 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -61,13 +63,12 @@ public final class CanvasActivity extends Activity {
     private LinearLayout notebookStrip;
     private Button scratchpadTab;
     private Button addButton;
-    private Button penButton;
-    private Button eraserButton;
-    private Button lassoButton;
-    private Button undoButton;
+    private ImageButton penButton;
+    private ImageButton eraserButton;
+    private ImageButton lassoButton;
+    private ImageButton undoButton;
+    private ImageButton redoButton;
     private TextView toolHint;
-    /** Last committed lasso move; the Undo button puts it back. */
-    private Lasso.Move lastMove;
     private final Runnable clearHint = () -> toolHint.setText("");
     private final ArrayList<NotebookTab> notebookTabs = new ArrayList<>();
     private final ArrayList<PageSlot> slots = new ArrayList<>();
@@ -123,6 +124,11 @@ public final class CanvasActivity extends Activity {
                 if (slot != null) {
                     slot.syncEnabled();
                 }
+                // Erase or undo can empty the last page, redo can fill it: the trailing blank follows.
+                boolean last = !slots.isEmpty() && slots.get(slots.size() - 1) == slot;
+                if ((page.isBlank() || last) && pagesIn(collectionId).size() != slots.size()) {
+                    reloadPages(scroller.getScrollY());
+                }
             }
 
             @Override
@@ -144,8 +150,6 @@ public final class CanvasActivity extends Activity {
 
             @Override
             public void onLassoMoved(Lasso.Move move) {
-                lastMove = move;
-                syncUndo();
                 showHint("", false);
                 setTool(PageInkView.Tool.PEN);
             }
@@ -153,6 +157,11 @@ public final class CanvasActivity extends Activity {
             @Override
             public void onLassoCancelled() {
                 showHint("", false);
+            }
+
+            @Override
+            public void onHistoryChanged() {
+                runOnUiThread(CanvasActivity.this::syncHistory);
             }
         });
         drawingArea.addView(inkView, matchMatch());
@@ -192,7 +201,7 @@ public final class CanvasActivity extends Activity {
         setContentView(root);
         repository.setRemoteChangeListener(this::onRemoteChange);
         setTool(PageInkView.Tool.PEN);
-        syncUndo();
+        syncHistory();
         syncNav();
         inkView.setLive(true);
     }
@@ -272,44 +281,70 @@ public final class CanvasActivity extends Activity {
         toolHint.setEllipsize(TextUtils.TruncateAt.END);
         toolbar.addView(toolHint, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        undoButton = tinyButton(getString(R.string.undo_move), 13);
-        undoButton.setOnClickListener(v -> undoLastMove());
-        penButton = tinyButton(getString(R.string.pen), 13);
-        eraserButton = tinyButton(getString(R.string.eraser), 13);
-        lassoButton = tinyButton(getString(R.string.lasso), 13);
+        undoButton = iconButton(R.drawable.ic_undo, R.string.undo);
+        redoButton = iconButton(R.drawable.ic_redo, R.string.redo);
+        penButton = iconButton(R.drawable.ic_tool_pen, R.string.pen);
+        eraserButton = iconButton(R.drawable.ic_tool_eraser, R.string.eraser);
+        lassoButton = iconButton(R.drawable.ic_tool_lasso, R.string.lasso);
+        undoButton.setOnClickListener(v -> {
+            if (!inkView.undo()) {
+                showHint(getString(R.string.undo_nothing), true);
+            }
+        });
+        redoButton.setOnClickListener(v -> {
+            if (!inkView.redo()) {
+                showHint(getString(R.string.redo_nothing), true);
+            }
+        });
         penButton.setOnClickListener(v -> setTool(PageInkView.Tool.PEN));
         eraserButton.setOnClickListener(v -> setTool(PageInkView.Tool.ERASER));
         lassoButton.setOnClickListener(v -> setTool(PageInkView.Tool.LASSO));
-        LinearLayout.LayoutParams undoLp = wrap();
-        undoLp.leftMargin = dp(6);
-        undoLp.rightMargin = dp(12);
-        toolbar.addView(undoButton, undoLp);
-        toolbar.addView(penButton, wrap());
-        LinearLayout.LayoutParams lp = wrap();
-        lp.leftMargin = dp(6);
-        toolbar.addView(eraserButton, lp);
-        LinearLayout.LayoutParams lassoLp = wrap();
-        lassoLp.leftMargin = dp(6);
-        toolbar.addView(lassoButton, lassoLp);
+        toolbar.addView(undoButton, iconLp(6));
+        toolbar.addView(redoButton, iconLp(4));
+        toolbar.addView(rule(), barDividerLp());
+        toolbar.addView(penButton, iconLp(0));
+        toolbar.addView(eraserButton, iconLp(6));
+        toolbar.addView(lassoButton, iconLp(6));
         return toolbar;
     }
 
-    private void undoLastMove() {
-        Lasso.Move move = lastMove;
-        lastMove = null;
-        syncUndo();
-        if (move == null) {
-            return;
-        }
-        if (!inkView.undo(move)) {
-            showHint(getString(R.string.undo_nothing), true);
-        }
+    private ImageButton iconButton(int icon, int label) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(icon);
+        button.setContentDescription(getString(label));
+        button.setScaleType(android.widget.ImageView.ScaleType.CENTER_INSIDE);
+        button.setPadding(dp(10), dp(10), dp(10), dp(10));
+        button.setMinimumWidth(dp(48));
+        button.setMinimumHeight(dp(48));
+        styleTool(button, false);
+        return button;
     }
 
-    private void syncUndo() {
-        boolean enabled = lastMove != null;
-        undoButton.setEnabled(enabled);
-        undoButton.setAlpha(enabled ? 1f : 0.35f);
+    private LinearLayout.LayoutParams iconLp(int leftMarginDp) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(48), dp(48));
+        lp.leftMargin = dp(leftMarginDp);
+        return lp;
+    }
+
+    /** Active tool: black tile with a white icon. Others: black icon on white with a thin outline. */
+    private void styleTool(ImageButton button, boolean selected) {
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(dp(6));
+        background.setColor(selected ? Color.BLACK : Color.WHITE);
+        background.setStroke(dp(selected ? 2 : 1), Color.BLACK);
+        button.setBackground(background);
+        button.setImageTintList(ColorStateList.valueOf(selected ? Color.WHITE : Color.BLACK));
+        button.setSelected(selected);
+    }
+
+    private void syncHistory() {
+        syncAction(undoButton, inkView.canUndo());
+        syncAction(redoButton, inkView.canRedo());
+    }
+
+    private static void syncAction(ImageButton button, boolean enabled) {
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1f : 0.3f);
     }
 
     private void showHint(String text, boolean brief) {
@@ -431,6 +466,9 @@ public final class CanvasActivity extends Activity {
 
     private void openCollection(String id) {
         dismissOverlay();
+        if (!id.equals(collectionId)) {
+            inkView.clearHistory();
+        }
         if (pageHeight == 0) {
             collectionId = id;
             syncNav();
@@ -836,9 +874,9 @@ public final class CanvasActivity extends Activity {
     }
 
     private void setTool(PageInkView.Tool tool) {
-        styleButton(penButton, tool == PageInkView.Tool.PEN);
-        styleButton(eraserButton, tool == PageInkView.Tool.ERASER);
-        styleButton(lassoButton, tool == PageInkView.Tool.LASSO);
+        styleTool(penButton, tool == PageInkView.Tool.PEN);
+        styleTool(eraserButton, tool == PageInkView.Tool.ERASER);
+        styleTool(lassoButton, tool == PageInkView.Tool.LASSO);
         inkView.setTool(tool);
         if (tool == PageInkView.Tool.LASSO) {
             showHint(getString(R.string.lasso_hint), false);

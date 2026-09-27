@@ -106,26 +106,32 @@ final class Lasso {
             return null;
         }
         HashMap<String, InkRenderer.InkStroke> before = new HashMap<>();
+        HashMap<String, InkRenderer.InkStroke> after = new HashMap<>();
         for (int i = 0; i < page.strokes.size(); i++) {
             InkRenderer.InkStroke stroke = page.strokes.get(i);
             if (ids.contains(stroke.id)) {
+                InkRenderer.InkStroke moved = stroke.translated(dx, dy);
                 before.put(stroke.id, stroke);
-                page.strokes.set(i, stroke.translated(dx, dy));
+                after.put(stroke.id, moved);
+                page.strokes.set(i, moved);
             }
         }
-        return before.isEmpty() ? null : new Move(page, before, dx, dy);
+        return before.isEmpty() ? null : new Move(page, before, after, dx, dy);
     }
 
-    /** One committed lasso move; enough to put the strokes back exactly. */
+    /** One committed lasso move: the strokes before and after, by id. */
     static final class Move {
         final Board page;
         final float dx;
         final float dy;
         private final Map<String, InkRenderer.InkStroke> before;
+        private final Map<String, InkRenderer.InkStroke> after;
 
-        Move(Board page, Map<String, InkRenderer.InkStroke> before, float dx, float dy) {
+        Move(Board page, Map<String, InkRenderer.InkStroke> before,
+             Map<String, InkRenderer.InkStroke> after, float dx, float dy) {
             this.page = page;
             this.before = before;
+            this.after = after;
             this.dx = dx;
             this.dy = dy;
         }
@@ -134,20 +140,8 @@ final class Lasso {
             return before.size();
         }
 
-        /**
-         * Restores the original points of moved strokes that still exist.
-         * Strokes erased since the move stay erased; strokes drawn since stay put.
-         */
-        boolean undo() {
-            boolean changed = false;
-            for (int i = 0; i < page.strokes.size(); i++) {
-                InkRenderer.InkStroke original = before.get(page.strokes.get(i).id);
-                if (original != null && original != page.strokes.get(i)) {
-                    page.strokes.set(i, original);
-                    changed = true;
-                }
-            }
-            return changed;
+        InkHistory.Part historyPart() {
+            return InkHistory.Part.moved(page, before, after);
         }
     }
 }

@@ -103,6 +103,64 @@ public class ScreenshotRenderTest {
         controller.pause().stop().destroy();
     }
 
+    @Test
+    public void toolbar() throws Exception {
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View content = controller.get().findViewById(android.R.id.content);
+        idle();
+        PageInkView ink = findInk(content);
+        java.util.ArrayList<com.onyx.android.sdk.data.note.TouchPoint> points = new java.util.ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            points.add(new com.onyx.android.sdk.data.note.TouchPoint(100f + i * 6f, 100f + i * 4f, 0.5f, 1f, 0, 0, i));
+        }
+        ink.addStroke(points);
+        idle();
+        Bitmap pen = render(content);
+        click(content, R.string.undo);
+        click(content, R.string.eraser);
+        Bitmap eraser = render(content);
+        click(content, R.string.lasso);
+        Bitmap lasso = render(content);
+
+        int band = dp(content, 128);
+        int gap = dp(content, 12);
+        Bitmap out = Bitmap.createBitmap(pen.getWidth(), band * 3 + gap * 2, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(out);
+        canvas.drawColor(Color.rgb(200, 200, 200));
+        Bitmap[] states = {pen, eraser, lasso};
+        for (int i = 0; i < states.length; i++) {
+            canvas.drawBitmap(Bitmap.createBitmap(states[i], 0, 0, states[i].getWidth(), band),
+                    0f, i * (band + gap), null);
+        }
+        save(out, "toolbar-v11.png");
+        controller.pause().stop().destroy();
+    }
+
+    private static void click(View root, int description) {
+        String text = root.getResources().getString(description);
+        List<View> views = new ArrayList<>();
+        collectByDescription(root, text, views);
+        assertTrue(text, views.size() == 1);
+        views.get(0).performClick();
+        idle();
+    }
+
+    private static PageInkView findInk(View view) {
+        if (view instanceof PageInkView) {
+            return (PageInkView) view;
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                PageInkView found = findInk(group.getChildAt(i));
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
+
     private static Bitmap render(View view) {
         Bitmap bitmap = Bitmap.createBitmap(view.getWidth(), view.getHeight(), Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
