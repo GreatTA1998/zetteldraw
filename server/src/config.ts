@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
+
 export interface Config {
   host: string;
   port: number;
   databaseUrl: string;
+  /** PEM of the CA that signs the Postgres server cert (Supabase: prod-ca-2021.crt). */
+  databaseCaCert: string | undefined;
   deviceTokens: string[];
   s3: {
     endpoint: string | undefined;
@@ -21,6 +25,14 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
   return value;
 }
 
+/** Accepts the PEM itself (handy for host env vars) or a path to it. */
+function readPem(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value.includes("-----BEGIN") ? value.replace(/\\n/g, "\n") : readFileSync(value, "utf8");
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const deviceTokens = required(env, "DEVICE_TOKENS")
     .split(",")
@@ -33,13 +45,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST ?? "0.0.0.0",
     port: Number(env.PORT ?? 8787),
     databaseUrl: required(env, "DATABASE_URL"),
+    databaseCaCert: readPem(env.DATABASE_CA_CERT),
     deviceTokens,
     s3: {
       endpoint: env.S3_ENDPOINT || undefined,
       region: env.S3_REGION ?? "us-east-1",
       bucket: required(env, "S3_BUCKET"),
-      accessKeyId: env.S3_ACCESS_KEY || undefined,
-      secretAccessKey: env.S3_SECRET_KEY || undefined,
+      accessKeyId: env.S3_ACCESS_KEY || env.S3_ACCESS_KEY_ID || undefined,
+      secretAccessKey: env.S3_SECRET_KEY || env.S3_SECRET_ACCESS_KEY || undefined,
     },
     migrationsDir: env.MIGRATIONS_DIR ?? new URL("../migrations", import.meta.url).pathname,
   };

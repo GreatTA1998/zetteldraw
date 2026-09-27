@@ -5,8 +5,12 @@ import pg from "pg";
 // bigint columns are epoch millis and revs; both fit in a JS number.
 pg.types.setTypeParser(pg.types.builtins.INT8, (v) => Number(v));
 
-export function createPool(databaseUrl: string): pg.Pool {
-  return new pg.Pool({ connectionString: databaseUrl, max: 10 });
+export function createPool(databaseUrl: string, caCert?: string): pg.Pool {
+  return new pg.Pool({
+    connectionString: databaseUrl,
+    max: 10,
+    ...(caCert ? { ssl: { ca: caCert, rejectUnauthorized: true } } : {}),
+  });
 }
 
 interface Migration {

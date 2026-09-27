@@ -13,3 +13,4 @@ captures/
 *.dex
 *.class
 agent-tools/
+.env
