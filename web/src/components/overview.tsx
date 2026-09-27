@@ -416,12 +416,9 @@ function EmptyLibrary() {
     <div className="mx-auto mt-16 max-w-md text-center">
       <h2 className="font-medium">Nothing synced yet</h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Pages show up here after the Boox syncs with this server. To try the overview without a device, load the
-        demo library:
+        Pages show up here after the Boox syncs with this server. It syncs about every 15 minutes, and whenever the
+        app goes to the background.
       </p>
-      <pre className="mt-3 overflow-x-auto rounded-lg bg-background p-3 text-left text-xs ring-1 ring-border">
-        docker compose run --rm sync node dist/scripts/seed.js
-      </pre>
     </div>
   );
 }
