@@ -59,6 +59,47 @@ cd .. && ./gradlew :app:testDebugUnitTest         # Android: repository, migrati
 
 Tested target: Boox Go 7 Color II (Android 13, Kaleido 3, optional InkSense stylus).
 
+## Web overview (`web/`)
+
+A read-mostly view of the whole library for a big monitor: a notebooks sidebar, a dense thumbnail grid with a column slider (2–16 columns, or the `−` / `=` keys), and a full-size viewer (click a page; arrow keys flip, Esc closes). There is no drawing. You can drag to reorder pages, drag a page onto a notebook in the sidebar (or use its ⋯ menu) to move it, and rename notebooks. Edits go through the server as ordinary synced changes (a fractional `position` / `notebook_id` or `title`, a fresh `rev`, a newer `updated_at`), so the Boox picks them up on its next pull.
+
+Next.js 16 + TypeScript + Tailwind + shadcn/ui. Sign in with the device token (the same `DEVICE_TOKENS` value the Boox uses). The token is kept in an httpOnly cookie, and the Next server proxies `/api/zd/*` to the sync server's `/web/*`, so the browser never talks to the sync server directly.
+
+Run everything with Docker and load the demo library, which is fake notebooks and pages so you do not need a Boox:
+
+```bash
+cd server
+docker compose up -d --build --wait                        # Postgres + MinIO + sync :8787 + web :43917
+docker compose run --rm sync node dist/scripts/seed.js     # optional: demo notebooks and pages
+open http://localhost:43917                                # device token: dev-device-token
+```
+
+For a wall display on a trusted network, `ZD_DEVICE_TOKEN=dev-device-token docker compose up -d` skips the sign-in screen.
+
+Dev mode, against a running sync server:
+
+```bash
+cd web && npm ci
+ZD_SERVER_URL=http://127.0.0.1:8787 npm run dev            # http://localhost:43917
+npm test && npm run lint && npm run typecheck
+```
+
+**Thumbnails.** The server renders PNGs from the stored ink with the same width model as `InkRenderer` (pressure, end taper, 0.50 mm at 300 PPI). It reads `.zdi` versions 1 and 2. Rendering starts in the background after every push. `thumb/<ink_hash>.png` (480 px wide) and `render/<ink_hash>.png` (1264 px, the device width) go in the same bucket as the ink. Missing images are also rendered on first request. Images are keyed by ink hash rather than written into `boards.thumb_hash`, so they can never go stale and the server never writes a column the device also writes. The app is unchanged. The page size is not in the ink file, so the server assumes the Go 7 portrait page (`PAGE_WIDTH` / `PAGE_HEIGHT`). Ink beyond that grows the page at the same aspect instead of being cropped. To render thumbnails for ink synced before this existed:
+
+```bash
+docker compose run --rm sync node dist/scripts/backfill-thumbs.js
+```
+
+Web endpoints (bearer device token, no schema header):
+
+| Endpoint | |
+| --- | --- |
+| `GET /web/notebooks` | Scratchpad first (`id: "scratchpad"`), then notebooks by `position`, with page counts |
+| `GET /web/notebooks/:id/pages` | Live pages in `position` order with `thumb_url` / `render_url` (null for blank pages) |
+| `GET /web/thumbs/<ink_hash>.png`, `GET /web/renders/<ink_hash>.png` | PNGs, immutable cache headers |
+| `POST /web/pages/:id/move` | `{"notebook_id": "<id>" \| "scratchpad", "after_id": "<page id>" \| null}`. Omitting `after_id` appends, `null` puts the page first. Only the moved row changes. |
+| `PATCH /web/notebooks/:id` | `{"title": "…"}` |
+
 ## Build
 
 Requires JDK 17+, Android SDK platform 34, and network access to Onyx's Maven repo (HTTP):
@@ -125,4 +166,5 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 - `data/BoardRepository` — what the UI calls: list scratchpad and notebook pages, save ink, move, wipe, and create / rename / delete notebooks. `RoomBoardRepository` implements it with Room, ink files and the Documents mirror.
 - `data/LegacyBoardImporter` — one-time import of the old `zetteldraw-boards.json`.
 - `sync/` — `SyncEngine` (push the outbox, then pull until caught up), `SyncClient` (HTTP), `SyncWorker` / `SyncScheduler` (WorkManager), `SyncConfig`.
-- `server/` — sync service, shared SQL migrations, docker-compose.
+- `server/` — sync service, shared SQL migrations, thumbnail rendering, web endpoints, docker-compose.
+- `web/` — Next.js overview of all notebooks and pages.
