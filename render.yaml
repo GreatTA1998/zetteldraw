@@ -7,8 +7,8 @@ services:
     rootDir: server
     # Singapore is the closest Render region to the Supabase project (ap-northeast-1).
     region: singapore
-    # Free instances sleep after 15 idle minutes, which is the Boox's sync interval.
-    plan: starter
+    # Free instances sleep after 15 idle minutes; the first request after that waits for a cold start.
+    plan: free
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
