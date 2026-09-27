@@ -20,6 +20,9 @@ import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.TextView;
 
+import com.zetteldraw.penpoc.data.BoardRepository;
+import com.zetteldraw.penpoc.data.ZettelData;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -30,9 +33,10 @@ import java.util.List;
  */
 public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
+    private static final String SCRATCHPAD = "scratchpad";
 
-    private BoardStore store;
-    private String collectionId = BoardStore.SCRATCHPAD;
+    private BoardRepository repository;
+    private String collectionId = SCRATCHPAD;
     private Notebook notebook = Notebook.values()[0];
     private final HashMap<String, Integer> scrollByCollection = new HashMap<>();
 
@@ -61,7 +65,7 @@ public final class CanvasActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         InkRenderer.applyBaseWidthMm(getResources().getDisplayMetrics());
-        store = new BoardStore(this);
+        repository = ZettelData.repository(this);
         pageGap = dp(24);
 
         root = new FrameLayout(this);
@@ -89,7 +93,7 @@ public final class CanvasActivity extends Activity {
         inkView.setListener(new PageInkView.Listener() {
             @Override
             public void onPageChanged(Board page) {
-                store.persistBoard(page);
+                repository.saveInk(page);
                 PageSlot slot = slotFor(page.id);
                 if (slot != null) {
                     slot.syncEnabled();
@@ -98,10 +102,10 @@ public final class CanvasActivity extends Activity {
 
             @Override
             public void onPageBecameNonEmpty(Board page) {
-                if (BoardStore.SCRATCHPAD.equals(collectionId)) {
-                    int before = store.boardsIn(collectionId).size();
-                    store.onScratchpadPageFilled(page.id);
-                    if (store.boardsIn(collectionId).size() != before) {
+                if (SCRATCHPAD.equals(collectionId)) {
+                    int before = pagesIn(collectionId).size();
+                    repository.createScratchpadPage();
+                    if (pagesIn(collectionId).size() != before) {
                         reloadPages(scroller.getScrollY());
                     }
                 }
@@ -163,7 +167,6 @@ public final class CanvasActivity extends Activity {
 
     @Override
     protected void onPause() {
-        store.save();
         inkView.pauseLive();
         super.onPause();
     }
@@ -179,7 +182,7 @@ public final class CanvasActivity extends Activity {
         LinearLayout nav = row(Gravity.CENTER_VERTICAL | Gravity.START);
         scratchpadTab = tinyButton(getString(R.string.scratchpad), 15);
         notebooksTab = tinyButton(getString(R.string.notebooks), 15);
-        scratchpadTab.setOnClickListener(v -> openCollection(BoardStore.SCRATCHPAD));
+        scratchpadTab.setOnClickListener(v -> openCollection(SCRATCHPAD));
         notebooksTab.setOnClickListener(v -> openCollection(notebook.id));
         TextView divider = new TextView(this);
         divider.setText("|");
@@ -242,8 +245,8 @@ public final class CanvasActivity extends Activity {
         int target;
         if (saved != null) {
             target = saved;
-        } else if (BoardStore.SCRATCHPAD.equals(id)) {
-            target = Math.max(0, store.boardsIn(id).size() - 1) * stride();
+        } else if (SCRATCHPAD.equals(id)) {
+            target = Math.max(0, pagesIn(id).size() - 1) * stride();
         } else {
             target = 0;
         }
@@ -251,7 +254,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private void reloadPages(int targetScrollY) {
-        List<Board> pages = store.boardsIn(collectionId);
+        List<Board> pages = pagesIn(collectionId);
         pageColumn.removeAllViews();
         slots.clear();
         for (int i = 0; i < pages.size(); i++) {
@@ -264,6 +267,14 @@ public final class CanvasActivity extends Activity {
         inkView.setPages(pages, pageHeight, stride());
         pendingScrollY = Math.max(0, targetScrollY);
         pageColumn.requestLayout();
+    }
+
+    private List<Board> pagesIn(String id) {
+        if (SCRATCHPAD.equals(id)) {
+            return repository.scratchpadPages();
+        }
+        Notebook each = Notebook.fromId(id);
+        return each == null ? new ArrayList<>() : repository.notebookPages(each.uuid);
     }
 
     private void onScrolled(int scrollY) {
@@ -290,8 +301,8 @@ public final class CanvasActivity extends Activity {
             menu.getMenu().add(Menu.NONE, i, i, all[i].label);
         }
         menu.setOnMenuItemClickListener(item -> {
-            store.persistBoard(slot.page);
-            store.moveTo(slot.page.id, all[item.getItemId()]);
+            repository.saveInk(slot.page);
+            repository.movePageToNotebook(slot.page.id, all[item.getItemId()].uuid);
             reloadPages(scroller.getScrollY());
             return true;
         });
@@ -301,9 +312,9 @@ public final class CanvasActivity extends Activity {
     }
 
     private void wipe(PageSlot slot) {
-        store.wipe(slot.page.id);
+        repository.wipePage(slot.page.id);
         inkView.invalidatePage(slot.page.id);
-        if (store.boardsIn(collectionId).size() != slots.size()) {
+        if (pagesIn(collectionId).size() != slots.size()) {
             reloadPages(scroller.getScrollY());
         } else {
             inkView.redrawAll();
@@ -318,7 +329,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private void syncNav() {
-        boolean scratch = BoardStore.SCRATCHPAD.equals(collectionId);
+        boolean scratch = SCRATCHPAD.equals(collectionId);
         styleButton(scratchpadTab, scratch);
         styleButton(notebooksTab, !scratch);
         notebookTabs.setVisibility(scratch ? View.GONE : View.VISIBLE);

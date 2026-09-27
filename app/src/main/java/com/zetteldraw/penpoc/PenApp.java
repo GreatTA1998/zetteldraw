@@ -4,6 +4,8 @@ import android.app.Application;
 import android.content.Context;
 import android.os.Build;
 
+import com.zetteldraw.penpoc.sync.SyncScheduler;
+
 import org.lsposed.hiddenapibypass.HiddenApiBypass;
 
 /**
@@ -17,5 +19,11 @@ public final class PenApp extends Application {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             HiddenApiBypass.addHiddenApiExemptions("");
         }
+    }
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        SyncScheduler.install(this);
     }
 }

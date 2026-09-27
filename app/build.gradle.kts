@@ -15,6 +15,27 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
+        // Sync stays off until a server URL is set (here via -Pzetteldraw.syncUrl, or at runtime in SyncConfig).
+        buildConfigField("String", "SYNC_URL", "\"${project.findProperty("zetteldraw.syncUrl") ?: ""}\"")
+        buildConfigField("String", "SYNC_TOKEN", "\"${project.findProperty("zetteldraw.syncToken") ?: ""}\"")
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments["room.schemaLocation"] = "$projectDir/schemas"
+            }
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                it.systemProperty("zd.repoRoot", rootProject.projectDir.absolutePath)
+            }
+        }
     }
 
     signingConfigs {
@@ -72,4 +93,11 @@ dependencies {
     implementation("com.onyx.android.sdk:onyxsdk-device:1.3.6")
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
     implementation("androidx.viewpager2:viewpager2:1.1.0")
+    implementation("androidx.room:room-runtime:2.6.1")
+    annotationProcessor("androidx.room:room-compiler:2.6.1")
+    implementation("androidx.work:work-runtime:2.9.1")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
 }

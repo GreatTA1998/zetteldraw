@@ -17,7 +17,7 @@ import java.util.List;
  * thin–thick–thin end taper always. Live ink stays on TouchHelper; this only
  * paints the bitmap that replaces the scribble overlay on pen-up.
  */
-final class InkRenderer {
+public final class InkRenderer {
     /** Notes default pen line width: 0.50mm. */
     static final float BASE_WIDTH_MM = 0.50f;
     /**
@@ -41,7 +41,7 @@ final class InkRenderer {
                 TypedValue.COMPLEX_UNIT_MM, BASE_WIDTH_MM, metrics);
     }
 
-    static InkStroke strokeFrom(List<TouchPoint> points) {
+    public static InkStroke strokeFrom(List<TouchPoint> points) {
         ArrayList<TouchPoint> copy = copyPoints(points);
         float[] widths = widthsFor(copy);
         return new InkStroke(copy, widths);
@@ -263,8 +263,8 @@ final class InkRenderer {
         return ex * ex + ey * ey;
     }
 
-    static final class InkStroke {
-        final ArrayList<TouchPoint> points;
+    public static final class InkStroke {
+        public final ArrayList<TouchPoint> points;
         final float[] widths;
         final RectF bounds;
         final float maxWidth;
