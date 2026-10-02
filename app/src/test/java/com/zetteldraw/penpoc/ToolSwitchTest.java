@@ -36,9 +36,9 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * Tool changes used to be applied on the surface worker while raw drawing stayed
- * on, so the Boox kept painting the previous tool, and an older style could be
- * written after a newer one. These tests fail on that code.
+ * {@code setRawDrawingEnabled(true)} restores the default pen. These tests fail
+ * if that enable lands after the eraser switches, or if a stroke already down
+ * is reclassified when the tool changes.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class, qualifiers = "w600dp-h1000dp",
@@ -62,38 +62,55 @@ public class ToolSwitchTest {
     }
 
     @Test
-    public void selectingEraserOrPenTakesEffectBeforeTheNextStroke() {
+    public void eraserSnapshotLeavesBrushAndRenderOffWithNoEnableAfterThem() {
         PageInkView ink = show(laidOut(new Board("a", 1L)));
         settle();
         assertTrue(ink.penOn());
-        assertTrue("pen draws ink", pen.style != null && pen.style.render && pen.style.brush);
-        pen.styledWhileRaw = false;
+        assertTrue(pen.raw);
+        assertTrue(pen.brush);
+        assertTrue(pen.render);
 
         ink.setTool(PageInkView.Tool.ERASER);
         ShadowLooper.idleMainLooper();
         assertEquals(PageInkView.Tool.ERASER, ink.tool());
-        assertFalse("the Boox must not keep drawing fountain ink while the eraser style is still queued",
-                ink.penOn());
+        assertTrue("raw drawing stays on for an eraser drag", ink.penOn());
 
         settle();
-        assertTrue("eraser is on before the next stroke", ink.penOn());
         assertTrue(pen.raw);
-        assertFalse(pen.style.brush);
-        assertFalse(pen.style.render);
-        assertFalse("eraser style was written while raw drawing was still on", pen.styledWhileRaw);
+        assertFalse(pen.brush);
+        assertFalse(pen.render);
+        assertTrue("the eraser switches are written, and no enable follows them",
+                pen.lastEnable < pen.lastOffSwitches);
 
-        pen.styledWhileRaw = false;
         ink.setTool(PageInkView.Tool.PEN);
         ShadowLooper.idleMainLooper();
-        assertEquals(PageInkView.Tool.PEN, ink.tool());
-        assertFalse(ink.penOn());
-
         settle();
-        assertTrue("pen is drawable again without an undo repaint", ink.penOn());
+        assertTrue(ink.penOn());
         assertTrue(pen.raw);
-        assertTrue(pen.style.brush);
-        assertTrue(pen.style.render);
-        assertFalse("pen style was written while raw drawing was still on", pen.styledWhileRaw);
+        assertTrue(pen.brush);
+        assertTrue(pen.render);
+        assertTrue(pen.lastStyle > pen.lastEnable);
+    }
+
+    @Test
+    public void sideButtonIsASnapshotChangeAndDoesNotEnableRawDrawing() {
+        PageInkView ink = show(laidOut(new Board("a", 1L)));
+        settle();
+        int enable = pen.lastEnable;
+        TouchPoint point = points(40f, 40f).get(0);
+        ink.rawInput().onBeginRawDrawing(true, point);
+        settle();
+        assertEquals(enable, pen.lastEnable);
+        assertTrue(pen.raw);
+        assertTrue(pen.brush);
+        assertFalse(pen.render);
+
+        ink.rawInput().onRawDrawingTouchPointListReceived(list(points(40f, 40f)));
+        ink.rawInput().onPenUpRefresh(null);
+        settle();
+        assertEquals(enable, pen.lastEnable);
+        assertTrue(pen.brush);
+        assertTrue(pen.render);
     }
 
     @Test
@@ -291,11 +308,21 @@ public class ToolSwitchTest {
         return null;
     }
 
-    /** Records the order the firmware is told to draw. */
+    /**
+     * Models the Boox: {@code setRawDrawingEnabled(true)} turns brush and render
+     * back on, the way {@code resetPenDefaultRawDrawing} does.
+     */
     private static final class Pen implements SurfaceWorker.RawPen {
         boolean raw;
-        boolean styledWhileRaw;
-        SurfaceWorker.Style style;
+        boolean brush;
+        boolean render;
+        private int seq;
+        /** Sequence number of the last {@code setRawDrawingEnabled(true)}, or -1. */
+        int lastEnable = -1;
+        /** Sequence number of the last style write, or -1. */
+        int lastStyle = -1;
+        /** Sequence number of the last style write with brush and render off, or -1. */
+        int lastOffSwitches = -1;
 
         @Override
         public void open(Rect limit, List<Rect> excludes) {
@@ -317,19 +344,29 @@ public class ToolSwitchTest {
 
         @Override
         public void setStyle(SurfaceWorker.Style next) {
-            if (raw) {
-                styledWhileRaw = true;
+            brush = next.brush;
+            render = next.render;
+            seq++;
+            lastStyle = seq;
+            if (!next.brush && !next.render) {
+                lastOffSwitches = seq;
             }
-            style = next;
         }
 
         @Override
         public void setRawDrawingEnabled(boolean enabled) {
             raw = enabled;
+            seq++;
+            if (enabled) {
+                brush = true;
+                render = true;
+                lastEnable = seq;
+            }
         }
 
         @Override
         public void setRawDrawingRenderEnabled(boolean enabled) {
+            render = enabled;
         }
 
         @Override

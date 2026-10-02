@@ -40,13 +40,6 @@ final class SurfaceWorker {
     interface Host {
         /** Main thread: a frame was painted (or skipped because the surface is gone). */
         void onFramePainted(long frameId, boolean full);
-
-        /**
-         * Main thread: {@code epoch}'s stroke style is on the device and raw drawing is off,
-         * so turning the pen back on cannot paint the previous tool.
-         */
-        default void onStyleReady(int epoch) {
-        }
     }
 
     /**
@@ -154,8 +147,6 @@ final class SurfaceWorker {
     private List<Rect> wantExcludes = new ArrayList<>();
     private Style wantStyle;
     private int wantPenState = Integer.MIN_VALUE;
-    /** Bumped by the view whenever the stroke style must actually change. */
-    private int wantEpoch;
     private Frame pendingFrame;
     private final ArrayList<Runnable> whenOff = new ArrayList<>();
     private boolean scheduled;
@@ -170,8 +161,6 @@ final class SurfaceWorker {
     private List<Rect> excludes;
     private Style style;
     private int penState = Integer.MIN_VALUE;
-    /** Epoch whose style has been written. -1 until the first one. */
-    private int appliedEpoch = -1;
 
     /** Tests: every new pen uses this instead of TouchHelper. */
     static volatile RawPen rawPenForTest;
@@ -202,14 +191,13 @@ final class SurfaceWorker {
 
     /** The pen as the main thread wants it now; cheap, never blocks. */
     synchronized void setPen(boolean open, boolean on, Rect limitRect, List<Rect> exclude, Style inkStyle,
-                             int handwritingPenState, int styleEpoch) {
+                             int handwritingPenState) {
         wantOpen = open && !closed;
         wantEnabled = wantOpen && on;
         wantLimit = new Rect(limitRect);
         wantExcludes = new ArrayList<>(exclude);
         wantStyle = inkStyle;
         wantPenState = handwritingPenState;
-        wantEpoch = styleEpoch;
         kickLocked();
     }
 
@@ -269,7 +257,6 @@ final class SurfaceWorker {
             List<Rect> exc;
             Style st;
             int pen;
-            int epoch;
             Frame frame;
             synchronized (this) {
                 if (!dirty) {
@@ -286,7 +273,6 @@ final class SurfaceWorker {
                 exc = wantExcludes;
                 st = wantStyle;
                 pen = wantPenState;
-                epoch = wantEpoch;
                 frame = pendingFrame;
                 pendingFrame = null;
                 if (frame != null && frame.full) {
@@ -302,7 +288,7 @@ final class SurfaceWorker {
                 frame = null;
             }
             try {
-                applyPen(open, on, lim, exc, st, pen, epoch);
+                applyPen(open, on, lim, exc, st, pen);
                 retryDelay = RETRY_MIN_MS;
             } catch (RuntimeException | LinkageError e) {
                 Log.w(TAG, "Onyx pen call failed; retrying in " + retryDelay + " ms", e);
@@ -345,7 +331,7 @@ final class SurfaceWorker {
         }, delay);
     }
 
-    private void applyPen(boolean open, boolean on, Rect lim, List<Rect> exc, Style st, int pen, int epoch) {
+    private void applyPen(boolean open, boolean on, Rect lim, List<Rect> exc, Style st, int pen) {
         if (!open) {
             if (device != null) {
                 RawPen closing = device;
@@ -369,43 +355,21 @@ final class SurfaceWorker {
             h.setHandwritingPenState(pen);
             penState = pen;
         }
-        boolean styleDiffers = st != null && !st.equals(style);
-        // A tool change turns raw drawing off before the new style is written, and does not
-        // turn it back on until that style is the latest one. Otherwise the firmware keeps
-        // painting fountain ink, and an older style can land after a newer one.
-        // The side-button eraser is the exception: the stroke is already down, so only the
-        // render flag changes and raw drawing stays up (disabling it would drop the stroke).
-        boolean cycle = !on || epoch != appliedEpoch;
-        if (enabled && (styleDiffers || !on) && cycle) {
-            disableRaw(h);
-            styleDiffers = st != null && !st.equals(style);
-        }
-        if (epochMoved(epoch)) {
-            return;
-        }
-        if (!enabled && styleDiffers) {
-            writeStyle(h, st);
-            if (epochMoved(epoch)) {
-                return;
-            }
-            noteEpoch(epoch);
-        } else if (enabled && on && styleDiffers) {
-            writeStyle(h, st);
-        }
-        if (epochMoved(epoch)) {
-            return;
-        }
+        // setRawDrawingEnabled(true) restores the default pen: brush on, render on.
+        // The snapshot's style is written after that, so an enable is never the last
+        // word. A tool change while raw drawing is already on does not enable again.
         if (on && !enabled) {
-            if (st != null && !st.equals(style)) {
-                writeStyle(h, st);
-            }
             h.setRawDrawingEnabled(true);
             // Enabling raw drawing resets the side-button eraser channel.
             h.enableSideBtnErase(true);
             enabled = true;
-            noteEpoch(epoch);
+            style = null;
             LaunchLog.once("pen-applied", "pen enabled on the e-ink system");
-        } else if (!on && enabled) {
+        }
+        if (on && st != null && !st.equals(style)) {
+            writeStyle(h, st);
+        }
+        if (!on && enabled) {
             disableRaw(h);
         }
     }
@@ -440,31 +404,6 @@ final class SurfaceWorker {
     private void writeStyle(RawPen h, Style st) {
         h.setStyle(st);
         style = st;
-    }
-
-    /** Publishes {@code epoch} once, and only when it is still the one the main thread wants. */
-    private void noteEpoch(int epoch) {
-        if (appliedEpoch == epoch) {
-            return;
-        }
-        synchronized (this) {
-            if (wantEpoch != epoch) {
-                dirty = true;
-                return;
-            }
-        }
-        appliedEpoch = epoch;
-        main.post(() -> host.onStyleReady(epoch));
-    }
-
-    private boolean epochMoved(int epoch) {
-        synchronized (this) {
-            if (wantEpoch != epoch) {
-                dirty = true;
-                return true;
-            }
-            return false;
-        }
     }
 
     /** TouchHelper behind {@link RawPen}. Every call is timed like the old direct path. */

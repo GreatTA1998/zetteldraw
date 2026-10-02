@@ -132,13 +132,6 @@ final class PageInkView extends FrameLayout {
     private boolean penLifted;
     /** A tool tap arrived while a stroke was open; pushed when that stroke ends. */
     private boolean toolDeferred;
-    /**
-     * Bumped when the firmware style has to change. Raw drawing stays off until
-     * {@link #readyEpoch} catches up, so the Boox cannot paint the previous tool
-     * in the gap.
-     */
-    private int styleEpoch;
-    private int readyEpoch;
     private List<Rect> extraExcludeRects = new ArrayList<>();
 
     private final Paint boxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -164,17 +157,7 @@ final class PageInkView extends FrameLayout {
         surfaceView.setOnTouchListener((View v, MotionEvent event) -> isStylus(event));
         addView(surfaceView, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         surfaceView.getHolder().addCallback(surfaceCallback);
-        worker = new SurfaceWorker(surfaceView, rawInputCallback, new SurfaceWorker.Host() {
-            @Override
-            public void onFramePainted(long frameId, boolean full) {
-                PageInkView.this.onFramePainted(frameId, full);
-            }
-
-            @Override
-            public void onStyleReady(int epoch) {
-                PageInkView.this.onStyleReady(epoch);
-            }
-        });
+        worker = new SurfaceWorker(surfaceView, rawInputCallback, this::onFramePainted);
     }
 
     void setListener(Listener listener) {
@@ -410,7 +393,7 @@ final class PageInkView extends FrameLayout {
         tool = next;
         // onCreate selects Pen while that is already the tool, before the pen has ever
         // come on. That is not a user tap and must not take the pen down.
-        if (repeat && !penEverOn && styleEpoch == 0) {
+        if (repeat && !penEverOn) {
             return;
         }
         // Behind anything already queued, including a pen-down the SDK posted before this tap.
@@ -429,23 +412,10 @@ final class PageInkView extends FrameLayout {
         pushToolStyle();
     }
 
-    /** Raw drawing off until this style is on the device, then back on. A newer tap supersedes an older one. */
+    /** The firmware follows the button. Raw drawing stays as it is; only the snapshot changes. */
     private void pushToolStyle() {
         toolDeferred = false;
         firmwareTool = tool;
-        styleEpoch++;
-        syncRaw();
-    }
-
-    private boolean stylePending() {
-        return readyEpoch != styleEpoch;
-    }
-
-    private void onStyleReady(int epoch) {
-        if (epoch != styleEpoch || epoch == readyEpoch) {
-            return;
-        }
-        readyEpoch = epoch;
         syncRaw();
     }
 
@@ -698,7 +668,7 @@ final class PageInkView extends FrameLayout {
     /** The single gate for raw drawing: every resume path asks this. */
     private boolean canInk() {
         return live && holds.isEmpty() && !paused && !resumePending && selection == null && !geometryPending()
-                && !shown.isEmpty() && !stylePending();
+                && !shown.isEmpty();
     }
 
     /** Hands the pen state the main thread wants to the worker; the worker skips calls that change nothing. */
@@ -715,7 +685,7 @@ final class PageInkView extends FrameLayout {
                 lasso ? TouchHelper.STROKE_STYLE_DASH : TouchHelper.STROKE_STYLE_FOUNTAIN,
                 lasso ? Math.max(2f, InkRenderer.BASE_WIDTH_PX * 0.5f) : InkRenderer.BASE_WIDTH_PX,
                 !eraser, !eraser && !eraseRenderOff);
-        worker.setPen(live && surfaceReady, on, canvasLimit(), excludeRects, style, handwritingPenState, styleEpoch);
+        worker.setPen(live && surfaceReady, on, canvasLimit(), excludeRects, style, handwritingPenState);
     }
 
     /**
@@ -804,9 +774,9 @@ final class PageInkView extends FrameLayout {
         strokeOpen = true;
         pointsCommitted = false;
         penLifted = false;
-        // Side button while the pen tool is selected: stop fountain render for this
-        // stroke only. The toolbar eraser already has render off, and turning raw
-        // drawing off here would drop the stroke.
+        // Side button while the pen is the firmware tool: render off for this stroke.
+        // That is a snapshot change. Raw drawing stays on; enabling it would restore
+        // the default pen and paint ink.
         if (mode == Tool.ERASER && firmwareTool != Tool.ERASER) {
             eraseRenderOff = true;
             syncRaw();
