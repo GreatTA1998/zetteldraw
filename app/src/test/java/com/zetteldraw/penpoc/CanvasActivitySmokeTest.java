@@ -436,6 +436,25 @@ public class CanvasActivitySmokeTest {
         return all;
     }
 
+    /** The visible page-number views, top to bottom. */
+    static List<TextView> pageLabelViews(View view) {
+        List<TextView> out = new ArrayList<>();
+        if (view.getVisibility() != View.VISIBLE) {
+            return out;
+        }
+        CharSequence description = view.getContentDescription();
+        if (view instanceof TextView && description != null && description.toString().matches("Page \\d+ of \\d+")) {
+            out.add((TextView) view);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                out.addAll(pageLabelViews(group.getChildAt(i)));
+            }
+        }
+        return out;
+    }
+
     /** Visible page numbers top to bottom, e.g. ["1/2", "2/2"]. */
     static List<String> pageLabels(View view) {
         List<String> out = new ArrayList<>();
