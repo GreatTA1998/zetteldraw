@@ -115,4 +115,84 @@ public class InkCodecTest {
     public void rejectsForeignFiles() {
         assertThrows(IOException.class, () -> InkCodec.decode(new byte[]{1, 2, 3, 4, 5}));
     }
+
+    /** A page the size of a real notebook page, through the inflate-once decoder. */
+    @Test
+    public void fastPathRoundTripsALargeVersionTwoPage() throws IOException {
+        List<InkRenderer.InkStroke> strokes = largePage(40, 300);
+        byte[] bytes = InkCodec.encode(strokes);
+        assertTrue("encoded " + bytes.length, bytes.length > 40_000);
+        long started = System.nanoTime();
+        List<InkRenderer.InkStroke> decoded = InkCodec.decode(bytes);
+        long ms = (System.nanoTime() - started) / 1_000_000L;
+        assertTrue("decode took " + ms + " ms for " + bytes.length + " bytes", ms < 1_000);
+        TestInk.assertSameInk(strokes, decoded);
+        assertEquals(strokes.get(0).id, decoded.get(0).id);
+        assertEquals(strokes.get(strokes.size() - 1).id, decoded.get(decoded.size() - 1).id);
+        assertEquals(InkCodec.VERSION, bytes[3]);
+    }
+
+    /** v1 files (no stroke ids) take the same inflate-once path. */
+    @Test
+    public void fastPathRoundTripsALargeVersionOnePage() throws IOException {
+        List<InkRenderer.InkStroke> strokes = largePage(40, 300);
+        byte[] bytes = encodeV1(strokes);
+        assertEquals(1, bytes[3]);
+        assertTrue("encoded " + bytes.length, bytes.length > 40_000);
+        long started = System.nanoTime();
+        List<InkRenderer.InkStroke> decoded = InkCodec.decode(bytes);
+        long ms = (System.nanoTime() - started) / 1_000_000L;
+        assertTrue("v1 decode took " + ms + " ms for " + bytes.length + " bytes", ms < 1_000);
+        TestInk.assertSameInk(strokes, decoded);
+        List<InkRenderer.InkStroke> again = InkCodec.decode(bytes);
+        assertEquals(decoded.get(0).id, again.get(0).id);
+        assertEquals(decoded.get(decoded.size() - 1).id, again.get(decoded.size() - 1).id);
+        assertNotEquals(decoded.get(0).id, decoded.get(1).id);
+    }
+
+    @Test
+    public void rejectsCorruptInput() throws IOException {
+        assertThrows(IOException.class, () -> InkCodec.decode(null));
+        assertThrows(IOException.class, () -> InkCodec.decode(new byte[0]));
+        assertThrows(IOException.class, () -> InkCodec.decode(new byte[]{'Z', 'D', 'I'}));
+        assertThrows(IOException.class, () -> InkCodec.decode(new byte[]{'Z', 'D', 'I', 9, 1, 2, 3, 4}));
+        assertThrows(IOException.class, () -> InkCodec.decode(new byte[]{'Z', 'D', 'I', 2, 0, 1, 2, 3, 4, 5}));
+        byte[] v2 = InkCodec.encode(java.util.Collections.singletonList(TestInk.stroke(1f, 2f, 8)));
+        assertThrows(IOException.class, () -> InkCodec.decode(java.util.Arrays.copyOf(v2, v2.length / 2)));
+        assertThrows(IOException.class, () -> InkCodec.decode(deflated(2, out -> out.writeInt(-3))));
+        assertThrows(IOException.class, () -> InkCodec.decode(deflated(2, out -> {
+            out.writeInt(1);
+            out.writeLong(0);
+            out.writeLong(0);
+            out.writeInt(Integer.MAX_VALUE);
+            out.writeLong(0);
+        })));
+        assertThrows(IOException.class, () -> InkCodec.decode(deflated(1, out -> {
+            out.writeInt(1);
+            out.writeInt(4);
+            out.writeLong(0);
+            out.writeFloat(1f);
+        })));
+    }
+
+    private static List<InkRenderer.InkStroke> largePage(int strokes, int points) {
+        List<InkRenderer.InkStroke> page = new ArrayList<>();
+        for (int s = 0; s < strokes; s++) {
+            page.add(TestInk.stroke(s * 8f, s * 3f, points));
+        }
+        return page;
+    }
+
+    private static byte[] deflated(int version, Payload body) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        bytes.write(new byte[]{'Z', 'D', 'I', (byte) version});
+        DataOutputStream out = new DataOutputStream(new DeflaterOutputStream(bytes));
+        body.write(out);
+        out.close();
+        return bytes.toByteArray();
+    }
+
+    private interface Payload {
+        void write(DataOutputStream out) throws IOException;
+    }
 }
