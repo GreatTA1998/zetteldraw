@@ -573,7 +573,8 @@ public final class CanvasActivity extends Activity {
         }, deadline);
         String notebook = SCRATCHPAD.equals(id) ? null : id;
         Executor executor = attempt == 0 ? UiExecutors.loader : UiExecutors.retryLoader;
-        executor.execute(() -> {
+        try {
+            executor.execute(() -> {
             List<BoardRepository.NotebookInfo> notebooks;
             List<Board> pages;
             try {
@@ -584,7 +585,10 @@ public final class CanvasActivity extends Activity {
                 return;
             }
             main.post(() -> onPagesLoaded(new Loaded(generation, id, keepScroll, notebooks, pages)));
-        });
+            });
+        } catch (RuntimeException e) {
+            Log.e(TAG, "page list load could not start; the deadline retries it", e);
+        }
     }
 
     private void onPagesLoaded(Loaded loaded) {
