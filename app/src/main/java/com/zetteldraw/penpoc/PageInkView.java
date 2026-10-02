@@ -117,8 +117,28 @@ final class PageInkView extends FrameLayout {
     private boolean live;
     private final EnumSet<Hold> holds = EnumSet.noneOf(Hold.class);
     private boolean paused;
-    private Tool tool = Tool.PEN;
-    private boolean erasingStroke;
+    /** What the buttons show. Updated the moment a tool is tapped. */
+    private volatile Tool tool = Tool.PEN;
+    /**
+     * What the firmware is set to. A stroke already on the glass keeps this
+     * until the pen lifts, so the Boox finishes that stroke in the tool it
+     * started with.
+     */
+    private volatile Tool firmwareTool = Tool.PEN;
+    /** Captured at pen-down. The point list is committed as this, not as whatever the buttons say later. */
+    private Tool strokeTool;
+    private boolean strokeOpen;
+    private boolean pointsCommitted;
+    private boolean penLifted;
+    /** A tool tap arrived while a stroke was open; pushed when that stroke ends. */
+    private boolean toolDeferred;
+    /**
+     * Bumped when the firmware style has to change. Raw drawing stays off until
+     * {@link #readyEpoch} catches up, so the Boox cannot paint the previous tool
+     * in the gap.
+     */
+    private int styleEpoch;
+    private int readyEpoch;
     private List<Rect> extraExcludeRects = new ArrayList<>();
 
     private final Paint boxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -144,7 +164,17 @@ final class PageInkView extends FrameLayout {
         surfaceView.setOnTouchListener((View v, MotionEvent event) -> isStylus(event));
         addView(surfaceView, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         surfaceView.getHolder().addCallback(surfaceCallback);
-        worker = new SurfaceWorker(surfaceView, rawInputCallback, this::onFramePainted);
+        worker = new SurfaceWorker(surfaceView, rawInputCallback, new SurfaceWorker.Host() {
+            @Override
+            public void onFramePainted(long frameId, boolean full) {
+                PageInkView.this.onFramePainted(frameId, full);
+            }
+
+            @Override
+            public void onStyleReady(int epoch) {
+                PageInkView.this.onStyleReady(epoch);
+            }
+        });
     }
 
     void setListener(Listener listener) {
@@ -376,7 +406,46 @@ final class PageInkView extends FrameLayout {
         if (selection != null && next != Tool.LASSO) {
             cancelSelection();
         }
+        boolean repeat = next == tool;
         tool = next;
+        // onCreate selects Pen while that is already the tool, before the pen has ever
+        // come on. That is not a user tap and must not take the pen down.
+        if (repeat && !penEverOn && styleEpoch == 0) {
+            return;
+        }
+        // Behind anything already queued, including a pen-down the SDK posted before this tap.
+        // That stroke then starts as the old tool; the tap still updates the button immediately.
+        main.post(() -> commitTool(next));
+    }
+
+    private void commitTool(Tool next) {
+        if (next != tool) {
+            return;
+        }
+        if (strokeOpen) {
+            toolDeferred = true;
+            return;
+        }
+        pushToolStyle();
+    }
+
+    /** Raw drawing off until this style is on the device, then back on. A newer tap supersedes an older one. */
+    private void pushToolStyle() {
+        toolDeferred = false;
+        firmwareTool = tool;
+        styleEpoch++;
+        syncRaw();
+    }
+
+    private boolean stylePending() {
+        return readyEpoch != styleEpoch;
+    }
+
+    private void onStyleReady(int epoch) {
+        if (epoch != styleEpoch || epoch == readyEpoch) {
+            return;
+        }
+        readyEpoch = epoch;
         syncRaw();
     }
 
@@ -629,7 +698,7 @@ final class PageInkView extends FrameLayout {
     /** The single gate for raw drawing: every resume path asks this. */
     private boolean canInk() {
         return live && holds.isEmpty() && !paused && !resumePending && selection == null && !geometryPending()
-                && !shown.isEmpty();
+                && !shown.isEmpty() && !stylePending();
     }
 
     /** Hands the pen state the main thread wants to the worker; the worker skips calls that change nothing. */
@@ -640,13 +709,13 @@ final class PageInkView extends FrameLayout {
             penEverOn = true;
             LaunchLog.once("pen", "pen on");
         }
-        boolean lasso = tool == Tool.LASSO;
-        boolean eraser = tool == Tool.ERASER;
+        boolean lasso = firmwareTool == Tool.LASSO;
+        boolean eraser = firmwareTool == Tool.ERASER;
         SurfaceWorker.Style style = new SurfaceWorker.Style(
                 lasso ? TouchHelper.STROKE_STYLE_DASH : TouchHelper.STROKE_STYLE_FOUNTAIN,
                 lasso ? Math.max(2f, InkRenderer.BASE_WIDTH_PX * 0.5f) : InkRenderer.BASE_WIDTH_PX,
                 !eraser, !eraser && !eraseRenderOff);
-        worker.setPen(live && surfaceReady, on, canvasLimit(), excludeRects, style, handwritingPenState);
+        worker.setPen(live && surfaceReady, on, canvasLimit(), excludeRects, style, handwritingPenState, styleEpoch);
     }
 
     /**
@@ -666,19 +735,17 @@ final class PageInkView extends FrameLayout {
         @Override
         public void onBeginRawDrawing(boolean shortcutErase, TouchPoint point) {
             penDownViewport = shown;
-            onMain(() -> {
-                erasingStroke = tool == Tool.ERASER || shortcutErase;
-                if (erasingStroke) {
-                    eraseRenderOff = true;
-                    syncRaw();
-                }
-            });
+            // Captured now, not when the point list arrives: a tool tap in between
+            // must not reclassify this stroke. shortcutErase is the side button.
+            Tool mode = shortcutErase ? Tool.ERASER : firmwareTool;
+            onMain(() -> beginStroke(mode));
         }
 
         @Override
         public void onEndRawDrawing(boolean shortcutErase, TouchPoint point) {
+            // The side button may already be up, and the toolbar tool may already
+            // have changed. Neither one rewrites the stroke that is in flight.
             penDownViewport = null;
-            onMain(() -> erasingStroke = tool == Tool.ERASER || shortcutErase);
         }
 
         @Override
@@ -692,31 +759,18 @@ final class PageInkView extends FrameLayout {
             }
             ArrayList<TouchPoint> points = InkRenderer.copyPoints(touchPointList.getPoints());
             InkViewport drawnOn = penDownViewport != null ? penDownViewport : shown;
-            onMain(() -> {
-                if (erasingStroke || tool == Tool.ERASER) {
-                    eraseStrokes(points, drawnOn);
-                } else if (tool == Tool.LASSO) {
-                    finishLasso(points, drawnOn);
-                } else {
-                    addStroke(points, drawnOn);
-                }
-            });
+            onMain(() -> commitPoints(points, drawnOn, false));
         }
 
         @Override
         public void onBeginRawErasing(boolean shortcutErase, TouchPoint point) {
             penDownViewport = shown;
-            onMain(() -> {
-                erasingStroke = true;
-                eraseRenderOff = true;
-                syncRaw();
-            });
+            onMain(() -> beginStroke(Tool.ERASER));
         }
 
         @Override
         public void onEndRawErasing(boolean shortcutErase, TouchPoint point) {
             penDownViewport = null;
-            onMain(() -> erasingStroke = true);
         }
 
         @Override
@@ -730,19 +784,65 @@ final class PageInkView extends FrameLayout {
             }
             ArrayList<TouchPoint> points = InkRenderer.copyPoints(touchPointList.getPoints());
             InkViewport drawnOn = penDownViewport != null ? penDownViewport : shown;
-            onMain(() -> eraseStrokes(points, drawnOn));
+            onMain(() -> commitPoints(points, drawnOn, true));
         }
 
         @Override
         public void onPenUpRefresh(RectF refreshRect) {
             main.post(() -> {
+                penLifted = true;
+                if (pointsCommitted || strokeTool == null) {
+                    closeStroke();
+                }
                 requestFrame(false, refreshRect, UpdateMode.HAND_WRITING_REPAINT_MODE);
-                eraseRenderOff = false;
-                erasingStroke = tool == Tool.ERASER;
-                syncRaw();
             });
         }
     };
+
+    private void beginStroke(Tool mode) {
+        strokeTool = mode;
+        strokeOpen = true;
+        pointsCommitted = false;
+        penLifted = false;
+        // Side button while the pen tool is selected: stop fountain render for this
+        // stroke only. The toolbar eraser already has render off, and turning raw
+        // drawing off here would drop the stroke.
+        if (mode == Tool.ERASER && firmwareTool != Tool.ERASER) {
+            eraseRenderOff = true;
+            syncRaw();
+        }
+    }
+
+    private void commitPoints(List<TouchPoint> points, InkViewport drawnOn, boolean eraseChannel) {
+        Tool mode = strokeTool != null ? strokeTool : firmwareTool;
+        if (eraseChannel || mode == Tool.ERASER) {
+            eraseStrokes(points, drawnOn);
+        } else if (mode == Tool.LASSO) {
+            finishLasso(points, drawnOn);
+        } else {
+            addStroke(points, drawnOn);
+        }
+        pointsCommitted = true;
+        if (penLifted) {
+            closeStroke();
+        }
+    }
+
+    /** The pen is up. Apply a tool tap that waited, and turn fountain render back on after the side button. */
+    private void closeStroke() {
+        boolean deferred = toolDeferred;
+        boolean renderOff = eraseRenderOff;
+        boolean toolLag = firmwareTool != tool;
+        strokeOpen = false;
+        strokeTool = null;
+        penLifted = false;
+        pointsCommitted = false;
+        eraseRenderOff = false;
+        toolDeferred = false;
+        if (deferred || renderOff || toolLag) {
+            pushToolStyle();
+        }
+    }
 
     /** {@code points} are in surface coordinates, drawn on the viewport shown now. */
     void addStroke(List<TouchPoint> points) {
@@ -879,7 +979,8 @@ final class PageInkView extends FrameLayout {
     }
 
     void finishLasso(List<TouchPoint> outline, InkViewport drawnOn) {
-        if (tool != Tool.LASSO || selection != null || outline.size() < 3) {
+        Tool mode = strokeTool != null ? strokeTool : tool;
+        if (mode != Tool.LASSO || selection != null || outline.size() < 3) {
             reportLasso(0);
             return;
         }
@@ -895,7 +996,9 @@ final class PageInkView extends FrameLayout {
 
     private void selectOnPage(Board page, List<TouchPoint> outline) {
         int index = shown.layout.indexOf(page.id);
-        if (tool != Tool.LASSO || selection != null || index < 0) {
+        // The outline was already accepted as a lasso stroke. A tool tap since then
+        // must not drop it; the stroke finishes as the tool it started with.
+        if (selection != null || index < 0) {
             reportLasso(0);
             return;
         }

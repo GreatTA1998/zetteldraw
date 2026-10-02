@@ -1173,6 +1173,14 @@ public final class CanvasActivity extends Activity {
         styleTool(penButton, tool == PageInkView.Tool.PEN);
         styleTool(eraserButton, tool == PageInkView.Tool.ERASER);
         styleTool(lassoButton, tool == PageInkView.Tool.LASSO);
+        // A style change takes the firmware pen down until it is applied. The buttons
+        // stay pressable the whole time, including the one that is already selected.
+        penButton.setEnabled(true);
+        penButton.setClickable(true);
+        eraserButton.setEnabled(true);
+        eraserButton.setClickable(true);
+        lassoButton.setEnabled(true);
+        lassoButton.setClickable(true);
         inkView.setTool(tool);
         if (tool == PageInkView.Tool.LASSO) {
             showHint(getString(R.string.lasso_hint), false);

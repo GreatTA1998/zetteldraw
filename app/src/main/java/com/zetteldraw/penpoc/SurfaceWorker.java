@@ -40,6 +40,35 @@ final class SurfaceWorker {
     interface Host {
         /** Main thread: a frame was painted (or skipped because the surface is gone). */
         void onFramePainted(long frameId, boolean full);
+
+        /**
+         * Main thread: {@code epoch}'s stroke style is on the device and raw drawing is off,
+         * so turning the pen back on cannot paint the previous tool.
+         */
+        default void onStyleReady(int epoch) {
+        }
+    }
+
+    /**
+     * The Onyx calls that change how live ink looks. Production uses {@link TouchHelper};
+     * tests set {@link #rawPenForTest} so the order of those calls can be asserted.
+     */
+    interface RawPen {
+        void open(Rect limit, List<Rect> excludes);
+
+        void close();
+
+        void setLimit(Rect limit, List<Rect> excludes);
+
+        void setHandwritingPenState(int state);
+
+        void setStyle(Style style);
+
+        void setRawDrawingEnabled(boolean enabled);
+
+        void setRawDrawingRenderEnabled(boolean enabled);
+
+        void enableSideBtnErase(boolean enabled);
     }
 
     /** How live ink looks; applied as a whole whenever it changes or the pen comes on. */
@@ -125,6 +154,8 @@ final class SurfaceWorker {
     private List<Rect> wantExcludes = new ArrayList<>();
     private Style wantStyle;
     private int wantPenState = Integer.MIN_VALUE;
+    /** Bumped by the view whenever the stroke style must actually change. */
+    private int wantEpoch;
     private Frame pendingFrame;
     private final ArrayList<Runnable> whenOff = new ArrayList<>();
     private boolean scheduled;
@@ -133,12 +164,17 @@ final class SurfaceWorker {
     private long retryDelay = RETRY_MIN_MS;
 
     // Applied state, worker thread only.
-    private TouchHelper helper;
+    private RawPen device;
     private boolean enabled;
     private Rect limit;
     private List<Rect> excludes;
     private Style style;
     private int penState = Integer.MIN_VALUE;
+    /** Epoch whose style has been written. -1 until the first one. */
+    private int appliedEpoch = -1;
+
+    /** Tests: every new pen uses this instead of TouchHelper. */
+    static volatile RawPen rawPenForTest;
 
     private volatile String busyOp;
     private volatile long busySince;
@@ -166,13 +202,14 @@ final class SurfaceWorker {
 
     /** The pen as the main thread wants it now; cheap, never blocks. */
     synchronized void setPen(boolean open, boolean on, Rect limitRect, List<Rect> exclude, Style inkStyle,
-                             int handwritingPenState) {
+                             int handwritingPenState, int styleEpoch) {
         wantOpen = open && !closed;
         wantEnabled = wantOpen && on;
         wantLimit = new Rect(limitRect);
         wantExcludes = new ArrayList<>(exclude);
         wantStyle = inkStyle;
         wantPenState = handwritingPenState;
+        wantEpoch = styleEpoch;
         kickLocked();
     }
 
@@ -232,6 +269,7 @@ final class SurfaceWorker {
             List<Rect> exc;
             Style st;
             int pen;
+            int epoch;
             Frame frame;
             synchronized (this) {
                 if (!dirty) {
@@ -248,14 +286,15 @@ final class SurfaceWorker {
                 exc = wantExcludes;
                 st = wantStyle;
                 pen = wantPenState;
+                epoch = wantEpoch;
                 frame = pendingFrame;
                 pendingFrame = null;
                 if (frame != null && frame.full) {
                     on = false;
                 }
             }
-            if (frame != null && helper == null) {
-                // No TouchHelper yet means the pen is off: paint first, so the first picture
+            if (frame != null && device == null) {
+                // No pen yet means raw drawing is off: paint first, so the first picture
                 // of the notes never waits for the Onyx setup below.
                 paintNow(frame);
                 Frame done = frame;
@@ -263,7 +302,7 @@ final class SurfaceWorker {
                 frame = null;
             }
             try {
-                applyPen(open, on, lim, exc, st, pen);
+                applyPen(open, on, lim, exc, st, pen, epoch);
                 retryDelay = RETRY_MIN_MS;
             } catch (RuntimeException | LinkageError e) {
                 Log.w(TAG, "Onyx pen call failed; retrying in " + retryDelay + " ms", e);
@@ -275,6 +314,12 @@ final class SurfaceWorker {
                 if (!enabled && !whenOff.isEmpty()) {
                     offActions = new ArrayList<>(whenOff);
                     whenOff.clear();
+                }
+                // A newer tool arrived while this pass ran. Apply it before painting,
+                // so a slow frame cannot keep the firmware on the previous style.
+                if (dirty && frame != null) {
+                    pendingFrame = pendingFrame == null ? frame : frame.mergedWith(pendingFrame);
+                    frame = null;
                 }
             }
             if (offActions != null) {
@@ -300,71 +345,186 @@ final class SurfaceWorker {
         }, delay);
     }
 
-    private void applyPen(boolean open, boolean on, Rect lim, List<Rect> exc, Style st, int pen) {
+    private void applyPen(boolean open, boolean on, Rect lim, List<Rect> exc, Style st, int pen, int epoch) {
         if (!open) {
-            if (helper != null) {
-                TouchHelper closing = helper;
-                helper = null;
+            if (device != null) {
+                RawPen closing = device;
+                device = null;
                 enabled = false;
                 style = null;
                 limit = null;
                 excludes = null;
-                call("closeRawDrawing", closing::closeRawDrawing);
+                closing.close();
             }
             return;
         }
-        if (helper == null) {
-            TouchHelper created = timed("TouchHelper.create", () -> TouchHelper.create(surfaceView, callback));
-            call("openRawDrawing", () -> created.setStrokeWidth(InkRenderer.BASE_WIDTH_PX)
-                    .setStrokeColor(Color.BLACK)
-                    .setLimitRect(lim, exc)
-                    .openRawDrawing());
-            helper = created;
-            limit = new Rect(lim);
-            excludes = new ArrayList<>(exc);
-            call("setPenUpRefreshEnabled", () -> created.setPenUpRefreshEnabled(true));
-            call("enableFingerTouch", () -> created.enableFingerTouch(false));
-            call("enableSideBtnErase", () -> created.enableSideBtnErase(true));
-            call("setRawDrawingEnabled", () -> created.setRawDrawingEnabled(false));
-            enabled = false;
-        }
-        TouchHelper h = helper;
+        ensureDevice(lim, exc);
+        RawPen h = device;
         if (!lim.equals(limit) || !exc.equals(excludes)) {
-            call("setLimitRect", () -> h.setLimitRect(lim, exc));
+            h.setLimit(lim, exc);
             limit = new Rect(lim);
             excludes = new ArrayList<>(exc);
         }
         if (pen != penState) {
-            call("setScreenHandWritingPenState", () -> EpdController.setScreenHandWritingPenState(surfaceView, pen));
+            h.setHandwritingPenState(pen);
             penState = pen;
         }
+        boolean styleDiffers = st != null && !st.equals(style);
+        // A tool change turns raw drawing off before the new style is written, and does not
+        // turn it back on until that style is the latest one. Otherwise the firmware keeps
+        // painting fountain ink, and an older style can land after a newer one.
+        // The side-button eraser is the exception: the stroke is already down, so only the
+        // render flag changes and raw drawing stays up (disabling it would drop the stroke).
+        boolean cycle = !on || epoch != appliedEpoch;
+        if (enabled && (styleDiffers || !on) && cycle) {
+            disableRaw(h);
+            styleDiffers = st != null && !st.equals(style);
+        }
+        if (epochMoved(epoch)) {
+            return;
+        }
+        if (!enabled && styleDiffers) {
+            writeStyle(h, st);
+            if (epochMoved(epoch)) {
+                return;
+            }
+            noteEpoch(epoch);
+        } else if (enabled && on && styleDiffers) {
+            writeStyle(h, st);
+        }
+        if (epochMoved(epoch)) {
+            return;
+        }
         if (on && !enabled) {
-            applyStyle(h, st);
-            call("setRawDrawingEnabled", () -> h.setRawDrawingEnabled(true));
+            if (st != null && !st.equals(style)) {
+                writeStyle(h, st);
+            }
+            h.setRawDrawingEnabled(true);
             // Enabling raw drawing resets the side-button eraser channel.
-            call("enableSideBtnErase", () -> h.enableSideBtnErase(true));
+            h.enableSideBtnErase(true);
             enabled = true;
+            noteEpoch(epoch);
             LaunchLog.once("pen-applied", "pen enabled on the e-ink system");
         } else if (!on && enabled) {
-            call("setRawDrawingEnabled", () -> h.setRawDrawingEnabled(false));
-            call("setRawDrawingRenderEnabled", () -> h.setRawDrawingRenderEnabled(false));
-            enabled = false;
-            style = null;
-        } else if (enabled && st != null && !st.equals(style)) {
-            applyStyle(h, st);
+            disableRaw(h);
         }
     }
 
-    private void applyStyle(TouchHelper h, Style st) {
-        if (st == null) {
+    private void ensureDevice(Rect lim, List<Rect> exc) {
+        if (device != null) {
             return;
         }
-        call("setStrokeStyle", () -> h.setStrokeStyle(st.strokeStyle));
-        call("setStrokeWidth", () -> h.setStrokeWidth(st.width));
-        call("setStrokeColor", () -> h.setStrokeColor(Color.BLACK));
-        call("setBrushRawDrawingEnabled", () -> h.setBrushRawDrawingEnabled(st.brush));
-        call("setRawDrawingRenderEnabled", () -> h.setRawDrawingRenderEnabled(st.render));
+        RawPen test = rawPenForTest;
+        if (test != null) {
+            test.open(lim, exc);
+            device = test;
+        } else {
+            TouchHelper created = timed("TouchHelper.create", () -> TouchHelper.create(surfaceView, callback));
+            OnyxPen onyx = new OnyxPen(created);
+            onyx.open(lim, exc);
+            device = onyx;
+        }
+        limit = new Rect(lim);
+        excludes = new ArrayList<>(exc);
+        enabled = false;
+        style = null;
+    }
+
+    private void disableRaw(RawPen h) {
+        h.setRawDrawingEnabled(false);
+        h.setRawDrawingRenderEnabled(false);
+        enabled = false;
+        style = null;
+    }
+
+    private void writeStyle(RawPen h, Style st) {
+        h.setStyle(st);
         style = st;
+    }
+
+    /** Publishes {@code epoch} once, and only when it is still the one the main thread wants. */
+    private void noteEpoch(int epoch) {
+        if (appliedEpoch == epoch) {
+            return;
+        }
+        synchronized (this) {
+            if (wantEpoch != epoch) {
+                dirty = true;
+                return;
+            }
+        }
+        appliedEpoch = epoch;
+        main.post(() -> host.onStyleReady(epoch));
+    }
+
+    private boolean epochMoved(int epoch) {
+        synchronized (this) {
+            if (wantEpoch != epoch) {
+                dirty = true;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /** TouchHelper behind {@link RawPen}. Every call is timed like the old direct path. */
+    private final class OnyxPen implements RawPen {
+        private final TouchHelper helper;
+
+        OnyxPen(TouchHelper helper) {
+            this.helper = helper;
+        }
+
+        @Override
+        public void open(Rect limitRect, List<Rect> excludes) {
+            call("openRawDrawing", () -> helper.setStrokeWidth(InkRenderer.BASE_WIDTH_PX)
+                    .setStrokeColor(Color.BLACK)
+                    .setLimitRect(limitRect, excludes)
+                    .openRawDrawing());
+            call("setPenUpRefreshEnabled", () -> helper.setPenUpRefreshEnabled(true));
+            call("enableFingerTouch", () -> helper.enableFingerTouch(false));
+            call("enableSideBtnErase", () -> helper.enableSideBtnErase(true));
+            call("setRawDrawingEnabled", () -> helper.setRawDrawingEnabled(false));
+        }
+
+        @Override
+        public void close() {
+            call("closeRawDrawing", helper::closeRawDrawing);
+        }
+
+        @Override
+        public void setLimit(Rect limitRect, List<Rect> excludeRects) {
+            call("setLimitRect", () -> helper.setLimitRect(limitRect, excludeRects));
+        }
+
+        @Override
+        public void setHandwritingPenState(int state) {
+            call("setScreenHandWritingPenState", () -> EpdController.setScreenHandWritingPenState(surfaceView, state));
+        }
+
+        @Override
+        public void setStyle(Style st) {
+            call("setStrokeStyle", () -> helper.setStrokeStyle(st.strokeStyle));
+            call("setStrokeWidth", () -> helper.setStrokeWidth(st.width));
+            call("setStrokeColor", () -> helper.setStrokeColor(Color.BLACK));
+            call("setBrushRawDrawingEnabled", () -> helper.setBrushRawDrawingEnabled(st.brush));
+            call("setRawDrawingRenderEnabled", () -> helper.setRawDrawingRenderEnabled(st.render));
+        }
+
+        @Override
+        public void setRawDrawingEnabled(boolean on) {
+            call("setRawDrawingEnabled", () -> helper.setRawDrawingEnabled(on));
+        }
+
+        @Override
+        public void setRawDrawingRenderEnabled(boolean on) {
+            call("setRawDrawingRenderEnabled", () -> helper.setRawDrawingRenderEnabled(on));
+        }
+
+        @Override
+        public void enableSideBtnErase(boolean on) {
+            call("enableSideBtnErase", () -> helper.enableSideBtnErase(on));
+        }
     }
 
     private void paintNow(Frame frame) {
