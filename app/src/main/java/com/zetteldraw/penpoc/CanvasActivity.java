@@ -17,6 +17,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 import android.text.InputType;
 import android.text.TextUtils;
@@ -31,6 +32,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.zetteldraw.penpoc.data.BoardRepository;
@@ -40,6 +42,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * One top bar: Scratchpad | notebook tabs | +. Each collection is a continuous
@@ -103,11 +106,13 @@ public final class CanvasActivity extends Activity {
     /** Bumped by every page-list load; a background load whose number is stale is dropped. */
     private int loadGeneration;
     private int shownGeneration;
+    private boolean firstListShown;
     private final Runnable scrollSettled = this::onScrollSettled;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        LaunchLog.mark("screen created" + (savedInstanceState != null ? " (restored)" : ""));
         InkRenderer.applyBaseWidthMm(getResources().getDisplayMetrics());
         repository = ZettelData.repository(this);
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
@@ -284,6 +289,10 @@ public final class CanvasActivity extends Activity {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
         scratchpadTab = iconButton(R.drawable.ic_scratchpad, R.string.scratchpad);
         scratchpadTab.setOnClickListener(v -> openCollection(SCRATCHPAD));
+        scratchpadTab.setOnLongClickListener(v -> {
+            showLaunchLog();
+            return true;
+        });
         bar.addView(scratchpadTab, iconLp(0));
         bar.addView(barDivider(), barDividerLp());
 
@@ -563,32 +572,98 @@ public final class CanvasActivity extends Activity {
     }
 
     private void runLoad(int generation, String id, Integer keepScroll, int attempt) {
-        long deadline = Math.min(LOAD_DEADLINE_MAX_MS, FIRST_LOAD_DEADLINE_MS << Math.min(attempt, 4));
-        main.postDelayed(() -> {
-            if (generation == loadGeneration && shownGeneration != generation && !isDestroyed()) {
-                Log.w("zd-stall", "page list " + id + " not shown " + deadline + " ms after load attempt "
-                        + (attempt + 1) + "; loading again");
-                runLoad(generation, id, keepScroll, attempt + 1);
-            }
-        }, deadline);
+        // 0 = not started, > 0 = reading since that uptime, -1 = finished (shown or failed).
+        AtomicLong reading = new AtomicLong();
+        armDeadline(generation, id, keepScroll, attempt, reading, attempt);
         String notebook = SCRATCHPAD.equals(id) ? null : id;
+        String name = label(id);
         Executor executor = attempt == 0 ? UiExecutors.loader : UiExecutors.retryLoader;
+        boolean first = !firstListShown;
         try {
             executor.execute(() -> {
             List<BoardRepository.NotebookInfo> notebooks;
             List<Board> pages;
+            long started = SystemClock.uptimeMillis();
+            reading.set(started);
             try {
                 notebooks = repository.notebooks();
+                // Tabs don't wait for the page list.
+                main.post(() -> {
+                    if (generation == loadGeneration && !isDestroyed()) {
+                        rebuildNotebookTabs(notebooks);
+                    }
+                });
                 pages = repository.pages(notebook);
+                if (first) {
+                    LaunchLog.mark("page list " + name + " read: " + pages.size() + " pages ("
+                            + inked(pages) + " inked), " + notebooks.size() + " notebooks in "
+                            + (SystemClock.uptimeMillis() - started) + " ms (attempt " + (attempt + 1) + ")");
+                }
             } catch (RuntimeException e) {
+                reading.set(-1);
                 Log.e(TAG, "page list load failed; the deadline retries it", e);
+                LaunchLog.mark("page list load failed: " + e);
                 return;
             }
+            reading.set(-1);
             main.post(() -> onPagesLoaded(new Loaded(generation, id, keepScroll, notebooks, pages)));
             });
         } catch (RuntimeException e) {
             Log.e(TAG, "page list load could not start; the deadline retries it", e);
+            LaunchLog.mark("page list load could not start: " + e);
         }
+    }
+
+    /**
+     * If the list is not up by the deadline: an attempt still reading is
+     * left to finish (a second read would only compete with it for the CPU);
+     * one that failed, never started, or whose result was lost is run again.
+     */
+    private void armDeadline(int generation, String id, Integer keepScroll, int attempt, AtomicLong reading,
+                             int wait) {
+        long deadline = Math.min(LOAD_DEADLINE_MAX_MS, FIRST_LOAD_DEADLINE_MS << Math.min(wait, 4));
+        main.postDelayed(() -> {
+            if (generation != loadGeneration || shownGeneration == generation || isDestroyed()) {
+                return;
+            }
+            long since = reading.get();
+            long readFor = since > 0 ? SystemClock.uptimeMillis() - since : 0;
+            if (since > 0 && readFor < LOAD_DEADLINE_MAX_MS) {
+                LaunchLog.mark("page list " + label(id) + " still being read after " + readFor + " ms (attempt "
+                        + (attempt + 1) + ")");
+                armDeadline(generation, id, keepScroll, attempt, reading, wait + 1);
+                return;
+            }
+            String stall = "page list " + label(id) + " not shown " + deadline + " ms after load attempt "
+                    + (attempt + 1) + (since == 0 ? ", which never started" : "") + "; loading again";
+            Log.w("zd-stall", stall);
+            LaunchLog.mark(stall);
+            runLoad(generation, id, keepScroll, attempt + 1);
+        }, deadline);
+    }
+
+    private static int inked(List<Board> pages) {
+        int n = 0;
+        for (Board page : pages) {
+            if (!page.isBlank()) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    private String label(String id) {
+        if (SCRATCHPAD.equals(id)) {
+            return SCRATCHPAD;
+        }
+        if (shownNotebooks != null) {
+            for (BoardRepository.NotebookInfo each : shownNotebooks) {
+                if (each.id.equals(id)) {
+                    return "'" + each.title + "'";
+                }
+            }
+        }
+        return id;
     }
 
     private void onPagesLoaded(Loaded loaded) {
@@ -627,6 +702,11 @@ public final class CanvasActivity extends Activity {
         }
         showPages(loaded.pages, target);
         syncNav();
+        if (!firstListShown) {
+            firstListShown = true;
+            LaunchLog.mark("first page list on screen: " + label(loaded.id) + ", " + loaded.pages.size()
+                    + " pages (" + inked(loaded.pages) + " inked), " + loaded.notebooks.size() + " notebook tabs");
+        }
     }
 
     /** One finished background load. */
@@ -947,6 +1027,37 @@ public final class CanvasActivity extends Activity {
         actionsLp.topMargin = dp(8);
         box.addView(actions, actionsLp);
         showOverlay(box, anchoredLp(anchor, box), root);
+    }
+
+    /** Long-press on the Scratchpad icon: this launch's timeline and the two before it, newest first. */
+    private void showLaunchLog() {
+        LinearLayout box = panel();
+        box.addView(panelText(getString(R.string.launch_log_title), 15));
+        TextView text = new TextView(this);
+        text.setText(LaunchLog.forViewer(2));
+        text.setTextColor(Color.BLACK);
+        text.setTypeface(Typeface.MONOSPACE);
+        text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        text.setTextIsSelectable(true);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(text);
+        box.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, Math.round(root.getHeight() * 0.7f)));
+        Button close = tinyButton(getString(R.string.close), 15);
+        styleButton(close, true);
+        close.setOnClickListener(v -> dismissOverlay());
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        actions.addView(close, wrap());
+        box.addView(actions, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP;
+        lp.leftMargin = dp(8);
+        lp.rightMargin = dp(8);
+        lp.topMargin = topBar.getBottom();
+        showOverlay(box, lp, root);
     }
 
     /** The one frame of a menu or form; its rows and buttons are borderless. */

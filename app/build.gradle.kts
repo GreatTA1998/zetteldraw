@@ -13,7 +13,8 @@ android {
         versionCode = 15
         versionName = "2.4"
         ndk {
-            abiFilters += "arm64-v8a"
+            // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
+            abiFilters += if (project.hasProperty("zetteldraw.emulator")) "x86_64" else "arm64-v8a"
         }
         // Sync stays off until a server URL is set (here via -Pzetteldraw.syncUrl, or at runtime in SyncConfig).
         buildConfigField("String", "SYNC_URL", "\"${project.findProperty("zetteldraw.syncUrl") ?: ""}\"")

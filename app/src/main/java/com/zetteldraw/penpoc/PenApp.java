@@ -17,6 +17,7 @@ public final class PenApp extends Application {
     @Override
     protected void attachBaseContext(Context base) {
         super.attachBaseContext(base);
+        LaunchLog.start(this);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             HiddenApiBypass.addHiddenApiExemptions("");
         }
@@ -42,5 +43,6 @@ public final class PenApp extends Application {
             MainThreadWatchdog.start();
         }
         SyncScheduler.install(this);
+        LaunchLog.mark("app created");
     }
 }

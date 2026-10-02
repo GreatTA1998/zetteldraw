@@ -46,6 +46,11 @@ public final class SyncClient {
         return request("POST", "/sync/push", body.toString().getBytes(StandardCharsets.UTF_8));
     }
 
+    /** The on-device launch log, so it can be read from the server. */
+    public void uploadDeviceLog(JSONObject body) throws IOException {
+        request("POST", "/sync/device-log", body.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
     JSONObject pull(long since, int limit) throws IOException {
         return request("GET", "/sync/pull?since=" + since + "&limit=" + limit, null);
     }

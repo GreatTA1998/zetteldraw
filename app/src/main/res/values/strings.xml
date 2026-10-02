@@ -42,4 +42,6 @@
         <item quantity="other">Its %1$d pages move back to the Scratchpad.</item>
     </plurals>
     <string name="delete_notebook_empty">It has no pages.</string>
+    <string name="launch_log_title">Launch log (ms since the app started; newest launch first)</string>
+    <string name="close">Close</string>
 </resources>

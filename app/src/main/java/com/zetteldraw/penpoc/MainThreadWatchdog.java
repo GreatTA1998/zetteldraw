@@ -55,7 +55,9 @@ final class MainThreadWatchdog {
                 while (answered.get() < sent) {
                     sleep(POLL_MS);
                 }
-                Log.w(TAG, "main thread stall ended after " + (SystemClock.uptimeMillis() - postedAt) + " ms");
+                long stalled = SystemClock.uptimeMillis() - postedAt;
+                Log.w(TAG, "main thread stall ended after " + stalled + " ms");
+                LaunchLog.mark("main thread was blocked for " + stalled + " ms");
             }
         }, "zd-watchdog");
         thread.setDaemon(true);

@@ -1,9 +1,11 @@
 package com.zetteldraw.penpoc.data;
 
+import android.os.SystemClock;
 import android.util.Log;
 
 import com.zetteldraw.penpoc.Board;
 import com.zetteldraw.penpoc.InkRenderer;
+import com.zetteldraw.penpoc.LaunchLog;
 import com.zetteldraw.penpoc.Notebook;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
@@ -62,6 +64,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private final Object lock = new Object();
     private final HashMap<String, Board> cache = new HashMap<>();
     private final AtomicBoolean indexPending = new AtomicBoolean();
+    private final AtomicBoolean warmScheduled = new AtomicBoolean();
     /** Unsaved blank page at the end of each page list, keyed by {@link #listKey}. */
     private final HashMap<String, Board> trailingBlanks = new HashMap<>();
     /** Newest unwritten snapshot per board; present from {@link #saveInk} until the writer commits it. */
@@ -106,8 +109,18 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             lastQueuedAt = dao.maxQueuedAt();
             db.runInTransaction(this::seedNotebooks);
             ensureTrailingBlankLocked(null);
+            int inked = 0;
+            List<BoardEntity> live = dao.liveBoardsForIndex();
+            for (BoardEntity row : live) {
+                if (row.inkHash != null) {
+                    inked++;
+                }
+            }
+            SyncState state = dao.syncState();
+            LaunchLog.mark("storage ready: " + dao.liveNotebooks().size() + " notebooks, " + live.size()
+                    + " pages (" + inked + " inked), outbox " + dao.outboxCount() + ", sync cursor "
+                    + (state == null ? "none" : state.cursor));
         }
-        writer.execute(this::warmCache);
     }
 
     // region BoardRepository
@@ -123,23 +136,88 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
+    /**
+     * Ink of pages not yet in memory is read and decoded without the lock,
+     * so a large list never blocks the notebook list, saves or other loads.
+     * Only pages that keep changing under it (two rounds) decode under the lock.
+     */
     @Override
     public List<Board> pages(String notebookId) {
-        synchronized (lock) {
-            if (notebookId != null) {
-                NotebookEntity notebook = dao.notebook(notebookId);
-                if (notebook == null || notebook.deletedAt != null) {
-                    return new ArrayList<>();
+        List<Board> pages = null;
+        for (int round = 0; pages == null; round++) {
+            List<BoardEntity> uncached;
+            synchronized (lock) {
+                if (notebookId != null) {
+                    NotebookEntity notebook = dao.notebook(notebookId);
+                    if (notebook == null || notebook.deletedAt != null) {
+                        return new ArrayList<>();
+                    }
+                }
+                ensureTrailingBlankLocked(notebookId);
+                List<BoardEntity> rows = rowsLocked(notebookId);
+                uncached = uncachedInkLocked(rows);
+                if (uncached.isEmpty() || round >= 2) {
+                    pages = toBoards(rows);
+                    Board blank = trailingBlanks.get(listKey(notebookId));
+                    if (blank != null) {
+                        pages.add(blank);
+                    }
+                    continue;
                 }
             }
-            ensureTrailingBlankLocked(notebookId);
-            List<Board> pages = toBoards(rowsLocked(notebookId));
-            Board blank = trailingBlanks.get(listKey(notebookId));
-            if (blank != null) {
-                pages.add(blank);
-            }
-            return pages;
+            decodeIntoCache(uncached);
         }
+        scheduleWarmCache();
+        return pages;
+    }
+
+    private List<BoardEntity> uncachedInkLocked(List<BoardEntity> rows) {
+        ArrayList<BoardEntity> uncached = new ArrayList<>();
+        for (BoardEntity row : rows) {
+            if (row.inkHash != null && !cache.containsKey(row.id)) {
+                uncached.add(row);
+            }
+        }
+        return uncached;
+    }
+
+    /**
+     * Reads and decodes each row's ink without the lock, then caches it only
+     * if the row still has that ink and nothing cached the board meanwhile.
+     * Returns how many boards it cached.
+     */
+    private int decodeIntoCache(List<BoardEntity> rows) {
+        int cached = 0;
+        for (BoardEntity row : rows) {
+            synchronized (lock) {
+                if (cache.containsKey(row.id)) {
+                    continue;
+                }
+            }
+            byte[] bytes = readInkQuietly(row.id);
+            if (bytes == null) {
+                continue;
+            }
+            String hash = InkFileStore.sha256(bytes);
+            List<InkRenderer.InkStroke> strokes;
+            try {
+                strokes = InkCodec.decode(bytes);
+            } catch (IOException e) {
+                continue;
+            }
+            synchronized (lock) {
+                BoardEntity now = dao.board(row.id);
+                if (cache.containsKey(row.id) || now == null || now.deletedAt != null
+                        || !hash.equals(now.inkHash)) {
+                    continue;
+                }
+                Board board = new Board(row.id, now.createdAt);
+                board.strokes.addAll(strokes);
+                cache.put(row.id, board);
+                cached++;
+            }
+        }
+        return cached;
     }
 
     /**
@@ -293,45 +371,39 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Writer thread, once at startup: decodes every live page into the cache
-     * so opening a notebook does not read and decode ink files on the UI thread.
+     * Writer thread, at startup: decodes every live page into the cache so
+     * switching lists rarely waits on ink files. One page per writer task, so
+     * an ink save queued meanwhile is written after at most one page.
      */
+    /** After the first page list is read, so warming never competes with what the screen waits for. */
+    private void scheduleWarmCache() {
+        if (warmScheduled.compareAndSet(false, true)) {
+            writer.execute(this::warmCache);
+        }
+    }
+
     private void warmCache() {
+        long started = SystemClock.uptimeMillis();
         List<BoardEntity> rows;
         synchronized (lock) {
-            rows = dao.liveBoardsForIndex();
-        }
-        for (BoardEntity row : rows) {
-            if (row.inkHash == null || row.conflictOf != null) {
-                continue;
-            }
-            synchronized (lock) {
-                if (cache.containsKey(row.id)) {
-                    continue;
+            rows = new ArrayList<>();
+            for (BoardEntity row : dao.liveBoardsForIndex()) {
+                if (row.inkHash != null && row.conflictOf == null) {
+                    rows.add(row);
                 }
             }
-            byte[] bytes = readInkQuietly(row.id);
-            if (bytes == null) {
-                continue;
-            }
-            String hash = InkFileStore.sha256(bytes);
-            List<InkRenderer.InkStroke> strokes;
-            try {
-                strokes = InkCodec.decode(bytes);
-            } catch (IOException e) {
-                continue;
-            }
-            synchronized (lock) {
-                BoardEntity now = dao.board(row.id);
-                if (cache.containsKey(row.id) || now == null || now.deletedAt != null
-                        || !hash.equals(now.inkHash)) {
-                    continue;
-                }
-                Board board = new Board(row.id, now.createdAt);
-                board.strokes.addAll(strokes);
-                cache.put(row.id, board);
-            }
         }
+        warmNext(rows, 0, 0, started);
+    }
+
+    private void warmNext(List<BoardEntity> rows, int index, int decoded, long started) {
+        if (index >= rows.size()) {
+            LaunchLog.mark("ink cache warm: " + decoded + " of " + rows.size() + " inked pages decoded in "
+                    + (SystemClock.uptimeMillis() - started) + " ms");
+            return;
+        }
+        int now = decoded + decodeIntoCache(Collections.singletonList(rows.get(index)));
+        writer.execute(() -> warmNext(rows, index + 1, now, started));
     }
 
     @Override
@@ -685,13 +757,17 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             batch = new ArrayList<>(pendingRefresh.values());
             pendingRefresh.clear();
         }
+        int swapped = 0;
         for (Refresh r : batch) {
             // A page drawn on since the pull decided keeps the local strokes; that save wins on push.
             if (Objects.equals(localEdits.get(r.board.id), r.editsSeen)) {
                 r.board.strokes.clear();
                 r.board.strokes.addAll(r.strokes);
+                swapped++;
             }
         }
+        LaunchLog.mark("sync result on screen: " + swapped + " pages' ink replaced, " + remoteListeners.size()
+                + " screens refreshed");
         for (Runnable listener : remoteListeners) {
             listener.run();
         }
@@ -1179,11 +1255,16 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         Board board = new Board(row.id, row.createdAt);
         if (row.inkHash != null) {
             byte[] bytes = readInkQuietly(row.id);
-            if (bytes != null) {
+            if (bytes == null) {
+                LaunchLog.mark("ink file missing for page " + row.id + "; shown blank");
+            } else {
                 try {
                     board.strokes.addAll(InkCodec.decode(bytes));
                 } catch (IOException e) {
+                    // Shown blank, so the next stroke would overwrite it: keep the bytes aside first.
                     Log.e(TAG, "unreadable ink " + row.id, e);
+                    LaunchLog.mark("unreadable ink for page " + row.id + " (" + e.getMessage() + "); copy kept as "
+                            + ink.preserve(row.id, bytes));
                 }
             }
         }
@@ -1196,6 +1277,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return ink.read(boardId);
         } catch (IOException e) {
             Log.e(TAG, "ink read failed " + boardId, e);
+            LaunchLog.mark("ink read failed for page " + boardId + ": " + e);
             return null;
         }
     }

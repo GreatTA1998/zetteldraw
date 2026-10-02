@@ -254,11 +254,20 @@ final class SurfaceWorker {
                     on = false;
                 }
             }
+            if (frame != null && helper == null) {
+                // No TouchHelper yet means the pen is off: paint first, so the first picture
+                // of the notes never waits for the Onyx setup below.
+                paintNow(frame);
+                Frame done = frame;
+                main.post(() -> host.onFramePainted(done.id, done.full));
+                frame = null;
+            }
             try {
                 applyPen(open, on, lim, exc, st, pen);
                 retryDelay = RETRY_MIN_MS;
             } catch (RuntimeException | LinkageError e) {
                 Log.w(TAG, "Onyx pen call failed; retrying in " + retryDelay + " ms", e);
+                LaunchLog.once("onyx-failed", "Onyx pen call failed (retried with backoff): " + e);
                 scheduleRetry();
             }
             ArrayList<Runnable> offActions = null;
@@ -335,6 +344,7 @@ final class SurfaceWorker {
             // Enabling raw drawing resets the side-button eraser channel.
             call("enableSideBtnErase", () -> h.enableSideBtnErase(true));
             enabled = true;
+            LaunchLog.once("pen-applied", "pen enabled on the e-ink system");
         } else if (!on && enabled) {
             call("setRawDrawingEnabled", () -> h.setRawDrawingEnabled(false));
             call("setRawDrawingRenderEnabled", () -> h.setRawDrawingRenderEnabled(false));
@@ -421,6 +431,7 @@ final class SurfaceWorker {
             long ms = SystemClock.uptimeMillis() - started;
             if (ms >= SLOW_CALL_MS) {
                 Log.w(TAG, "surface call " + name + " took " + ms + " ms");
+                LaunchLog.mark("slow surface call " + name + ": " + ms + " ms");
             }
         }
     }

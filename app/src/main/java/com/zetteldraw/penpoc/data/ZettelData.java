@@ -5,6 +5,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.util.Log;
 
+import com.zetteldraw.penpoc.LaunchLog;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 
 import java.io.File;
@@ -24,6 +25,7 @@ public final class ZettelData {
 
     public static synchronized RoomBoardRepository repository(Context context) {
         if (repository == null) {
+            LaunchLog.mark("storage opening");
             Context app = context.getApplicationContext();
             InkMirror mirror;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

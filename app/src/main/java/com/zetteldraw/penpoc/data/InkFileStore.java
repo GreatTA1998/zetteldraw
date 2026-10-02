@@ -74,6 +74,18 @@ public class InkFileStore {
         return buf;
     }
 
+    /** Writes {@code bytes} to a side file the app never reads or deletes; returns its name, or null. */
+    public String preserve(String boardId, byte[] bytes) {
+        File copy = new File(dir, boardId + ".unreadable-" + System.currentTimeMillis());
+        try (FileOutputStream out = new FileOutputStream(copy)) {
+            out.write(bytes);
+            out.getFD().sync();
+            return copy.getName();
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     public void delete(String boardId) {
         //noinspection ResultOfMethodCallIgnored
         fileFor(boardId).delete();

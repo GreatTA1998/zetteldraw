@@ -113,6 +113,7 @@ final class PageInkView extends FrameLayout {
     private final Runnable applyViewport = this::applyViewport;
     /** What raw drawing was last asked to be. */
     private boolean rawOn;
+    private boolean penEverOn;
     private boolean live;
     private final EnumSet<Hold> holds = EnumSet.noneOf(Hold.class);
     private boolean paused;
@@ -185,6 +186,15 @@ final class PageInkView extends FrameLayout {
     private void requestViewport(InkViewport next) {
         requested = next;
         boolean inkWasLive = rawOn;
+        if (shown.isEmpty() && !penEverOn) {
+            // Nothing was ever on screen to draw on, so no stroke can be waiting for the old
+            // geometry: show the first list now instead of waiting for the surface worker,
+            // whose first pass creates the Onyx TouchHelper.
+            main.removeCallbacks(applyViewport);
+            main.post(applyViewport);
+            applyPosted = true;
+            return;
+        }
         if (!next.mapsLike(shown)) {
             syncRaw();
             if (!applyPosted) {
@@ -235,9 +245,12 @@ final class PageInkView extends FrameLayout {
                 renderingLayout = next.layout;
                 int width = surfaceView.getWidth();
                 UiExecutors.renderer.execute(() -> {
+                    long started = SystemClock.uptimeMillis();
                     for (RenderJob job : jobs) {
                         job.bitmap = renderPage(job.strokes, width, job.height);
                     }
+                    LaunchLog.once("render", "first screen of pages rendered: " + jobs.size() + " pages in "
+                            + (SystemClock.uptimeMillis() - started) + " ms");
                     main.post(() -> finishRender(token, jobs));
                 });
                 return;
@@ -513,6 +526,7 @@ final class PageInkView extends FrameLayout {
 
     /** Package-private so tests can stand in for the SurfaceView callbacks. */
     void onSurface(boolean ready) {
+        LaunchLog.once("surface", "drawing surface " + (ready ? "created" : "destroyed before it was created"));
         surfaceReady = ready;
         if (ready) {
             requestFrame(true, null, null);
@@ -557,6 +571,10 @@ final class PageInkView extends FrameLayout {
 
     private void onFramePainted(long id, boolean full) {
         if (full) {
+            if (!shown.isEmpty()) {
+                LaunchLog.once("frame", "first full frame with pages painted: " + shown.layout.pages.size()
+                        + " pages in the list");
+            }
             fullFramesPainted++;
             if (id == fullFrameId) {
                 fullFrameId = 0;
@@ -618,6 +636,10 @@ final class PageInkView extends FrameLayout {
     private void syncRaw() {
         boolean on = canInk() && surfaceVisible() && fullFrameId == 0;
         rawOn = on;
+        if (on) {
+            penEverOn = true;
+            LaunchLog.once("pen", "pen on");
+        }
         boolean lasso = tool == Tool.LASSO;
         boolean eraser = tool == Tool.ERASER;
         SurfaceWorker.Style style = new SurfaceWorker.Style(
@@ -841,9 +863,7 @@ final class PageInkView extends FrameLayout {
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         bitmap.eraseColor(Color.WHITE);
         Canvas canvas = new Canvas(bitmap);
-        for (InkRenderer.InkStroke stroke : strokes) {
-            InkRenderer.draw(canvas, ink, stroke);
-        }
+        InkRenderer.drawAll(canvas, ink, strokes);
         return bitmap;
     }
 
@@ -907,18 +927,18 @@ final class PageInkView extends FrameLayout {
         Bitmap base = Bitmap.createBitmap(width, shown.layout.heights[index], Bitmap.Config.ARGB_8888);
         base.eraseColor(Color.WHITE);
         Canvas baseCanvas = new Canvas(base);
+        ArrayList<InkRenderer.InkStroke> rest = new ArrayList<>();
         for (InkRenderer.InkStroke stroke : page.strokes) {
             if (!ids.contains(stroke.id)) {
-                InkRenderer.draw(baseCanvas, paint, stroke);
+                rest.add(stroke);
             }
         }
+        InkRenderer.drawAll(baseCanvas, paint, rest);
         Bitmap sprite = Bitmap.createBitmap(Math.max(1, spriteRect.width()), Math.max(1, spriteRect.height()),
                 Bitmap.Config.ARGB_8888);
         Canvas spriteCanvas = new Canvas(sprite);
         spriteCanvas.translate(-spriteRect.left, -spriteRect.top);
-        for (InkRenderer.InkStroke stroke : picked) {
-            InkRenderer.draw(spriteCanvas, paint, stroke);
-        }
+        InkRenderer.drawAll(spriteCanvas, paint, picked);
         selection = new Selection(page, index, ids, new RectF(spriteRect), base, sprite);
         setPenState(EpdPenManager.PEN_PAUSE);
         requestFrame(true, null, UpdateMode.GC);
