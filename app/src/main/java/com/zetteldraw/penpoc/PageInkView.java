@@ -11,6 +11,7 @@ import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -84,8 +85,21 @@ final class PageInkView extends FrameLayout {
     private final LinkedHashMap<String, Bitmap> bitmaps = new LinkedHashMap<>(8, 0.75f, true);
     private final InkHistory history = new InkHistory();
     private final Handler main = new Handler(Looper.getMainLooper());
-    private TouchHelper touchHelper;
+    private final SurfaceWorker worker;
     private Listener listener;
+    /** The SurfaceView has a surface (between surfaceCreated and surfaceDestroyed). */
+    private boolean surfaceReady;
+    /** The window is on screen; nothing is painted or inked while it is not. */
+    private boolean windowVisible;
+    private long frameSeq;
+    /** Id of the full repaint not yet on screen, or 0; the pen stays off until it is. */
+    private long fullFrameId;
+    private int fullFramesPainted;
+    private int handwritingPenState = Integer.MIN_VALUE;
+    /** Eraser pass in progress: the SDK must not draw ink for it. */
+    private boolean eraseRenderOff;
+    private static final long PEN_OFF_DEADLINE_MS = 1_000;
+    private final Runnable applyDespiteStuckPen = this::applyDespiteStuckPen;
     /** What the surface shows; pen points convert through this. Written on the main thread only. */
     private volatile InkViewport shown = InkViewport.EMPTY;
     /** {@link #shown} when the current pen stroke went down; touched only on the SDK's callback thread. */
@@ -97,10 +111,8 @@ final class PageInkView extends FrameLayout {
     private InkViewport requested;
     private boolean applyPosted;
     private final Runnable applyViewport = this::applyViewport;
-    /** What raw drawing was last set to, so repeated calls cost no Onyx IPC. */
+    /** What raw drawing was last asked to be. */
     private boolean rawOn;
-    private Rect appliedLimit;
-    private List<Rect> appliedExcludes;
     private boolean live;
     private final EnumSet<Hold> holds = EnumSet.noneOf(Hold.class);
     private boolean paused;
@@ -131,6 +143,7 @@ final class PageInkView extends FrameLayout {
         surfaceView.setOnTouchListener((View v, MotionEvent event) -> isStylus(event));
         addView(surfaceView, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         surfaceView.getHolder().addCallback(surfaceCallback);
+        worker = new SurfaceWorker(surfaceView, rawInputCallback, this::onFramePainted);
     }
 
     void setListener(Listener listener) {
@@ -173,7 +186,16 @@ final class PageInkView extends FrameLayout {
         requested = next;
         boolean inkWasLive = rawOn;
         if (!next.mapsLike(shown)) {
-            pauseScribble();
+            syncRaw();
+            if (!applyPosted) {
+                // Applied once the worker has really switched the pen off, so it lands behind every
+                // stroke the SDK read before that; a stuck worker only delays it by the deadline.
+                applyPosted = true;
+                worker.whenPenOff(applyViewport);
+                main.removeCallbacks(applyDespiteStuckPen);
+                main.postDelayed(applyDespiteStuckPen, PEN_OFF_DEADLINE_MS);
+            }
+            return;
         }
         if (!applyPosted || inkWasLive) {
             // Re-post so the change also lands behind strokes the pen sent since the last post.
@@ -188,8 +210,16 @@ final class PageInkView extends FrameLayout {
      * {@link #requested} stays set meanwhile, so the pen stays paused and the
      * old picture stays up until the new one can be painted in one go.
      */
+    private void applyDespiteStuckPen() {
+        if (applyPosted && requested != null) {
+            Log.w("zd-stall", "pen did not report off within " + PEN_OFF_DEADLINE_MS + " ms; applying the new viewport");
+            applyViewport();
+        }
+    }
+
     private void applyViewport() {
         applyPosted = false;
+        main.removeCallbacks(applyDespiteStuckPen);
         InkViewport next = requested;
         if (next == null) {
             return;
@@ -296,7 +326,7 @@ final class PageInkView extends FrameLayout {
                 Map.Entry<String, Bitmap> entry = it.next();
                 int index = shown.layout.indexOf(entry.getKey());
                 if (index < 0 || entry.getValue().getHeight() != shown.layout.heights[index]) {
-                    entry.getValue().recycle();
+                    // Not recycled: a queued frame may still draw it; the GC frees it.
                     it.remove();
                 }
             }
@@ -316,16 +346,12 @@ final class PageInkView extends FrameLayout {
     }
 
     void invalidatePage(String pageId) {
-        Bitmap bitmap = bitmaps.remove(pageId);
-        if (bitmap != null) {
-            bitmap.recycle();
-        }
+        bitmaps.remove(pageId);
     }
 
+    /** Full repaint; the pen stays off until it is on screen. */
     void redrawAll() {
-        pauseScribble();
-        blit(null, null);
-        resumeScribble();
+        requestFrame(true, null, null);
     }
 
     void setExtraExcludeRects(List<Rect> rects) {
@@ -338,9 +364,7 @@ final class PageInkView extends FrameLayout {
             cancelSelection();
         }
         tool = next;
-        if (touchHelper != null) {
-            applyLiveInk();
-        }
+        syncRaw();
     }
 
     Tool tool() {
@@ -406,21 +430,13 @@ final class PageInkView extends FrameLayout {
     }
 
     void setLive(boolean on) {
-        if (live == on) {
+        if (live != on) {
+            live = on;
             if (on) {
-                resumeScribble();
+                requestFrame(true, null, null);
             }
-            return;
         }
-        live = on;
-        if (on) {
-            if (surfaceView.getHolder().getSurface().isValid()) {
-                blit(null, null);
-                openRawDrawing();
-            }
-        } else {
-            closeRawDrawing();
-        }
+        syncRaw();
     }
 
     /** Stop raw ink until {@link #release} of the same reason. */
@@ -439,9 +455,18 @@ final class PageInkView extends FrameLayout {
         return rawInputCallback;
     }
 
-    /** Whether raw ink would be on right now (with a TouchHelper open). */
+    /** Whether ink is allowed now (holds, lasso, pending geometry); the surface gate comes on top. */
     boolean inkEnabled() {
         return canInk();
+    }
+
+    /** Whether the pen is actually asked to be on: allowed, surface visible and its last full repaint up. */
+    boolean penOn() {
+        return rawOn;
+    }
+
+    int fullFramesPainted() {
+        return fullFramesPainted;
     }
 
     void pauseLive() {
@@ -458,68 +483,129 @@ final class PageInkView extends FrameLayout {
         removeCallbacks(resumeAfterLasso);
         removeCallbacks(dragFrame);
         main.removeCallbacks(applyViewport);
+        main.removeCallbacks(applyDespiteStuckPen);
         applyPosted = false;
         renderToken = null;
         renderingLayout = null;
         endSelection();
-        closeRawDrawing();
-        for (Bitmap bitmap : bitmaps.values()) {
-            bitmap.recycle();
-        }
+        live = false;
+        worker.close();
         bitmaps.clear();
     }
 
     private final SurfaceHolder.Callback surfaceCallback = new SurfaceHolder.Callback() {
         @Override
         public void surfaceCreated(SurfaceHolder holder) {
-            blit(null, null);
-            if (live) {
-                openRawDrawing();
-            }
+            onSurface(true);
         }
 
         @Override
         public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             updateExcludeRects();
+            requestFrame(true, null, null);
         }
 
         @Override
         public void surfaceDestroyed(SurfaceHolder holder) {
-            closeRawDrawing();
+            onSurface(false);
         }
     };
 
-    private void openRawDrawing() {
-        if (!live) {
-            return;
+    /** Package-private so tests can stand in for the SurfaceView callbacks. */
+    void onSurface(boolean ready) {
+        surfaceReady = ready;
+        if (ready) {
+            requestFrame(true, null, null);
         }
-        if (touchHelper != null) {
-            touchHelper.closeRawDrawing();
-        }
-        Rect limit = canvasLimit();
-        touchHelper = TouchHelper.create(surfaceView, rawInputCallback);
-        touchHelper.setStrokeWidth(InkRenderer.BASE_WIDTH_PX)
-                .setStrokeColor(Color.BLACK)
-                .setLimitRect(limit, excludeRects)
-                .openRawDrawing();
-        appliedLimit = limit;
-        appliedExcludes = new ArrayList<>(excludeRects);
-        applyLiveInk();
-        touchHelper.setPenUpRefreshEnabled(true);
-        touchHelper.enableFingerTouch(false);
-        touchHelper.enableSideBtnErase(true);
-        rawOn = canInk();
-        touchHelper.setRawDrawingEnabled(rawOn);
+        syncRaw();
     }
 
-    private void closeRawDrawing() {
-        if (touchHelper != null) {
-            touchHelper.closeRawDrawing();
-            touchHelper = null;
+    @Override
+    protected void onWindowVisibilityChanged(int visibility) {
+        super.onWindowVisibilityChanged(visibility);
+        boolean visible = visibility == View.VISIBLE;
+        if (visible == windowVisible) {
+            return;
         }
-        rawOn = false;
-        appliedLimit = null;
-        appliedExcludes = null;
+        windowVisible = visible;
+        if (visible) {
+            requestFrame(true, null, null);
+        }
+        syncRaw();
+    }
+
+    private boolean surfaceVisible() {
+        return surfaceReady && windowVisible;
+    }
+
+    /**
+     * Queues a picture of the visible pages for the worker. Nothing is
+     * queued while the surface is not visible; becoming visible repaints in
+     * full. A full repaint holds the pen off until {@link #onFramePainted}.
+     */
+    private void requestFrame(boolean full, RectF dirty, UpdateMode mode) {
+        if (!surfaceVisible() || surfaceView.getWidth() <= 0) {
+            return;
+        }
+        long id = ++frameSeq;
+        if (full) {
+            fullFrameId = id;
+            syncRaw();
+        }
+        worker.paint(buildFrame(id, full, dirty, mode));
+    }
+
+    private void onFramePainted(long id, boolean full) {
+        if (full) {
+            fullFramesPainted++;
+            if (id == fullFrameId) {
+                fullFrameId = 0;
+                syncRaw();
+            }
+        }
+    }
+
+    private SurfaceWorker.Frame buildFrame(long id, boolean full, RectF dirty, UpdateMode mode) {
+        Rect area = null;
+        if (!full && dirty != null && !dirty.isEmpty()) {
+            area = new Rect();
+            dirty.roundOut(area);
+            int pad = (int) Math.ceil(InkRenderer.BASE_WIDTH_PX * 2f);
+            area.inset(-pad, -pad);
+        }
+        ArrayList<Bitmap> layers = new ArrayList<>();
+        ArrayList<Float> lefts = new ArrayList<>();
+        ArrayList<Float> tops = new ArrayList<>();
+        RectF box = null;
+        InkViewport view = shown;
+        int last = view.lastVisible(surfaceView.getHeight());
+        for (int index = view.firstVisible(); index <= last && !view.isEmpty(); index++) {
+            float top = view.pageTop(index);
+            if (selection != null && selection.index == index) {
+                Selection sel = selection;
+                layers.add(sel.base);
+                lefts.add(0f);
+                tops.add(top);
+                layers.add(sel.sprite);
+                lefts.add(sel.bounds.left + sel.dx);
+                tops.add(top + sel.bounds.top + sel.dy);
+                box = boxOnSurface(sel);
+                continue;
+            }
+            Bitmap bitmap = bitmapFor(view.page(index), view.layout.heights[index]);
+            if (bitmap != null) {
+                layers.add(bitmap);
+                lefts.add(0f);
+                tops.add(top);
+            }
+        }
+        float[] l = new float[layers.size()];
+        float[] t = new float[layers.size()];
+        for (int i = 0; i < l.length; i++) {
+            l[i] = lefts.get(i);
+            t[i] = tops.get(i);
+        }
+        return new SurfaceWorker.Frame(id, full, area, mode, layers, l, t, box, new Paint(boxPaint));
     }
 
     /** The single gate for raw drawing: every resume path asks this. */
@@ -528,37 +614,17 @@ final class PageInkView extends FrameLayout {
                 && !shown.isEmpty();
     }
 
-    /** Brings raw drawing in line with {@link #canInk()}; no IPC when it already is. */
+    /** Hands the pen state the main thread wants to the worker; the worker skips calls that change nothing. */
     private void syncRaw() {
-        if (touchHelper == null) {
-            return;
-        }
-        boolean on = canInk();
-        if (on == rawOn) {
-            return;
-        }
+        boolean on = canInk() && surfaceVisible() && fullFrameId == 0;
         rawOn = on;
-        if (on) {
-            applyLiveInk();
-            touchHelper.setRawDrawingEnabled(true);
-            // Enabling raw drawing resets the side-button eraser channel.
-            touchHelper.enableSideBtnErase(true);
-        } else {
-            touchHelper.setRawDrawingEnabled(false);
-        }
-    }
-
-    private void applyLiveInk() {
-        if (touchHelper == null) {
-            return;
-        }
         boolean lasso = tool == Tool.LASSO;
         boolean eraser = tool == Tool.ERASER;
-        touchHelper.setStrokeStyle(lasso ? TouchHelper.STROKE_STYLE_DASH : TouchHelper.STROKE_STYLE_FOUNTAIN);
-        touchHelper.setStrokeWidth(lasso ? Math.max(2f, InkRenderer.BASE_WIDTH_PX * 0.5f) : InkRenderer.BASE_WIDTH_PX);
-        touchHelper.setStrokeColor(Color.BLACK);
-        touchHelper.setBrushRawDrawingEnabled(!eraser);
-        touchHelper.setRawDrawingRenderEnabled(!eraser);
+        SurfaceWorker.Style style = new SurfaceWorker.Style(
+                lasso ? TouchHelper.STROKE_STYLE_DASH : TouchHelper.STROKE_STYLE_FOUNTAIN,
+                lasso ? Math.max(2f, InkRenderer.BASE_WIDTH_PX * 0.5f) : InkRenderer.BASE_WIDTH_PX,
+                !eraser, !eraser && !eraseRenderOff);
+        worker.setPen(live && surfaceReady, on, canvasLimit(), excludeRects, style, handwritingPenState);
     }
 
     /**
@@ -580,8 +646,9 @@ final class PageInkView extends FrameLayout {
             penDownViewport = shown;
             onMain(() -> {
                 erasingStroke = tool == Tool.ERASER || shortcutErase;
-                if (erasingStroke && touchHelper != null) {
-                    touchHelper.setRawDrawingRenderEnabled(false);
+                if (erasingStroke) {
+                    eraseRenderOff = true;
+                    syncRaw();
                 }
             });
         }
@@ -619,9 +686,8 @@ final class PageInkView extends FrameLayout {
             penDownViewport = shown;
             onMain(() -> {
                 erasingStroke = true;
-                if (touchHelper != null) {
-                    touchHelper.setRawDrawingRenderEnabled(false);
-                }
+                eraseRenderOff = true;
+                syncRaw();
             });
         }
 
@@ -648,9 +714,10 @@ final class PageInkView extends FrameLayout {
         @Override
         public void onPenUpRefresh(RectF refreshRect) {
             main.post(() -> {
-                blit(refreshRect, UpdateMode.HAND_WRITING_REPAINT_MODE);
-                applyLiveInk();
+                requestFrame(false, refreshRect, UpdateMode.HAND_WRITING_REPAINT_MODE);
+                eraseRenderOff = false;
                 erasingStroke = tool == Tool.ERASER;
+                syncRaw();
             });
         }
     };
@@ -753,14 +820,12 @@ final class PageInkView extends FrameLayout {
         return bitmap;
     }
 
+    /** Evicted bitmaps are not recycled: a queued frame may still draw them; the GC frees them. */
     private void putBitmap(String pageId, Bitmap bitmap) {
-        Bitmap old = bitmaps.remove(pageId);
-        if (old != null && old != bitmap) {
-            old.recycle();
-        }
+        bitmaps.remove(pageId);
         while (bitmaps.size() >= BITMAP_CACHE_SIZE) {
             Iterator<Map.Entry<String, Bitmap>> it = bitmaps.entrySet().iterator();
-            it.next().getValue().recycle();
+            it.next();
             it.remove();
         }
         bitmaps.put(pageId, bitmap);
@@ -780,53 +845,6 @@ final class PageInkView extends FrameLayout {
             InkRenderer.draw(canvas, ink, stroke);
         }
         return bitmap;
-    }
-
-    /** Paints visible pages into {@code refreshRect} (whole surface if null), optionally in an EPD mode. */
-    private void blit(RectF refreshRect, UpdateMode mode) {
-        SurfaceHolder holder = surfaceView.getHolder();
-        if (holder == null || !holder.getSurface().isValid()) {
-            return;
-        }
-        Rect renderRect = new Rect();
-        if (refreshRect != null && !refreshRect.isEmpty()) {
-            refreshRect.roundOut(renderRect);
-            int pad = (int) Math.ceil(InkRenderer.BASE_WIDTH_PX * 2f);
-            renderRect.inset(-pad, -pad);
-        } else {
-            renderRect.set(0, 0, surfaceView.getWidth(), surfaceView.getHeight());
-        }
-        if (mode != null) {
-            EpdController.setViewDefaultUpdateMode(surfaceView, mode);
-        }
-        Canvas canvas = holder.lockCanvas(renderRect);
-        if (canvas == null) {
-            if (mode != null) {
-                EpdController.resetViewUpdateMode(surfaceView);
-            }
-            return;
-        }
-        try {
-            canvas.drawColor(Color.WHITE);
-            InkViewport view = shown;
-            int last = view.lastVisible(surfaceView.getHeight());
-            for (int index = view.firstVisible(); index <= last && !view.isEmpty(); index++) {
-                float top = view.pageTop(index);
-                if (selection != null && selection.index == index) {
-                    drawSelection(canvas, top);
-                    continue;
-                }
-                Bitmap bitmap = bitmapFor(view.page(index), view.layout.heights[index]);
-                if (bitmap != null) {
-                    canvas.drawBitmap(bitmap, 0f, top, null);
-                }
-            }
-        } finally {
-            holder.unlockCanvasAndPost(canvas);
-            if (mode != null) {
-                EpdController.resetViewUpdateMode(surfaceView);
-            }
-        }
     }
 
     // ---- Lasso ----
@@ -881,8 +899,6 @@ final class PageInkView extends FrameLayout {
             return false;
         }
         cancelResume();
-        pauseScribble();
-        setPenState(EpdPenManager.PEN_PAUSE);
         Set<String> ids = Lasso.idsOf(picked);
         RectF bounds = Lasso.boundsOf(picked);
         Rect spriteRect = new Rect();
@@ -904,16 +920,9 @@ final class PageInkView extends FrameLayout {
             InkRenderer.draw(spriteCanvas, paint, stroke);
         }
         selection = new Selection(page, index, ids, new RectF(spriteRect), base, sprite);
-        blit(null, UpdateMode.GC);
+        setPenState(EpdPenManager.PEN_PAUSE);
+        requestFrame(true, null, UpdateMode.GC);
         return true;
-    }
-
-    private void drawSelection(Canvas canvas, float pageTop) {
-        Selection s = selection;
-        canvas.drawBitmap(s.base, 0f, pageTop, null);
-        canvas.drawBitmap(s.sprite, s.bounds.left + s.dx, pageTop + s.bounds.top + s.dy, null);
-        RectF box = boxOnSurface(s);
-        canvas.drawRect(box, boxPaint);
     }
 
     /** Dashed box around the (possibly dragged) selection, in surface coordinates. */
@@ -957,9 +966,6 @@ final class PageInkView extends FrameLayout {
                 s.downX = x;
                 s.downY = y;
                 s.drawnBox = boxOnSurface(s);
-                if (s.dragging) {
-                    EpdController.setViewDefaultUpdateMode(surfaceView, UpdateMode.ANIMATION_MONO);
-                }
                 break;
             }
             case MotionEvent.ACTION_MOVE:
@@ -1008,18 +1014,17 @@ final class PageInkView extends FrameLayout {
             dirty.union(s.drawnBox);
         }
         s.drawnBox = box;
-        blit(dirty, null);
+        requestFrame(false, dirty, UpdateMode.ANIMATION_MONO);
     }
 
     private void commitSelection() {
         Selection s = selection;
         removeCallbacks(dragFrame);
-        EpdController.resetViewUpdateMode(surfaceView);
         RectF dirty = touchedArea(s);
         Lasso.Move move = Lasso.move(s.page, s.ids, s.dx, s.dy);
         endSelection();
         invalidatePage(s.page.id);
-        blit(dirty, UpdateMode.GC);
+        requestFrame(false, dirty, UpdateMode.GC);
         scheduleResume();
         if (move == null) {
             if (listener != null) {
@@ -1051,10 +1056,9 @@ final class PageInkView extends FrameLayout {
             return;
         }
         removeCallbacks(dragFrame);
-        EpdController.resetViewUpdateMode(surfaceView);
         RectF dirty = touchedArea(s);
         endSelection();
-        blit(dirty, UpdateMode.GC);
+        requestFrame(false, dirty, UpdateMode.GC);
         scheduleResume();
         if (listener != null) {
             listener.onLassoCancelled();
@@ -1065,9 +1069,9 @@ final class PageInkView extends FrameLayout {
         if (selection == null) {
             return;
         }
-        selection.base.recycle();
-        selection.sprite.recycle();
+        // Not recycled: a queued frame may still draw them.
         selection = null;
+        syncRaw();
     }
 
     private void scheduleResume() {
@@ -1091,11 +1095,8 @@ final class PageInkView extends FrameLayout {
     }
 
     private void setPenState(int state) {
-        try {
-            EpdController.setScreenHandWritingPenState(surfaceView, state);
-        } catch (RuntimeException | LinkageError ignored) {
-            // Not an Onyx device.
-        }
+        handwritingPenState = state;
+        syncRaw();
     }
 
     private static final class Selection {
@@ -1124,34 +1125,14 @@ final class PageInkView extends FrameLayout {
         }
     }
 
-    /** Raw drawing off regardless of {@link #canInk()}, e.g. while the surface is repainted. */
-    private void pauseScribble() {
-        if (touchHelper == null || !rawOn) {
-            return;
-        }
-        rawOn = false;
-        touchHelper.setRawDrawingEnabled(false);
-        touchHelper.setRawDrawingRenderEnabled(false);
-    }
-
     private void resumeScribble() {
         syncRaw();
     }
 
-    /** Only calls into TouchHelper when the limit or exclusions actually changed. */
     private void updateExcludeRects() {
         excludeRects.clear();
         excludeRects.addAll(extraExcludeRects);
-        if (touchHelper == null) {
-            return;
-        }
-        Rect limit = canvasLimit();
-        if (limit.equals(appliedLimit) && Objects.equals(excludeRects, appliedExcludes)) {
-            return;
-        }
-        appliedLimit = limit;
-        appliedExcludes = new ArrayList<>(excludeRects);
-        touchHelper.setLimitRect(limit, excludeRects);
+        syncRaw();
     }
 
     private Rect canvasLimit() {

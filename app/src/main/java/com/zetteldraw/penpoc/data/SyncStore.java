@@ -25,6 +25,13 @@ public interface SyncStore {
 
     int outboxSize();
 
+    /** Pulls between begin and end reach the UI as one refresh when the outermost batch ends. */
+    default void beginRemoteBatch() {
+    }
+
+    default void endRemoteBatch() {
+    }
+
     final class PushBatch {
         public final List<NotebookEntity> notebooks = new ArrayList<>();
         public final List<BoardEntity> boards = new ArrayList<>();

@@ -27,6 +27,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
@@ -65,9 +67,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /** Newest unwritten snapshot per board; present from {@link #saveInk} until the writer commits it. */
     private final HashMap<String, PendingInk> pendingInk = new HashMap<>();
     /** Count of local saves per board, never reset; a pull refresh skips boards edited since it decided. */
-    private final HashMap<String, Long> localEdits = new HashMap<>();
+    private final ConcurrentHashMap<String, Long> localEdits = new ConcurrentHashMap<>();
     private long lastQueuedAt;
-    private volatile Runnable remoteListener;
+    private final CopyOnWriteArrayList<Runnable> remoteListeners = new CopyOnWriteArrayList<>();
+    private final Object refreshLock = new Object();
+    /** Pulled strokes not yet put on screen, newest per board; delivered in one UI turn. */
+    private final LinkedHashMap<String, Refresh> pendingRefresh = new LinkedHashMap<>();
+    private int remoteBatchDepth;
+    private boolean refreshChanged;
+    private boolean refreshPosted;
 
     private final Object mirrorLock = new Object();
     /** Latest bytes per board still to mirror ({@link #MIRROR_DELETE} = delete); a slow mirror coalesces. */
@@ -466,7 +474,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void setRemoteChangeListener(Runnable listener) {
-        remoteListener = listener;
+        remoteListeners.clear();
+        if (listener != null) {
+            remoteListeners.add(listener);
+        }
     }
 
     // endregion
@@ -588,6 +599,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     public void applyPull(PullPage page) throws IOException {
         HashMap<String, List<InkRenderer.InkStroke>> refreshed = new HashMap<>();
         HashMap<String, Long> editsSeen = new HashMap<>();
+        HashMap<String, Board> boardsSeen = new HashMap<>();
         HashMap<String, Staged> staged = new HashMap<>();
         try {
             for (BoardEntity remote : page.boards) {
@@ -611,35 +623,107 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 }
                 staged.put(remote.id, new Staged(ink.stage(remote.id, "pull", bytes), bytes, strokes));
             }
-            applyPullLocked(page, staged, refreshed, editsSeen);
+            applyPullLocked(page, staged, refreshed, editsSeen, boardsSeen);
         } finally {
             for (Staged s : staged.values()) {
                 ink.discard(s.file);
             }
         }
         if (!page.boards.isEmpty() || !page.notebooks.isEmpty()) {
-            ui.execute(() -> {
-                synchronized (lock) {
-                    for (Map.Entry<String, List<InkRenderer.InkStroke>> e : refreshed.entrySet()) {
-                        Board board = cache.get(e.getKey());
-                        // A page drawn on since the pull decided keeps the local strokes; that save wins on push.
-                        if (board != null && Objects.equals(localEdits.get(e.getKey()), editsSeen.get(e.getKey()))) {
-                            board.strokes.clear();
-                            board.strokes.addAll(e.getValue());
-                        }
+            boolean post;
+            synchronized (refreshLock) {
+                for (Map.Entry<String, List<InkRenderer.InkStroke>> e : refreshed.entrySet()) {
+                    Board board = boardsSeen.get(e.getKey());
+                    if (board != null) {
+                        pendingRefresh.remove(e.getKey());
+                        pendingRefresh.put(e.getKey(), new Refresh(board, e.getValue(), editsSeen.get(e.getKey())));
                     }
                 }
-                Runnable listener = remoteListener;
-                if (listener != null) {
-                    listener.run();
-                }
-            });
+                refreshChanged = true;
+                post = remoteBatchDepth == 0 && !refreshPosted;
+                refreshPosted |= post;
+            }
+            if (post) {
+                ui.execute(this::deliverRemoteChanges);
+            }
+        }
+    }
+
+    /**
+     * Sync calls this around a whole pass so its pulled pages reach the
+     * screen as one refresh at the end, not one per page.
+     */
+    @Override
+    public void beginRemoteBatch() {
+        synchronized (refreshLock) {
+            remoteBatchDepth++;
+        }
+    }
+
+    @Override
+    public void endRemoteBatch() {
+        boolean post;
+        synchronized (refreshLock) {
+            remoteBatchDepth = Math.max(0, remoteBatchDepth - 1);
+            post = remoteBatchDepth == 0 && refreshChanged && !refreshPosted;
+            refreshPosted |= post;
+        }
+        if (post) {
+            ui.execute(this::deliverRemoteChanges);
+        }
+    }
+
+    /**
+     * UI thread, at most one queued at a time: swaps pulled strokes into the
+     * shared boards and tells each screen once. Takes no repository lock.
+     */
+    private void deliverRemoteChanges() {
+        ArrayList<Refresh> batch;
+        synchronized (refreshLock) {
+            refreshPosted = false;
+            refreshChanged = false;
+            batch = new ArrayList<>(pendingRefresh.values());
+            pendingRefresh.clear();
+        }
+        for (Refresh r : batch) {
+            // A page drawn on since the pull decided keeps the local strokes; that save wins on push.
+            if (Objects.equals(localEdits.get(r.board.id), r.editsSeen)) {
+                r.board.strokes.clear();
+                r.board.strokes.addAll(r.strokes);
+            }
+        }
+        for (Runnable listener : remoteListeners) {
+            listener.run();
+        }
+    }
+
+    @Override
+    public void addRemoteChangeListener(Runnable listener) {
+        if (listener != null) {
+            remoteListeners.addIfAbsent(listener);
+        }
+    }
+
+    @Override
+    public void removeRemoteChangeListener(Runnable listener) {
+        remoteListeners.remove(listener);
+    }
+
+    private static final class Refresh {
+        final Board board;
+        final List<InkRenderer.InkStroke> strokes;
+        final Long editsSeen;
+
+        Refresh(Board board, List<InkRenderer.InkStroke> strokes, Long editsSeen) {
+            this.board = board;
+            this.strokes = strokes;
+            this.editsSeen = editsSeen;
         }
     }
 
     private void applyPullLocked(PullPage page, Map<String, Staged> staged,
                                  Map<String, List<InkRenderer.InkStroke>> refreshed,
-                                 Map<String, Long> editsSeen) throws IOException {
+                                 Map<String, Long> editsSeen, Map<String, Board> boardsSeen) throws IOException {
         synchronized (lock) {
             for (BoardEntity remote : page.boards) {
                 if (remote.inkHash == null || remote.deletedAt != null || page.blobs.containsKey(remote.inkHash)) {
@@ -686,6 +770,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             for (String id : refreshed.keySet()) {
                 editsSeen.put(id, localEdits.get(id));
+                Board board = cache.get(id);
+                if (board != null) {
+                    boardsSeen.put(id, board);
+                }
             }
             if (!page.boards.isEmpty() || !page.notebooks.isEmpty()) {
                 scheduleIndex();

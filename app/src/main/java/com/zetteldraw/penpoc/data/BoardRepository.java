@@ -63,8 +63,17 @@ public interface BoardRepository {
      */
     void deleteNotebook(String notebookId);
 
-    /** Runs on the UI thread after sync pulled changes in. Null to clear. */
+    /** Replaces every remote-change listener with this one (null clears them). Tests and single-screen tools. */
     void setRemoteChangeListener(Runnable listener);
+
+    /**
+     * Runs on the UI thread after sync pulled changes in, once per sync pass.
+     * Each screen adds its own and removes only its own, so one screen
+     * closing can't silence another.
+     */
+    void addRemoteChangeListener(Runnable listener);
+
+    void removeRemoteChangeListener(Runnable listener);
 
     final class NotebookInfo {
         public final String id;

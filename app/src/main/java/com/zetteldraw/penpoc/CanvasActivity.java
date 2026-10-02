@@ -15,6 +15,9 @@ import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -36,6 +39,7 @@ import com.zetteldraw.penpoc.data.ZettelData;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.concurrent.Executor;
 
 /**
  * One top bar: Scratchpad | notebook tabs | +. Each collection is a continuous
@@ -85,6 +89,17 @@ public final class CanvasActivity extends Activity {
     private boolean scrolling;
     private boolean pagesLoaded;
     private int pendingScrollY = -1;
+    private static final long FIRST_LOAD_DEADLINE_MS = 1_000;
+    private static final long LOAD_DEADLINE_MAX_MS = 8_000;
+    private static final String TAG = "zd-canvas";
+    private final Handler main = new Handler(Looper.getMainLooper());
+    private final Runnable remoteChanged = this::onRemoteChange;
+    /** The page list on screen, for re-laying it out when the page height changes. */
+    private List<Board> currentPages;
+    /** A loaded list waiting for the drawing area to have a size. */
+    private Loaded awaitingLayout;
+    private Integer pendingKeepScroll;
+    private List<BoardRepository.NotebookInfo> shownNotebooks;
     /** Bumped by every page-list load; a background load whose number is stale is dropped. */
     private int loadGeneration;
     private int shownGeneration;
@@ -197,20 +212,47 @@ public final class CanvasActivity extends Activity {
         drawingArea.addView(scroller, matchMatch());
 
 
-        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            if (pageHeight == 0 && root.getHeight() > 0 && drawingArea.getHeight() > 0) {
-                legacyPageHeight = root.getHeight();
-                pageHeight = Math.min(legacyPageHeight, drawingArea.getHeight() - pageGap);
-                root.post(() -> openCollection(collectionId));
-            }
-        });
+        drawingArea.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> onDrawingAreaLaidOut());
 
         setContentView(root);
-        repository.setRemoteChangeListener(this::onRemoteChange);
+        repository.addRemoteChangeListener(remoteChanged);
         setTool(PageInkView.Tool.PEN);
         syncHistory();
         syncNav();
         inkView.setLive(true);
+        // Unconditionally, before any layout: the list is shown as soon as the drawing area has a size.
+        openCollection(collectionId);
+    }
+
+    /**
+     * Page height follows the drawing area: recomputed on every size change,
+     * not fixed by the first layout. Sizes too small to hold a page are ignored.
+     */
+    private void onDrawingAreaLaidOut() {
+        int area = drawingArea.getHeight();
+        int window = root.getHeight();
+        if (area <= pageGap * 2 || window <= 0) {
+            return;
+        }
+        int next = Math.min(window, area - pageGap);
+        if (next == pageHeight && window == legacyPageHeight) {
+            return;
+        }
+        boolean first = pageHeight == 0;
+        pageHeight = next;
+        legacyPageHeight = window;
+        main.post(() -> {
+            if (isDestroyed()) {
+                return;
+            }
+            if (awaitingLayout != null) {
+                Loaded loaded = awaitingLayout;
+                awaitingLayout = null;
+                show(loaded);
+            } else if (!first && currentPages != null && !loading()) {
+                layoutPages(currentPages, scroller.getScrollY());
+            }
+        });
     }
 
     @Override
@@ -227,7 +269,7 @@ public final class CanvasActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        repository.setRemoteChangeListener(null);
+        repository.removeRemoteChangeListener(remoteChanged);
         scroller.removeCallbacks(scrollSettled);
         toolHint.removeCallbacks(clearHint);
         inkView.close();
@@ -259,7 +301,7 @@ public final class CanvasActivity extends Activity {
         addButton.setContentDescription(getString(R.string.new_notebook));
         addButton.setPadding(dp(8), 0, dp(8), dp(2));
         addButton.setOnClickListener(v -> showNameForm(null, null, addButton));
-        rebuildNotebookTabs();
+        rebuildNotebookTabs(null);
         return bar;
     }
 
@@ -354,10 +396,20 @@ public final class CanvasActivity extends Activity {
     }
 
     private void rebuildNotebookTabs() {
+        rebuildNotebookTabs(repository.notebooks());
+    }
+
+    /** {@code notebooks} null: not loaded yet, so only + shows. */
+    private void rebuildNotebookTabs(List<BoardRepository.NotebookInfo> notebooks) {
+        if (notebooks != null && sameNotebooks(notebooks)) {
+            return;
+        }
+        shownNotebooks = notebooks == null ? null : new ArrayList<>(notebooks);
         notebookStrip.removeAllViews();
         notebookTabs.clear();
-        List<BoardRepository.NotebookInfo> notebooks = repository.notebooks();
-        if (notebooks.isEmpty()) {
+        if (notebooks == null) {
+            notebooks = new ArrayList<>();
+        } else if (notebooks.isEmpty()) {
             TextView hint = new TextView(this);
             hint.setText(R.string.no_notebooks_bar);
             hint.setTextColor(Color.BLACK);
@@ -380,24 +432,38 @@ public final class CanvasActivity extends Activity {
         styleTabs();
     }
 
-    /** Sync pulled changes: notebooks may have been added, renamed or deleted elsewhere. */
+    private boolean sameNotebooks(List<BoardRepository.NotebookInfo> notebooks) {
+        if (shownNotebooks == null || shownNotebooks.size() != notebooks.size()) {
+            return false;
+        }
+        for (int i = 0; i < notebooks.size(); i++) {
+            BoardRepository.NotebookInfo a = shownNotebooks.get(i);
+            BoardRepository.NotebookInfo b = notebooks.get(i);
+            if (!a.id.equals(b.id) || !a.title.equals(b.title)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Once per sync pass: notebooks and the open list are reloaded off the
+     * main thread, keeping the scroll; the pen is not held for it.
+     */
     private void onRemoteChange() {
-        rebuildNotebookTabs();
-        if (!pagesLoaded) {
-            syncNav();
+        if (isDestroyed()) {
             return;
         }
-        if (!SCRATCHPAD.equals(collectionId) && tabFor(collectionId) == null) {
-            openNotebooks();
-        } else {
-            reloadPages(scroller.getScrollY());
-            syncNav();
-        }
+        Integer keep = loading() ? pendingKeepScroll : Integer.valueOf(scroller.getScrollY());
+        startLoad(collectionId, keep, false);
     }
 
     /** Reopens the last notebook, else the first; the Scratchpad when none are left. */
     private void openNotebooks() {
-        List<BoardRepository.NotebookInfo> notebooks = repository.notebooks();
+        openNotebooks(repository.notebooks());
+    }
+
+    private void openNotebooks(List<BoardRepository.NotebookInfo> notebooks) {
         String target = null;
         for (BoardRepository.NotebookInfo each : notebooks) {
             if (each.id.equals(notebookId)) {
@@ -470,12 +536,7 @@ public final class CanvasActivity extends Activity {
         if (!id.equals(collectionId)) {
             inkView.clearHistory();
         }
-        if (pageHeight == 0) {
-            collectionId = id;
-            syncNav();
-            return;
-        }
-        if (pagesLoaded) {
+        if (pagesLoaded && !loading()) {
             scrollByCollection.put(collectionId, scroller.getScrollY());
         }
         pagesLoaded = true;
@@ -483,29 +544,103 @@ public final class CanvasActivity extends Activity {
         syncNav();
         // The tab is marked now; its pages load off the main thread, so a tap never waits on
         // storage. The old pages stay up with the pen held until the new ones replace them.
+        startLoad(id, null, true);
+    }
+
+    /**
+     * Loads the notebooks and one page list off the main thread. Nothing can
+     * leave it unshown: if the list is not up by the deadline the load runs
+     * again on a fresh thread, with a longer deadline each time, until it is.
+     * {@code keepScroll} null means the list's remembered position.
+     */
+    private void startLoad(String id, Integer keepScroll, boolean holdPen) {
         int generation = ++loadGeneration;
-        inkView.hold(PageInkView.Hold.LOADING);
+        pendingKeepScroll = keepScroll;
+        if (holdPen) {
+            inkView.hold(PageInkView.Hold.LOADING);
+        }
+        runLoad(generation, id, keepScroll, 0);
+    }
+
+    private void runLoad(int generation, String id, Integer keepScroll, int attempt) {
+        long deadline = Math.min(LOAD_DEADLINE_MAX_MS, FIRST_LOAD_DEADLINE_MS << Math.min(attempt, 4));
+        main.postDelayed(() -> {
+            if (generation == loadGeneration && shownGeneration != generation && !isDestroyed()) {
+                Log.w("zd-stall", "page list " + id + " not shown " + deadline + " ms after load attempt "
+                        + (attempt + 1) + "; loading again");
+                runLoad(generation, id, keepScroll, attempt + 1);
+            }
+        }, deadline);
         String notebook = SCRATCHPAD.equals(id) ? null : id;
-        UiExecutors.loader.execute(() -> {
-            List<Board> pages = repository.pages(notebook);
-            root.post(() -> onPagesLoaded(generation, id, pages));
+        Executor executor = attempt == 0 ? UiExecutors.loader : UiExecutors.retryLoader;
+        executor.execute(() -> {
+            List<BoardRepository.NotebookInfo> notebooks;
+            List<Board> pages;
+            try {
+                notebooks = repository.notebooks();
+                pages = repository.pages(notebook);
+            } catch (RuntimeException e) {
+                Log.e(TAG, "page list load failed; the deadline retries it", e);
+                return;
+            }
+            main.post(() -> onPagesLoaded(new Loaded(generation, id, keepScroll, notebooks, pages)));
         });
     }
 
-    private void onPagesLoaded(int generation, String id, List<Board> pages) {
-        if (generation != loadGeneration || isDestroyed()) {
+    private void onPagesLoaded(Loaded loaded) {
+        if (loaded.generation != loadGeneration || shownGeneration == loaded.generation || isDestroyed()) {
             return;
         }
-        Integer saved = scrollByCollection.get(id);
-        int target = 0;
-        if (saved != null) {
-            target = saved;
-        } else if (SCRATCHPAD.equals(id)) {
-            for (int i = 0; i < pages.size() - 1; i++) {
-                target += heightOf(pages.get(i)) + pageGap;
+        rebuildNotebookTabs(loaded.notebooks);
+        if (!SCRATCHPAD.equals(loaded.id) && tabFor(loaded.id) == null) {
+            // The notebook went away (deleted elsewhere).
+            openNotebooks(loaded.notebooks);
+            return;
+        }
+        if (pageHeight == 0) {
+            awaitingLayout = loaded;
+            return;
+        }
+        show(loaded);
+    }
+
+    private void show(Loaded loaded) {
+        if (loaded.generation != loadGeneration || shownGeneration == loaded.generation) {
+            return;
+        }
+        int target;
+        if (loaded.keepScroll != null) {
+            target = loaded.keepScroll;
+        } else if (scrollByCollection.containsKey(loaded.id)) {
+            target = scrollByCollection.get(loaded.id);
+        } else {
+            target = 0;
+            if (SCRATCHPAD.equals(loaded.id)) {
+                for (int i = 0; i < loaded.pages.size() - 1; i++) {
+                    target += heightOf(loaded.pages.get(i)) + pageGap;
+                }
             }
         }
-        showPages(pages, target);
+        showPages(loaded.pages, target);
+        syncNav();
+    }
+
+    /** One finished background load. */
+    private static final class Loaded {
+        final int generation;
+        final String id;
+        final Integer keepScroll;
+        final List<BoardRepository.NotebookInfo> notebooks;
+        final List<Board> pages;
+
+        Loaded(int generation, String id, Integer keepScroll, List<BoardRepository.NotebookInfo> notebooks,
+               List<Board> pages) {
+            this.generation = generation;
+            this.id = id;
+            this.keepScroll = keepScroll;
+            this.notebooks = notebooks;
+            this.pages = pages;
+        }
     }
 
     private boolean loading() {
@@ -519,7 +654,14 @@ public final class CanvasActivity extends Activity {
 
     private void showPages(List<Board> pages, int targetScrollY) {
         shownGeneration = loadGeneration;
+        awaitingLayout = null;
         inkView.release(PageInkView.Hold.LOADING);
+        layoutPages(pages, targetScrollY);
+    }
+
+    /** Builds the page slots and ink layout for {@code pages}; needs a page height. */
+    private void layoutPages(List<Board> pages, int targetScrollY) {
+        currentPages = pages;
         pageColumn.removeAllViews();
         slots.clear();
         int[] heights = new int[pages.size()];
