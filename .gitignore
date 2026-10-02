@@ -8,6 +8,7 @@ local.properties
 captures/
 .cxx/
 *.apk
+!web/src/app/apk/zetteldraw.apk/
 *.ap_
 *.aab
 *.dex
