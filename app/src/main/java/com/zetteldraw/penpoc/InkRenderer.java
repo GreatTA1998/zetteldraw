@@ -57,6 +57,17 @@ public final class InkRenderer {
         return new InkStroke(id, points, widthsFor(points));
     }
 
+    /**
+     * A piece of a stroke that was already measured. Widths are kept, not
+     * recomputed, so a cut does not grow a new taper tip.
+     */
+    public static InkStroke strokeWithWidths(String id, ArrayList<TouchPoint> points, float[] widths) {
+        if (widths == null || widths.length != points.size()) {
+            return strokeOwning(id, points);
+        }
+        return new InkStroke(id, points, Arrays.copyOf(widths, widths.length));
+    }
+
     static void draw(Canvas canvas, Paint paint, InkStroke stroke) {
         if (stroke != null) {
             drawAll(canvas, paint, Collections.singletonList(stroke));
@@ -338,8 +349,8 @@ public final class InkRenderer {
         public final String id;
         public final ArrayList<TouchPoint> points;
         final float[] widths;
-        final RectF bounds;
-        final float maxWidth;
+        public final RectF bounds;
+        public final float maxWidth;
 
         InkStroke(String id, ArrayList<TouchPoint> points, float[] widths) {
             this.id = id;
@@ -363,6 +374,10 @@ public final class InkRenderer {
                 point.y += dy;
             }
             return new InkStroke(id, moved, widths);
+        }
+
+        public float[] widthCopy() {
+            return Arrays.copyOf(widths, widths.length);
         }
     }
 }

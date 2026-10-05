@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { needsConflictCopy, resolveBoard, resolveNotebook, type BoardRow } from "../../src/lww.js";
+import { needsConflictCopy, resolveBoard, resolveLog, resolveNotebook, type BoardRow, type LogRow } from "../../src/lww.js";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const HASH_A = "a".repeat(64);
@@ -103,6 +103,47 @@ describe("needsConflictCopy", () => {
     expect(needsConflictCopy(a, a)).toBe(false);
     expect(needsConflictCopy({ ...a, ink_hash: null }, a)).toBe(false);
     expect(needsConflictCopy(a, { ...a, deleted_at: 1 })).toBe(true);
+  });
+});
+
+describe("resolveLog", () => {
+  function log(over: Partial<LogRow> = {}): LogRow {
+    return {
+      id: ID,
+      notebook_id: null,
+      ink_hash: HASH_A,
+      ink_bytes: 40,
+      slice_height: 1420,
+      conflict_of: null,
+      created_at: 1,
+      updated_at: 100,
+      deleted_at: null,
+      rev: 5,
+      ...over,
+    };
+  }
+
+  it("shelves the other log whole and does not split it", () => {
+    const { rev: _rev, ...row } = log({ ink_hash: HASH_B, ink_bytes: 80, updated_at: 200 });
+    const won = resolveLog(log({ rev: 9 }), { ...row, base_rev: 4 }, newId);
+    expect(won.status).toBe("conflict_won");
+    expect(won.write?.ink_hash).toBe(HASH_B);
+    expect(won.copy).toMatchObject({
+      id: newId(),
+      conflict_of: ID,
+      ink_hash: HASH_A,
+      ink_bytes: 40,
+      slice_height: 1420,
+      deleted_at: null,
+    });
+    expect(won.copy).not.toHaveProperty("rev");
+
+    const lost = resolveLog(log({ rev: 9 }), { ...row, updated_at: 50, base_rev: 4 }, newId);
+    expect(lost.status).toBe("conflict_lost");
+    expect(lost.write).toBeNull();
+    expect(lost.restamp).toBe(true);
+    expect(lost.copy?.ink_hash).toBe(HASH_B);
+    expect(lost.copy?.ink_bytes).toBe(80);
   });
 });
 

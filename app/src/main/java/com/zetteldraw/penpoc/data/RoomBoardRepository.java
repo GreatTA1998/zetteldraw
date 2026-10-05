@@ -9,6 +9,7 @@ import com.zetteldraw.penpoc.LaunchLog;
 import com.zetteldraw.penpoc.Notebook;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
 import com.zetteldraw.penpoc.data.db.SyncState;
 import com.zetteldraw.penpoc.data.db.ZettelDao;
@@ -85,6 +86,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private final LinkedHashMap<String, byte[]> mirrorQueue = new LinkedHashMap<>();
     private boolean mirrorDraining;
 
+    /** Open notebook logs, keyed by sheet id. The pen appends; it does not rewrite them. */
+    private final HashMap<String, OpenSheet> sheets = new HashMap<>();
+    private int knownPageHeight;
+    private int knownLegacyHeight;
+    private long knownShortPagesSince;
+
     public RoomBoardRepository(ZettelDatabase db, InkFileStore ink, InkMirror mirror,
                                Executor background, Executor ui, LongSupplier clock) {
         this(db, ink, mirror, background, background, ui, clock);
@@ -143,6 +150,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      */
     @Override
     public List<Board> pages(String notebookId) {
+        synchronized (lock) {
+            OpenSheet sheet = sheets.get(NotebookPaper.sheetId(notebookId));
+            if (sheet != null && sheet.ready) {
+                return projectLocked(notebookId, sheet.paper);
+            }
+        }
         List<Board> pages = null;
         for (int round = 0; pages == null; round++) {
             List<BoardEntity> uncached;
@@ -228,6 +241,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     @Override
     public void saveInk(Board page) {
         if (page == null) {
+            return;
+        }
+        if (page.paper != null) {
+            writer.execute(() -> flushSheet(page.sheetId));
             return;
         }
         List<InkRenderer.InkStroke> snapshot = Collections.unmodifiableList(new ArrayList<>(page.strokes));
@@ -408,6 +425,25 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void movePageToNotebook(String boardId, String notebookId) {
+        Board moving;
+        synchronized (lock) {
+            moving = cache.get(boardId);
+        }
+        if (moving != null && moving.paper != null) {
+            if (knownPageHeight > 0) {
+                ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
+            }
+            synchronized (lock) {
+                OpenSheet dest = sheets.get(NotebookPaper.sheetId(notebookId));
+                if (dest != null && dest.ready && moving.sliceIndex >= 0
+                        && moving.sliceIndex < moving.paper.sliceCount()) {
+                    moving.paper.tearMove(moving.sliceIndex, dest.paper);
+                    writer.execute(() -> flushSheet(NotebookPaper.sheetId(notebookId)));
+                    writer.execute(() -> flushSheet(moving.sheetId));
+                }
+            }
+            return;
+        }
         synchronized (lock) {
             NotebookEntity target = dao.notebook(notebookId);
             if (target == null || target.deletedAt != null) {
@@ -448,6 +484,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     public void wipePage(String boardId) {
         synchronized (lock) {
             Board board = cache.get(boardId);
+            if (board != null && board.paper != null) {
+                if (board.sliceIndex >= 0 && board.sliceIndex < board.paper.sliceCount()) {
+                    board.paper.tearWipe(board.sliceIndex);
+                    String sheetId = board.sheetId;
+                    writer.execute(() -> flushSheet(sheetId));
+                }
+                return;
+            }
             BoardEntity row = dao.board(boardId);
             if (board == null && row != null) {
                 board = load(row);
@@ -465,6 +509,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     @Override
     public void deletePage(String boardId) {
         synchronized (lock) {
+            Board board = cache.get(boardId);
+            if (board != null && board.paper != null) {
+                if (board.sliceIndex >= 0 && board.sliceIndex < board.paper.sliceCount()) {
+                    board.paper.tearDelete(board.sliceIndex);
+                    writer.execute(() -> flushSheet(board.sheetId));
+                }
+                return;
+            }
             BoardEntity row = dao.board(boardId);
             if (row == null || row.deletedAt != null || row.conflictOf != null || isTrailingBlankLocked(row)) {
                 return;
@@ -566,7 +618,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     public PushBatch pendingPush(int limit) {
         PushBatch batch = new PushBatch();
         ArrayList<BoardEntity> boards = new ArrayList<>();
+        ArrayList<NotebookLogEntity> logs = new ArrayList<>();
         HashMap<String, Long> boardQueuedAt = new HashMap<>();
+        HashMap<String, Long> logQueuedAt = new HashMap<>();
         synchronized (lock) {
             for (OutboxEntry entry : dao.outboxBatch(limit)) {
                 if (OutboxEntry.NOTEBOOK.equals(entry.entity)) {
@@ -577,7 +631,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     }
                     batch.notebooks.add(row);
                     batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
-                } else {
+                } else if (OutboxEntry.LOG.equals(entry.entity)) {
+                    NotebookLogEntity row = dao.notebookLog(entry.id);
+                    if (row == null) {
+                        dao.deleteOutbox(entry.entity, entry.id);
+                        continue;
+                    }
+                    logs.add(row);
+                    logQueuedAt.put(row.id, entry.queuedAt);
+                } else if (OutboxEntry.BOARD.equals(entry.entity)) {
                     BoardEntity row = dao.board(entry.id);
                     if (row == null) {
                         dao.deleteOutbox(entry.entity, entry.id);
@@ -585,6 +647,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     }
                     boards.add(row);
                     boardQueuedAt.put(row.id, entry.queuedAt);
+                } else {
+                    dao.deleteOutbox(entry.entity, entry.id);
                 }
             }
         }
@@ -597,7 +661,34 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 }
             }
         }
+        HashMap<String, byte[]> logFiles = new HashMap<>();
+        for (NotebookLogEntity row : logs) {
+            if (row.inkHash != null && row.deletedAt == null) {
+                byte[] bytes = readLogQuietly(row.id);
+                if (bytes != null) {
+                    logFiles.put(row.id, bytes);
+                }
+            }
+        }
         synchronized (lock) {
+            for (NotebookLogEntity seen : logs) {
+                NotebookLogEntity row = dao.notebookLog(seen.id);
+                if (row == null || !sameLog(seen, row)) {
+                    continue;
+                }
+                byte[] bytes = logFiles.get(row.id);
+                if (bytes != null) {
+                    String actual = InkFileStore.sha256(bytes);
+                    if (!actual.equals(row.inkHash)) {
+                        row.inkHash = actual;
+                        row.inkBytes = bytes.length;
+                        dao.upsertNotebookLog(row);
+                    }
+                    batch.blobs.put(actual, bytes);
+                }
+                batch.logs.add(row);
+                batch.queuedAt.put(OutboxEntry.LOG + ":" + row.id, logQueuedAt.get(row.id));
+            }
             for (BoardEntity seen : boards) {
                 BoardEntity row = dao.board(seen.id);
                 if (row == null || !sameRow(seen, row)) {
@@ -620,6 +711,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
         }
         return batch;
+    }
+
+    private static boolean sameLog(NotebookLogEntity a, NotebookLogEntity b) {
+        return Objects.equals(a.inkHash, b.inkHash) && Objects.equals(a.deletedAt, b.deletedAt)
+                && a.updatedAt == b.updatedAt && a.rev == b.rev;
     }
 
     private static boolean sameRow(BoardEntity a, BoardEntity b) {
@@ -673,7 +769,23 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         HashMap<String, Long> editsSeen = new HashMap<>();
         HashMap<String, Board> boardsSeen = new HashMap<>();
         HashMap<String, Staged> staged = new HashMap<>();
+        HashMap<String, byte[]> logBytes = new HashMap<>();
         try {
+            for (NotebookLogEntity remote : page.logs) {
+                if (remote.inkHash == null || remote.deletedAt != null) {
+                    continue;
+                }
+                byte[] bytes = page.blobs.get(remote.inkHash);
+                if (bytes == null) {
+                    continue;
+                }
+                if (!InkFileStore.sha256(bytes).equals(remote.inkHash)) {
+                    throw new IOException("bad ink log for " + remote.id);
+                }
+                // Replay now, before the lock, so a torn file never becomes the notebook.
+                NotebookPaper.replace(bytes);
+                logBytes.put(remote.id, bytes);
+            }
             for (BoardEntity remote : page.boards) {
                 if (remote.inkHash == null || remote.deletedAt != null) {
                     continue;
@@ -695,13 +807,13 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 }
                 staged.put(remote.id, new Staged(ink.stage(remote.id, "pull", bytes), bytes, strokes));
             }
-            applyPullLocked(page, staged, refreshed, editsSeen, boardsSeen);
+            applyPullLocked(page, staged, logBytes, refreshed, editsSeen, boardsSeen);
         } finally {
             for (Staged s : staged.values()) {
                 ink.discard(s.file);
             }
         }
-        if (!page.boards.isEmpty() || !page.notebooks.isEmpty()) {
+        if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty()) {
             boolean post;
             synchronized (refreshLock) {
                 for (Map.Entry<String, List<InkRenderer.InkStroke>> e : refreshed.entrySet()) {
@@ -797,7 +909,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    private void applyPullLocked(PullPage page, Map<String, Staged> staged,
+    private void applyPullLocked(PullPage page, Map<String, Staged> staged, Map<String, byte[]> logBytes,
                                  Map<String, List<InkRenderer.InkStroke>> refreshed,
                                  Map<String, Long> editsSeen, Map<String, Board> boardsSeen) throws IOException {
         synchronized (lock) {
@@ -810,6 +922,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     throw new IOException("pull page is missing ink " + remote.inkHash);
                 }
             }
+            for (NotebookLogEntity remote : page.logs) {
+                if (remote.inkHash == null || remote.deletedAt != null || page.blobs.containsKey(remote.inkHash)) {
+                    continue;
+                }
+                NotebookLogEntity local = dao.notebookLog(remote.id);
+                if (local == null || !remote.inkHash.equals(local.inkHash)) {
+                    throw new IOException("pull page is missing ink log " + remote.inkHash);
+                }
+            }
             ArrayList<Runnable> mirrorOps = new ArrayList<>();
             try {
                 db.runInTransaction(() -> {
@@ -819,6 +940,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         }
                         for (BoardEntity remote : page.boards) {
                             applyRemoteBoardLocked(remote, staged, refreshed, mirrorOps);
+                        }
+                        for (NotebookLogEntity remote : page.logs) {
+                            applyRemoteLogLocked(remote, logBytes, mirrorOps);
                         }
                         for (NotebookEntity remote : page.notebooks) {
                             NotebookEntity now = dao.notebook(remote.id);
@@ -851,7 +975,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     boardsSeen.put(id, board);
                 }
             }
-            if (!page.boards.isEmpty() || !page.notebooks.isEmpty()) {
+            if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty()) {
                 scheduleIndex();
             }
         }
@@ -1105,6 +1229,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 row.rev = rev;
                 dao.upsertNotebook(row);
             }
+        } else if (OutboxEntry.LOG.equals(entity)) {
+            NotebookLogEntity row = dao.notebookLog(id);
+            if (row != null && rev > row.rev) {
+                row.rev = rev;
+                dao.upsertNotebookLog(row);
+            }
         } else {
             BoardEntity row = dao.board(id);
             if (row != null && rev > row.rev) {
@@ -1131,6 +1261,68 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         dao.upsertNotebook(remote);
         dao.deleteOutbox(OutboxEntry.NOTEBOOK, remote.id);
+    }
+
+    /**
+     * A pulled log replaces the notebook's log whole. It does not splice strokes
+     * and it does not delete the pre-migration page files.
+     */
+    private void applyRemoteLogLocked(NotebookLogEntity remote, Map<String, byte[]> logBytes,
+                                      List<Runnable> mirrorOps) throws IOException {
+        if (remote.conflictOf != null) {
+            byte[] hidden = logBytes.remove(remote.id);
+            if (hidden != null) {
+                ink.writeLog(remote.id, hidden);
+                byte[] copy = hidden;
+                mirrorOps.add(() -> mirrorLog(remote.id, copy));
+            }
+            dao.upsertNotebookLog(remote);
+            dao.deleteOutbox(OutboxEntry.LOG, remote.id);
+            return;
+        }
+        NotebookLogEntity local = dao.notebookLog(remote.id);
+        OpenSheet open = sheets.get(remote.id);
+        if (local != null) {
+            if (remote.rev <= local.rev) {
+                return;
+            }
+            if (open != null && open.ready && open.paper.bytes().length > open.flushed) {
+                return;
+            }
+            if (pendingLocked(OutboxEntry.LOG, remote.id)
+                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
+                return;
+            }
+        }
+        if (remote.deletedAt == null && remote.inkHash != null) {
+            byte[] bytes = logBytes.remove(remote.id);
+            if (bytes == null) {
+                throw new IOException("bad ink log for " + remote.id);
+            }
+            NotebookPaper paper = NotebookPaper.replace(bytes);
+            ink.writeLog(remote.id, bytes);
+            mirrorOps.add(() -> mirrorLog(remote.id, bytes));
+            if (open == null) {
+                open = new OpenSheet(remote.id, remote.notebookId, paper, bytes.length);
+                sheets.put(remote.id, open);
+            } else {
+                open.paper = paper;
+                open.flushed = bytes.length;
+            }
+            open.ready = true;
+            for (Board board : cache.values()) {
+                if (remote.id.equals(board.sheetId)) {
+                    board.paper = paper;
+                }
+            }
+            for (Board blank : trailingBlanks.values()) {
+                if (remote.id.equals(blank.sheetId)) {
+                    blank.paper = paper;
+                }
+            }
+        }
+        dao.upsertNotebookLog(remote);
+        dao.deleteOutbox(OutboxEntry.LOG, remote.id);
     }
 
     private void applyRemoteBoardLocked(BoardEntity remote, Map<String, Staged> staged,
@@ -1272,6 +1464,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return board;
     }
 
+    private byte[] readLogQuietly(String sheetId) {
+        try {
+            return ink.readLog(sheetId);
+        } catch (IOException e) {
+            Log.e(TAG, "ink log read failed " + sheetId, e);
+            return null;
+        }
+    }
+
     private byte[] readInkQuietly(String boardId) {
         try {
             return ink.read(boardId);
@@ -1331,6 +1532,280 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         } catch (JSONException e) {
             Log.e(TAG, "index build failed", e);
             return null;
+        }
+    }
+
+    @Override
+    public void ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
+        if (pageHeight <= 0) {
+            return;
+        }
+        knownPageHeight = pageHeight;
+        knownLegacyHeight = legacyPageHeight;
+        knownShortPagesSince = shortPagesSince;
+        String sheetId = NotebookPaper.sheetId(notebookId);
+        synchronized (lock) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open != null && open.ready) {
+                return;
+            }
+            if (notebookId != null) {
+                NotebookEntity notebook = dao.notebook(notebookId);
+                if (notebook == null || notebook.deletedAt != null) {
+                    return;
+                }
+            }
+        }
+        byte[] existing;
+        try {
+            existing = ink.readLog(sheetId);
+        } catch (IOException e) {
+            Log.e(TAG, "ink log unreadable " + sheetId, e);
+            return;
+        }
+        if (existing != null) {
+            try {
+                installSheet(notebookId, sheetId, NotebookPaper.replay(existing), existing.length, false);
+            } catch (IOException e) {
+                Log.e(TAG, "ink log will not replay " + sheetId, e);
+            }
+            return;
+        }
+        synchronized (lock) {
+            if (dao.notebookLog(sheetId) != null) {
+                // The log is the source of truth, and its file is missing. Do not rebuild
+                // it from the pre-migration pages; a pull can put the log back.
+                LaunchLog.mark("ink log missing for " + sheetId + "; page files left as they are");
+                return;
+            }
+        }
+        List<BoardEntity> rows;
+        synchronized (lock) {
+            rows = new ArrayList<>(rowsLocked(notebookId));
+            if (!rows.isEmpty() && isBlankLocked(rows.get(rows.size() - 1))
+                    && !trailingBlanks.containsKey(listKey(notebookId))) {
+                rows.remove(rows.size() - 1);
+            }
+        }
+        ArrayList<NotebookPaper.SourcePage> sources = new ArrayList<>();
+        for (BoardEntity row : rows) {
+            if (row.conflictOf != null) {
+                continue;
+            }
+            List<InkRenderer.InkStroke> strokes = Collections.emptyList();
+            if (row.inkHash != null) {
+                byte[] bytes = readInkQuietly(row.id);
+                if (bytes != null) {
+                    try {
+                        strokes = InkCodec.decode(bytes);
+                    } catch (IOException e) {
+                        Log.e(TAG, "page ink skipped in migration " + row.id, e);
+                        return;
+                    }
+                }
+            }
+            int height = NotebookPaper.measuredHeight(
+                    row.createdAt, strokes, pageHeight, legacyPageHeight, shortPagesSince);
+            sources.add(new NotebookPaper.SourcePage(row.id, height, strokes));
+        }
+        NotebookPaper built = NotebookPaper.migrate(sources, pageHeight);
+        NotebookPaper readBack;
+        try {
+            readBack = NotebookPaper.replay(built.bytes());
+        } catch (IOException e) {
+            Log.e(TAG, "migration log will not replay " + sheetId, e);
+            return;
+        }
+        if (!NotebookPaper.readsBack(sources, built) || !NotebookPaper.readsBack(sources, readBack)) {
+            Log.e(TAG, "migration refused for " + sheetId + "; page files left untouched");
+            return;
+        }
+        byte[] bytes = built.bytes();
+        try {
+            ink.writeLog(sheetId, bytes);
+            byte[] onDisk = ink.readLog(sheetId);
+            if (onDisk == null || !java.util.Arrays.equals(bytes, onDisk)) {
+                Log.e(TAG, "migration read-back mismatch " + sheetId);
+                return;
+            }
+            readBack = NotebookPaper.replay(onDisk);
+        } catch (IOException e) {
+            Log.e(TAG, "migration write failed " + sheetId, e);
+            return;
+        }
+        if (!NotebookPaper.readsBack(sources, readBack)) {
+            Log.e(TAG, "migration disk read-back refused " + sheetId);
+            return;
+        }
+        installSheet(notebookId, sheetId, readBack, bytes.length, true);
+    }
+
+    private void installSheet(String notebookId, String sheetId, NotebookPaper paper, int flushed, boolean queue) {
+        synchronized (lock) {
+            OpenSheet open = new OpenSheet(sheetId, notebookId, paper, flushed);
+            open.ready = true;
+            sheets.put(sheetId, open);
+            if (!queue) {
+                return;
+            }
+            long now = clock.getAsLong();
+            NotebookLogEntity row = dao.notebookLog(sheetId);
+            if (row == null) {
+                row = new NotebookLogEntity();
+                row.id = sheetId;
+                row.notebookId = notebookId;
+                row.createdAt = now;
+                row.rev = 0;
+            }
+            byte[] bytes;
+            try {
+                bytes = ink.readLog(sheetId);
+            } catch (IOException e) {
+                return;
+            }
+            row.inkHash = bytes == null ? null : InkFileStore.sha256(bytes);
+            row.inkBytes = bytes == null ? 0 : bytes.length;
+            row.sliceHeight = paper.sliceHeight;
+            row.updatedAt = now;
+            row.deletedAt = null;
+            row.conflictOf = null;
+            NotebookLogEntity stored = row;
+            db.runInTransaction(() -> {
+                dao.upsertNotebookLog(stored);
+                queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
+            });
+            if (bytes != null) {
+                mirrorLog(sheetId, bytes);
+            }
+        }
+    }
+
+    private List<Board> projectLocked(String notebookId, NotebookPaper paper) {
+        String sheetId = NotebookPaper.sheetId(notebookId);
+        ArrayList<Board> pages = new ArrayList<>();
+        for (int i = 0; i < paper.sliceCount(); i++) {
+            String id = paper.sliceId(i);
+            Board board = cache.get(id);
+            if (board == null) {
+                BoardEntity row = dao.board(id);
+                board = new Board(id, row == null ? clock.getAsLong() : row.createdAt);
+                cache.put(id, board);
+            }
+            board.paper = paper;
+            board.sheetId = sheetId;
+            board.sliceIndex = i;
+            board.paperOrigin = paper.origin(i);
+            board.slicePx = paper.heightAt(i);
+            board.strokes.clear();
+            pages.add(board);
+        }
+        boolean needBlank = pages.isEmpty() || !pages.get(pages.size() - 1).isBlank();
+        String key = listKey(notebookId);
+        if (needBlank) {
+            Board blank = trailingBlanks.get(key);
+            if (blank == null) {
+                blank = Board.blank();
+                trailingBlanks.put(key, blank);
+            }
+            blank.paper = paper;
+            blank.sheetId = sheetId;
+            blank.sliceIndex = paper.sliceCount();
+            blank.paperOrigin = paper.origin(paper.sliceCount());
+            blank.slicePx = paper.sliceHeight;
+            blank.strokes.clear();
+            pages.add(blank);
+        }
+        return pages;
+    }
+
+    /** Writer thread. Appends the new tail of the log; it does not rewrite the prefix. */
+    private void flushSheet(String sheetId) {
+        if (sheetId == null) {
+            return;
+        }
+        byte[] suffix;
+        int flushed;
+        synchronized (lock) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null || !open.ready) {
+                return;
+            }
+            byte[] all = open.paper.bytes();
+            if (all.length <= open.flushed) {
+                return;
+            }
+            suffix = java.util.Arrays.copyOfRange(all, open.flushed, all.length);
+            flushed = all.length;
+        }
+        try {
+            ink.appendLog(sheetId, suffix);
+        } catch (IOException e) {
+            Log.e(TAG, "ink log append failed " + sheetId, e);
+            return;
+        }
+        byte[] all;
+        try {
+            all = ink.readLog(sheetId);
+        } catch (IOException e) {
+            Log.e(TAG, "ink log read failed " + sheetId, e);
+            return;
+        }
+        if (all == null) {
+            return;
+        }
+        String hash = InkFileStore.sha256(all);
+        synchronized (lock) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null) {
+                return;
+            }
+            open.flushed = Math.max(open.flushed, flushed);
+            NotebookLogEntity row = dao.notebookLog(sheetId);
+            if (row == null || java.util.Objects.equals(row.inkHash, hash)) {
+                if (row != null) {
+                    return;
+                }
+                row = new NotebookLogEntity();
+                row.id = sheetId;
+                row.notebookId = open.notebookId;
+                row.createdAt = clock.getAsLong();
+            }
+            row.inkHash = hash;
+            row.inkBytes = all.length;
+            row.sliceHeight = open.paper.sliceHeight;
+            row.updatedAt = Math.max(row.updatedAt, clock.getAsLong());
+            row.deletedAt = null;
+            row.conflictOf = null;
+            NotebookLogEntity stored = row;
+            db.runInTransaction(() -> {
+                dao.upsertNotebookLog(stored);
+                queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
+            });
+            mirrorLog(sheetId, all);
+            localEdits.merge(sheetId, 1L, Long::sum);
+        }
+    }
+
+    private void mirrorLog(String sheetId, byte[] bytes) {
+        mirrorExecutor.execute(() -> {
+            if (bytes == null) {
+                mirror.deleteLog(sheetId);
+            } else {
+                mirror.writeLog(sheetId, bytes);
+            }
+        });
+    }
+
+    private static final class OpenSheet {
+        final String notebookId;
+        NotebookPaper paper;
+        int flushed;
+        boolean ready;
+
+        OpenSheet(String sheetId, String notebookId, NotebookPaper paper, int flushed) {
+            this.notebookId = notebookId;
+            this.paper = paper;
+            this.flushed = flushed;
         }
     }
 

@@ -85,6 +85,18 @@ final class Lasso {
         };
     }
 
+    /**
+     * Keeps {@code bounds} inside the paper rectangle that is already on screen.
+     * Ink already past an edge may stay there but is not pushed further out.
+     */
+    static float[] clampInto(RectF bounds, float dx, float dy,
+                              float minX, float minY, float maxX, float maxY) {
+        return new float[]{
+                clamp(dx, Math.min(0f, minX - bounds.left), Math.max(0f, maxX - bounds.right)),
+                clamp(dy, Math.min(0f, minY - bounds.top), Math.max(0f, maxY - bounds.bottom)),
+        };
+    }
+
     private static float clamp(float value, float min, float max) {
         return Math.max(min, Math.min(max, value));
     }

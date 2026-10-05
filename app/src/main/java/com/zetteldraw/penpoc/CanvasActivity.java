@@ -84,9 +84,9 @@ public final class CanvasActivity extends Activity {
     private final ArrayList<PageSlot> slots = new ArrayList<>();
 
     /** Height of a page: the drawing area minus the gap, so a whole page and its controls fit on screen. */
-    private int pageHeight;
+    private volatile int pageHeight;
     /** Full-window page height of v4–v9; old pages whose ink reaches below {@link #pageHeight} keep it. */
-    private int legacyPageHeight;
+    private volatile int legacyPageHeight;
     private long shortPagesSince;
     private int pageGap;
     private boolean scrolling;
@@ -253,9 +253,9 @@ public final class CanvasActivity extends Activity {
             if (awaitingLayout != null) {
                 Loaded loaded = awaitingLayout;
                 awaitingLayout = null;
-                show(loaded);
+                startLoad(loaded.id, loaded.keepScroll, false);
             } else if (!first && currentPages != null && !loading()) {
-                layoutPages(currentPages, scroller.getScrollY());
+                startLoad(collectionId, scroller.getScrollY(), false);
             }
         });
     }
@@ -463,6 +463,8 @@ public final class CanvasActivity extends Activity {
         if (isDestroyed()) {
             return;
         }
+        // A pull replaces a notebook's log whole. Local undo must not splice it.
+        inkView.clearHistory();
         Integer keep = loading() ? pendingKeepScroll : Integer.valueOf(scroller.getScrollY());
         startLoad(collectionId, keep, false);
     }
@@ -593,6 +595,9 @@ public final class CanvasActivity extends Activity {
                         rebuildNotebookTabs(notebooks);
                     }
                 });
+                if (pageHeight > 0) {
+                    repository.ensureSheet(notebook, pageHeight, legacyPageHeight, shortPagesSince);
+                }
                 pages = repository.pages(notebook);
                 if (first) {
                     LaunchLog.mark("page list " + name + " read: " + pages.size() + " pages ("
@@ -696,7 +701,7 @@ public final class CanvasActivity extends Activity {
             target = 0;
             if (SCRATCHPAD.equals(loaded.id)) {
                 for (int i = 0; i < loaded.pages.size() - 1; i++) {
-                    target += heightOf(loaded.pages.get(i)) + pageGap;
+                    target += heightOf(loaded.pages.get(i)) + layoutGap(loaded.pages);
                 }
             }
         }
@@ -749,17 +754,18 @@ public final class CanvasActivity extends Activity {
         pageColumn.removeAllViews();
         slots.clear();
         int[] heights = new int[pages.size()];
+        int gap = layoutGap(pages);
         for (int i = 0; i < pages.size(); i++) {
             heights[i] = heightOf(pages.get(i));
             PageSlot slot = new PageSlot(this, pages.get(i), i + 1, pages.size());
             slots.add(slot);
             pageColumn.addView(slot, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, heights[i] + pageGap));
+                    LinearLayout.LayoutParams.MATCH_PARENT, heights[i] + gap));
         }
         for (PageSlot slot : slots) {
             slot.syncEnabled();
         }
-        inkView.setPages(pages, heights, pageGap);
+        inkView.setPages(pages, heights, gap);
         pendingScrollY = Math.max(0, targetScrollY);
         pageColumn.requestLayout();
     }
@@ -878,7 +884,7 @@ public final class CanvasActivity extends Activity {
         List<Board> pages = pagesIn(collectionId);
         int target = 0;
         for (int i = 0; i < Math.min(index, pages.size() - 1); i++) {
-            target += heightOf(pages.get(i)) + pageGap;
+            target += heightOf(pages.get(i)) + layoutGap(pages);
         }
         ++loadGeneration;
         showPages(pages, index < 0 ? scroller.getScrollY() : target);
@@ -1307,7 +1313,18 @@ public final class CanvasActivity extends Activity {
      * ink reaches below that: it keeps the old full-window height, so nothing
      * is cropped or shifted.
      */
+    /** The dashed line is a mark. On a one-sheet notebook it adds no gap. */
+    private int layoutGap(List<Board> pages) {
+        if (pages != null && !pages.isEmpty() && pages.get(0).paper != null) {
+            return 0;
+        }
+        return pageGap;
+    }
+
     private int heightOf(Board page) {
+        if (page.slicePx > 0) {
+            return page.slicePx;
+        }
         if (page.createdAt >= shortPagesSince) {
             return pageHeight;
         }
@@ -1369,11 +1386,12 @@ public final class CanvasActivity extends Activity {
                     FrameLayout.LayoutParams.WRAP_CONTENT);
             actionsLp.gravity = Gravity.BOTTOM | Gravity.END;
             actionsLp.rightMargin = dp(10);
-            actionsLp.bottomMargin = pageGap + dp(10);
+            int mark = page.paper != null ? dp(2) : pageGap;
+            actionsLp.bottomMargin = (page.paper != null ? 0 : pageGap) + dp(10);
             addView(actions, actionsLp);
 
             FrameLayout.LayoutParams dashLp = new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT, pageGap);
+                    FrameLayout.LayoutParams.MATCH_PARENT, mark);
             dashLp.gravity = Gravity.BOTTOM;
             addView(new DashedRule(context), dashLp);
             syncEnabled();

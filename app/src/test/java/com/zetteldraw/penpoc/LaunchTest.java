@@ -180,7 +180,7 @@ public class LaunchTest {
         assertEquals("recomputed from the new size, not frozen at the first layout", before - 200,
                 heightField.getInt(activity));
         View slot = (View) CanvasActivitySmokeTest.pageLabelViews(activity.getWindow().getDecorView()).get(0).getParent();
-        assertEquals("the page itself follows", before - 200 + Math.round(24 * activity.getResources().getDisplayMetrics().density),
+        assertEquals("a notebook keeps the slice height it was opened at", before,
                 slot.getLayoutParams().height);
         controller.pause().stop().destroy();
     }

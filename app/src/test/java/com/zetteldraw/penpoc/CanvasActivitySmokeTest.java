@@ -242,12 +242,12 @@ public class CanvasActivitySmokeTest {
         idle();
         ink.addStroke(points(300f, 300f));
         idle();
-        assertEquals(2, page.strokes.size());
+        assertEquals(2, page.paper.strokes().size());
         assertEquals("first ink grew a new blank page", 2, repo.scratchpadPages().size());
         assertEquals(java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
 
         clickDesc(root, "Undo");
-        assertEquals(1, page.strokes.size());
+        assertEquals(1, page.paper.strokes().size());
         clickDesc(root, "Undo");
         assertTrue(page.isBlank());
         assertEquals("undoing to blank collapses the extra page", 1, repo.scratchpadPages().size());
@@ -256,22 +256,22 @@ public class CanvasActivitySmokeTest {
 
         clickDesc(root, "Redo");
         clickDesc(root, "Redo");
-        assertEquals(2, page.strokes.size());
+        assertEquals(2, page.paper.strokes().size());
         assertEquals("redo stores the page again and a blank follows", 2, repo.scratchpadPages().size());
         assertEquals(java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
-        assertEquals(2, repo.scratchpadPages().get(0).strokes.size());
+        assertEquals(2, repo.scratchpadPages().get(0).paper.strokes().size());
 
-        InkRenderer.InkStroke first = page.strokes.get(0);
+        InkRenderer.InkStroke first = page.paper.strokes().get(0);
         clickDesc(root, "Eraser");
         assertTrue(byDescription(root, "Eraser").get(0).isSelected());
         ink.eraseStrokes(points(100f, 100f));
         idle();
-        assertEquals(1, page.strokes.size());
+        assertEquals(1, page.paper.strokes().size());
         clickDesc(root, "Undo");
-        assertEquals(2, page.strokes.size());
-        assertSame("erased stroke comes back in its place", first, page.strokes.get(0));
+        assertEquals(2, page.paper.strokes().size());
+        assertSame("erased stroke comes back", first, page.paper.stroke(first.id));
         clickDesc(root, "Redo");
-        assertEquals(1, page.strokes.size());
+        assertEquals(1, page.paper.strokes().size());
 
         ink.addStroke(points(500f, 500f));
         idle();
@@ -380,23 +380,26 @@ public class CanvasActivitySmokeTest {
 
         assertFalse(ink.hasSelection());
         assertEquals("back to Pen after one move", PageInkView.Tool.PEN, ink.tool());
-        assertEquals(original.id, page.strokes.get(0).id);
-        assertEquals(original.points.get(0).x + 100f, page.strokes.get(0).points.get(0).x, 0.001f);
-        assertEquals(original.points.get(0).y + 80f, page.strokes.get(0).points.get(0).y, 0.001f);
-        assertSame(other, page.strokes.get(1));
+        InkRenderer.InkStroke moved = page.paper.stroke(original.id);
+        assertEquals(original.id, moved.id);
+        assertEquals(original.points.get(0).x + 100f, moved.points.get(0).x, 0.001f);
+        assertEquals(original.points.get(0).y + 80f, moved.points.get(0).y, 0.001f);
+        assertEquals(other.id, page.paper.stroke(other.id).id);
+        assertEquals(other.points.get(0).x, page.paper.stroke(other.id).points.get(0).x, 0.001f);
         assertTrue(undo.isEnabled());
 
-        InkRenderer.InkStroke moved = page.strokes.get(0);
         clickDesc(root, "Undo");
-        assertSame(original, page.strokes.get(0));
+        assertEquals(original.points.get(0).x, page.paper.stroke(original.id).points.get(0).x, 0.001f);
+        assertEquals(original.points.get(0).y, page.paper.stroke(original.id).points.get(0).y, 0.001f);
         assertFalse(undo.isEnabled());
         assertTrue(redo.isEnabled());
         assertEquals("undo saves through the repository",
-                original.points.get(0).y, repo.notebookPages(notebook.id).get(0).strokes.get(0).points.get(0).y, 0.001f);
+                original.points.get(0).y,
+                repo.notebookPages(notebook.id).get(0).paper.stroke(original.id).points.get(0).y, 0.001f);
         clickDesc(root, "Redo");
-        assertSame(moved, page.strokes.get(0));
+        assertEquals(original.points.get(0).x + 100f, page.paper.stroke(original.id).points.get(0).x, 0.001f);
         clickDesc(root, "Undo");
-        assertSame(original, page.strokes.get(0));
+        assertEquals(original.points.get(0).y, page.paper.stroke(original.id).points.get(0).y, 0.001f);
 
         clickDesc(root, "Lasso");
         ink.finishLasso(outline);
@@ -406,7 +409,7 @@ public class CanvasActivitySmokeTest {
         touch(ink, MotionEvent.ACTION_UP, 20f, 900f);
         idle();
         assertFalse("tap outside cancels", ink.hasSelection());
-        assertSame(original, page.strokes.get(0));
+        assertEquals(original.points.get(0).y, page.paper.stroke(original.id).points.get(0).y, 0.001f);
         assertEquals(PageInkView.Tool.LASSO, ink.tool());
 
         controller.pause().stop().destroy();

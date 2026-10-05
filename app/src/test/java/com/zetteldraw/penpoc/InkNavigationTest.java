@@ -194,8 +194,8 @@ public class InkNavigationTest {
         assertTrue(comedy.performClick());
         idle();
 
-        assertEquals("the stroke belongs to the Scratchpad page it was drawn on", 1, scratch.strokes.size());
-        assertEquals(140f, scratch.strokes.get(0).points.get(0).y, 0f);
+        assertEquals("the stroke belongs to the Scratchpad page it was drawn on", 1, scratch.paper.strokes().size());
+        assertEquals(140f, scratch.paper.strokes().get(0).points.get(0).y, 0f);
         assertEquals("and was saved there", 2, repo.scratchpadPages().size());
         List<Board> comedyPages = repo.notebookPages(Notebook.COMEDY.uuid);
         assertEquals(1, comedyPages.size());
@@ -204,7 +204,7 @@ public class InkNavigationTest {
         ink.addStroke(points(120f, 140f));
         idle();
         assertEquals("new strokes go to the notebook now shown", 1,
-                repo.notebookPages(Notebook.COMEDY.uuid).get(0).strokes.size());
+                repo.notebookPages(Notebook.COMEDY.uuid).get(0).paper.strokes().size());
         controller.pause().stop().destroy();
     }
 
@@ -307,11 +307,11 @@ public class InkNavigationTest {
         assertEquals("41/41", labels.get(40));
         assertTrue(ink.inkEnabled());
         Board firstComedy = repo.notebookPages(Notebook.COMEDY.uuid).get(0);
-        int before = firstComedy.strokes.size();
+        int before = firstComedy.paper.strokes().size();
         ink.addStroke(points(120f, 200f));
         idle();
-        assertEquals(before + 1, firstComedy.strokes.size());
-        assertEquals(200f, firstComedy.strokes.get(before).points.get(0).y, 0f);
+        assertEquals(before + 1, firstComedy.paper.strokes().size());
+        assertEquals(200f, firstComedy.paper.strokes().get(before).points.get(0).y, 0f);
         assertTrue(scratch.strokes.isEmpty());
         controller.pause().stop().destroy();
     }

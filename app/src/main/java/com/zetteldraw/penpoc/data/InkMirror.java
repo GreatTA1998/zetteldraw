@@ -13,6 +13,13 @@ public interface InkMirror {
 
     void writeIndex(String json);
 
+    /** Notebook log. Default no-op so older mirrors keep compiling. */
+    default void writeLog(String sheetId, byte[] bytes) {
+    }
+
+    default void deleteLog(String sheetId) {
+    }
+
     InkMirror NONE = new InkMirror() {
         @Override
         public void writeInk(String boardId, byte[] bytes) {

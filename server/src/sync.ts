@@ -2,9 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import type pg from "pg";
 import {
   resolveBoard,
+  resolveLog,
   resolveNotebook,
   type BoardRow,
   type Decision,
+  type LogRow,
   type NotebookRow,
   type Status,
 } from "./lww.js";
@@ -27,11 +29,22 @@ const BOARD_COLS = [
   "deleted_at",
 ] as const;
 const NOTEBOOK_COLS = ["id", "title", "position", "created_at", "updated_at", "deleted_at"] as const;
+const LOG_COLS = [
+  "id",
+  "notebook_id",
+  "ink_hash",
+  "ink_bytes",
+  "slice_height",
+  "conflict_of",
+  "created_at",
+  "updated_at",
+  "deleted_at",
+] as const;
 
 export type ResultStatus = Status | "missing_blob";
 
 export interface PushResult {
-  entity: "notebook" | "board";
+  entity: "notebook" | "board" | "log";
   id: string;
   status: ResultStatus;
   rev: number;
@@ -43,6 +56,7 @@ export interface PullResponse {
   has_more: boolean;
   notebooks: NotebookRow[];
   boards: BoardRow[];
+  logs: LogRow[];
   blobs: Record<string, string>;
 }
 
@@ -52,7 +66,7 @@ export function sha256Hex(bytes: Buffer): string {
 
 async function upsert(
   client: pg.PoolClient,
-  table: "boards" | "notebooks",
+  table: "boards" | "notebooks" | "notebook_logs",
   cols: readonly string[],
   row: Record<string, unknown>,
 ): Promise<number> {
@@ -71,7 +85,11 @@ async function upsert(
   return res.rows[0].rev;
 }
 
-async function restamp(client: pg.PoolClient, table: "boards" | "notebooks", id: string): Promise<number> {
+async function restamp(
+  client: pg.PoolClient,
+  table: "boards" | "notebooks" | "notebook_logs",
+  id: string,
+): Promise<number> {
   const res = await client.query<{ rev: number }>(
     `UPDATE ${table} SET rev = nextval('sync_rev') WHERE id = $1 RETURNING rev`,
     [id],
@@ -81,7 +99,7 @@ async function restamp(client: pg.PoolClient, table: "boards" | "notebooks", id:
 
 async function applyDecision<T extends { id: string; rev: number }>(
   client: pg.PoolClient,
-  table: "boards" | "notebooks",
+  table: "boards" | "notebooks" | "notebook_logs",
   cols: readonly string[],
   existing: T | null,
   decision: Decision<T>,
@@ -92,8 +110,11 @@ async function applyDecision<T extends { id: string; rev: number }>(
   } else if (decision.restamp && existing) {
     rev = await restamp(client, table, existing.id);
   }
-  if (decision.copy) {
+  if (decision.copy && table === "boards") {
     await upsert(client, "boards", BOARD_COLS, decision.copy as unknown as Record<string, unknown>);
+  }
+  if (decision.copy && table === "notebook_logs") {
+    await upsert(client, "notebook_logs", LOG_COLS, decision.copy as unknown as Record<string, unknown>);
   }
   return rev;
 }
@@ -110,6 +131,14 @@ export async function push(pool: pg.Pool, storage: InkStorage, body: PushBody): 
   for (const board of body.boards) {
     const hash = board.ink_hash;
     if (hash && board.deleted_at === null && !(hash in body.blobs) && !missing.has(hash)) {
+      if (!(await storage.has(hash))) {
+        missing.add(hash);
+      }
+    }
+  }
+  for (const log of body.logs) {
+    const hash = log.ink_hash;
+    if (hash && log.deleted_at === null && !(hash in body.blobs) && !missing.has(hash)) {
       if (!(await storage.has(hash))) {
         missing.add(hash);
       }
@@ -141,6 +170,18 @@ export async function push(pool: pg.Pool, storage: InkStorage, body: PushBody): 
       const rev = await applyDecision(client, "boards", BOARD_COLS, existing, decision);
       results.push({ entity: "board", id: incoming.id, status: decision.status, rev });
     }
+    for (const incoming of body.logs) {
+      if (incoming.ink_hash && incoming.deleted_at === null && missing.has(incoming.ink_hash)) {
+        results.push({ entity: "log", id: incoming.id, status: "missing_blob", rev: 0 });
+        continue;
+      }
+      const existing =
+        (await client.query<LogRow>("SELECT * FROM notebook_logs WHERE id = $1 FOR UPDATE", [incoming.id]))
+          .rows[0] ?? null;
+      const decision = resolveLog(existing, incoming, randomUUID);
+      const rev = await applyDecision(client, "notebook_logs", LOG_COLS, existing, decision);
+      results.push({ entity: "log", id: incoming.id, status: decision.status, rev });
+    }
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -158,10 +199,12 @@ export async function pull(
   since: number,
   limit: number,
 ): Promise<PullResponse> {
-  const changes = await pool.query<{ kind: "notebook" | "board"; id: string; rev: number }>(
+  const changes = await pool.query<{ kind: "notebook" | "board" | "log"; id: string; rev: number }>(
     `SELECT 'notebook' AS kind, id, rev FROM notebooks WHERE rev > $1
      UNION ALL
      SELECT 'board' AS kind, id, rev FROM boards WHERE rev > $1
+     UNION ALL
+     SELECT 'log' AS kind, id, rev FROM notebook_logs WHERE rev > $1
      ORDER BY rev
      LIMIT $2`,
     [since, limit + 1],
@@ -172,6 +215,7 @@ export async function pull(
   const maxRev = cursor;
   const notebookIds = page.filter((c) => c.kind === "notebook").map((c) => c.id);
   const boardIds = page.filter((c) => c.kind === "board").map((c) => c.id);
+  const logIds = page.filter((c) => c.kind === "log").map((c) => c.id);
 
   // Rows can be re-stamped by a concurrent push after the change scan; the rev bound keeps the page consistent.
   const notebooks = notebookIds.length
@@ -191,11 +235,25 @@ export async function pull(
       ).rows
     : [];
 
+  const logs = logIds.length
+    ? (
+        await pool.query<LogRow>(
+          "SELECT * FROM notebook_logs WHERE id = ANY($1::uuid[]) AND rev <= $2 ORDER BY rev",
+          [logIds, maxRev],
+        )
+      ).rows
+    : [];
+
   const blobs: Record<string, string> = {};
   for (const board of boards) {
     if (board.ink_hash && board.deleted_at === null && !(board.ink_hash in blobs)) {
       blobs[board.ink_hash] = (await storage.get(board.ink_hash)).toString("base64");
     }
   }
-  return { schema_version: schemaVersion, cursor, has_more: hasMore, notebooks, boards, blobs };
+  for (const log of logs) {
+    if (log.ink_hash && log.deleted_at === null && !(log.ink_hash in blobs)) {
+      blobs[log.ink_hash] = (await storage.get(log.ink_hash)).toString("base64");
+    }
+  }
+  return { schema_version: schemaVersion, cursor, has_more: hasMore, notebooks, boards, logs, blobs };
 }

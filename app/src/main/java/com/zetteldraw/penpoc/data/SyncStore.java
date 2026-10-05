@@ -2,6 +2,7 @@ package com.zetteldraw.penpoc.data;
 
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -35,13 +36,15 @@ public interface SyncStore {
     final class PushBatch {
         public final List<NotebookEntity> notebooks = new ArrayList<>();
         public final List<BoardEntity> boards = new ArrayList<>();
+        /** One ink log per notebook. A push sends the whole log, never a torn stroke. */
+        public final List<NotebookLogEntity> logs = new ArrayList<>();
         /** sha256 hex → ink file bytes. */
         public final Map<String, byte[]> blobs = new HashMap<>();
         /** "entity:id" → outbox queued_at snapshot. */
         final Map<String, Long> queuedAt = new HashMap<>();
 
         public boolean isEmpty() {
-            return notebooks.isEmpty() && boards.isEmpty();
+            return notebooks.isEmpty() && boards.isEmpty() && logs.isEmpty();
         }
     }
 
@@ -67,6 +70,7 @@ public interface SyncStore {
     final class PullPage {
         public final List<NotebookEntity> notebooks = new ArrayList<>();
         public final List<BoardEntity> boards = new ArrayList<>();
+        public final List<NotebookLogEntity> logs = new ArrayList<>();
         public final Map<String, byte[]> blobs = new HashMap<>();
         public long cursor;
         public boolean hasMore;

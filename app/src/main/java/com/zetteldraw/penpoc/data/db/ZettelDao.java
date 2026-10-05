@@ -23,6 +23,17 @@ public interface ZettelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertNotebook(NotebookEntity notebook);
 
+    // Notebook ink logs. One live row per notebook; conflict copies stay hidden.
+
+    @Query("SELECT * FROM notebook_logs WHERE id = :id")
+    NotebookLogEntity notebookLog(String id);
+
+    @Query("SELECT * FROM notebook_logs WHERE conflict_of IS NULL AND deleted_at IS NULL")
+    List<NotebookLogEntity> liveLogs();
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    void upsertNotebookLog(NotebookLogEntity log);
+
     // Boards
 
     @Query("SELECT * FROM boards WHERE notebook_id IS NULL AND deleted_at IS NULL"

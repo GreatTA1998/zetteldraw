@@ -38,6 +38,12 @@ public interface BoardRepository {
      */
     void saveInk(Board page);
 
+    /**
+     * Switches this notebook onto its ink log. Page files are not rewritten
+     * or deleted. The log is not pushed until it reads back identical to those pages.
+     */
+    void ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince);
+
     /** Append the page as the newest page of the notebook. */
     void movePageToNotebook(String boardId, String notebookId);
 

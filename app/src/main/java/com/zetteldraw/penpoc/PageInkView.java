@@ -25,9 +25,11 @@ import com.onyx.android.sdk.pen.EpdPenManager;
 import com.onyx.android.sdk.pen.RawInputCallback;
 import com.onyx.android.sdk.pen.TouchHelper;
 import com.onyx.android.sdk.pen.data.TouchPointList;
+import com.zetteldraw.penpoc.data.NotebookPaper;
 
 import java.util.ArrayList;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -631,8 +633,22 @@ final class PageInkView extends FrameLayout {
         RectF box = null;
         InkViewport view = shown;
         int last = view.lastVisible(surfaceView.getHeight());
+        boolean paperSelection = selection != null && selection.acrossPaper;
         for (int index = view.firstVisible(); index <= last && !view.isEmpty(); index++) {
             float top = view.pageTop(index);
+            if (paperSelection) {
+                Selection sel = selection;
+                Bitmap base = sel.sliceBases == null ? null : sel.sliceBases.get(view.page(index).id);
+                if (base == null) {
+                    base = bitmapFor(view.page(index), view.layout.heights[index]);
+                }
+                if (base != null) {
+                    layers.add(base);
+                    lefts.add(0f);
+                    tops.add(top);
+                }
+                continue;
+            }
             if (selection != null && selection.index == index) {
                 Selection sel = selection;
                 layers.add(sel.base);
@@ -650,6 +666,13 @@ final class PageInkView extends FrameLayout {
                 lefts.add(0f);
                 tops.add(top);
             }
+        }
+        if (paperSelection) {
+            Selection sel = selection;
+            layers.add(sel.sprite);
+            lefts.add(sel.bounds.left + sel.dx);
+            tops.add(sel.bounds.top + sel.dy - view.scrollY);
+            box = boxOnSurface(sel);
         }
         float[] l = new float[layers.size()];
         float[] t = new float[layers.size()];
@@ -822,6 +845,10 @@ final class PageInkView extends FrameLayout {
         if (points == null || points.isEmpty()) {
             return;
         }
+        if (onPaper(drawnOn)) {
+            addPaperStroke(points, drawnOn);
+            return;
+        }
         int index = drawnOn.pageIndexAt(points.get(0).y);
         if (index < 0) {
             return;
@@ -849,6 +876,10 @@ final class PageInkView extends FrameLayout {
 
     void eraseStrokes(List<TouchPoint> eraserPath, InkViewport view) {
         if (eraserPath == null || eraserPath.isEmpty()) {
+            return;
+        }
+        if (onPaper(view)) {
+            erasePaper(eraserPath, view);
             return;
         }
         ArrayList<Board> changed = new ArrayList<>();
@@ -900,7 +931,11 @@ final class PageInkView extends FrameLayout {
         if (width <= 0) {
             return null;
         }
-        bitmap = renderPage(page.strokes, width, height);
+        if (page.paper != null) {
+            bitmap = renderSlice(page, width, height, null);
+        } else {
+            bitmap = renderPage(page.strokes, width, height);
+        }
         putBitmap(page.id, bitmap);
         return bitmap;
     }
@@ -945,6 +980,10 @@ final class PageInkView extends FrameLayout {
         Tool mode = strokeTool != null ? strokeTool : tool;
         if (mode != Tool.LASSO || selection != null || outline.size() < 3) {
             reportLasso(0);
+            return;
+        }
+        if (onPaper(drawnOn)) {
+            finishPaperLasso(outline, drawnOn);
             return;
         }
         int index = drawnOn.pageIndexAt(outline.get(0).y);
@@ -1018,6 +1057,12 @@ final class PageInkView extends FrameLayout {
 
     private RectF boxOnSurface(Selection s, float dx, float dy) {
         RectF box = new RectF(s.bounds);
+        if (s.acrossPaper) {
+            box.offset(dx, dy - shown.scrollY);
+            float pad = 4f * getResources().getDisplayMetrics().density;
+            box.inset(-pad, -pad);
+            return box;
+        }
         box.offset(dx, shown.pageTop(s.index) + dy);
         float pad = 4f * getResources().getDisplayMetrics().density;
         box.inset(-pad, -pad);
@@ -1056,8 +1101,12 @@ final class PageInkView extends FrameLayout {
             }
             case MotionEvent.ACTION_MOVE:
                 if (s.dragging) {
-                    float[] offset = Lasso.clampOffset(s.bounds, x - s.downX, y - s.downY,
-                            surfaceView.getWidth(), shown.layout.heights[s.index]);
+                    float[] offset = s.acrossPaper
+                            ? Lasso.clampInto(s.bounds, x - s.downX, y - s.downY,
+                                    0f, shown.scrollY, surfaceView.getWidth(),
+                                    shown.scrollY + surfaceView.getHeight())
+                            : Lasso.clampOffset(s.bounds, x - s.downX, y - s.downY,
+                                    surfaceView.getWidth(), shown.layout.heights[s.index]);
                     s.dx = offset[0];
                     s.dy = offset[1];
                     scheduleDragFrame();
@@ -1105,6 +1154,10 @@ final class PageInkView extends FrameLayout {
 
     private void commitSelection() {
         Selection s = selection;
+        if (s.acrossPaper) {
+            commitPaperSelection(s);
+            return;
+        }
         removeCallbacks(dragFrame);
         RectF dirty = touchedArea(s);
         Lasso.Move move = Lasso.move(s.page, s.ids, s.dx, s.dy);
@@ -1187,6 +1240,198 @@ final class PageInkView extends FrameLayout {
         syncRaw();
     }
 
+    private static boolean onPaper(InkViewport view) {
+        return view != null && !view.isEmpty() && view.page(0).paper != null;
+    }
+
+    /** Surface points onto the notebook. With no gap, content y is paper y. */
+    private static ArrayList<TouchPoint> toPaper(List<TouchPoint> surface, int scrollY) {
+        ArrayList<TouchPoint> copy = InkRenderer.copyPoints(surface);
+        for (TouchPoint point : copy) {
+            point.y += scrollY;
+        }
+        return copy;
+    }
+
+    private void addPaperStroke(List<TouchPoint> points, InkViewport drawnOn) {
+        int index = drawnOn.pageIndexAt(points.get(0).y);
+        if (index < 0) {
+            return;
+        }
+        Board page = drawnOn.page(index);
+        NotebookPaper paper = page.paper;
+        int slicesBefore = paper.sliceCount();
+        boolean wasBlank = page.isBlank();
+        ArrayList<TouchPoint> paperPoints = toPaper(points, drawnOn.scrollY);
+        String adopt = adoptBlank(paper, paperPoints, drawnOn);
+        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(paperPoints);
+        paper.appendStroke(stroke, adopt);
+        history.record(InkHistory.Edit.of(InkHistory.Part.paperAdded(page, stroke)));
+        historyChanged();
+        invalidatePaper(drawnOn, paper);
+        notifyChanged(page);
+        if ((wasBlank || paper.sliceCount() > slicesBefore) && listener != null) {
+            listener.onPageBecameNonEmpty(page);
+        }
+    }
+
+    private void erasePaper(List<TouchPoint> eraserPath, InkViewport view) {
+        NotebookPaper paper = view.page(0).paper;
+        int index = view.pageIndexAt(eraserPath.get(0).y);
+        Board page = view.page(index < 0 ? 0 : index);
+        List<TouchPoint> path = toPaper(eraserPath, view.scrollY);
+        ArrayList<InkRenderer.InkStroke> removed = new ArrayList<>();
+        for (InkRenderer.InkStroke stroke : new ArrayList<>(paper.strokes())) {
+            if (InkRenderer.hits(stroke, path)) {
+                removed.add(stroke);
+            }
+        }
+        if (removed.isEmpty()) {
+            return;
+        }
+        ArrayList<String> ids = new ArrayList<>();
+        for (InkRenderer.InkStroke stroke : removed) {
+            ids.add(stroke.id);
+        }
+        paper.deleteIds(ids);
+        history.record(InkHistory.Edit.of(InkHistory.Part.paperRemoved(page, removed)));
+        historyChanged();
+        invalidatePaper(view, paper);
+        redrawAll();
+        notifyChanged(page);
+    }
+
+    private void finishPaperLasso(List<TouchPoint> outline, InkViewport drawnOn) {
+        List<TouchPoint> paperOutline = toPaper(outline, drawnOn.scrollY);
+        NotebookPaper paper = drawnOn.page(0).paper;
+        main.post(() -> selectOnPaper(paper, paperOutline));
+    }
+
+    private void selectOnPaper(NotebookPaper paper, List<TouchPoint> outline) {
+        if (selection != null || shown.isEmpty() || shown.page(0).paper != paper) {
+            reportLasso(0);
+            return;
+        }
+        List<InkRenderer.InkStroke> picked = Lasso.select(paper.strokes(), outline);
+        if (picked.isEmpty()) {
+            reportLasso(0);
+            return;
+        }
+        reportLasso(beginPaperSelection(shown.page(0), picked) ? picked.size() : 0);
+    }
+
+    private boolean beginPaperSelection(Board page, List<InkRenderer.InkStroke> picked) {
+        int width = surfaceView.getWidth();
+        if (width <= 0 || page.paper == null) {
+            return false;
+        }
+        cancelResume();
+        Set<String> ids = Lasso.idsOf(picked);
+        RectF bounds = Lasso.boundsOf(picked);
+        Rect spriteRect = new Rect();
+        bounds.roundOut(spriteRect);
+        Bitmap sprite = Bitmap.createBitmap(Math.max(1, spriteRect.width()), Math.max(1, spriteRect.height()),
+                Bitmap.Config.ARGB_8888);
+        Canvas spriteCanvas = new Canvas(sprite);
+        spriteCanvas.translate(-spriteRect.left, -spriteRect.top);
+        InkRenderer.drawAll(spriteCanvas, paint, picked);
+        HashMap<String, Bitmap> bases = new HashMap<>();
+        for (int i = 0; i < shown.layout.size(); i++) {
+            Board slice = shown.page(i);
+            bases.put(slice.id, renderSlice(slice, width, shown.layout.heights[i], ids));
+        }
+        selection = new Selection(page, 0, ids, new RectF(spriteRect),
+                bases.get(page.id), sprite);
+        selection.acrossPaper = true;
+        selection.sliceBases = bases;
+        setPenState(EpdPenManager.PEN_PAUSE);
+        requestFrame(true, null, UpdateMode.GC);
+        return true;
+    }
+
+    private void commitPaperSelection(Selection s) {
+        removeCallbacks(dragFrame);
+        RectF dirty = touchedArea(s);
+        float dx = s.dx;
+        float dy = s.dy;
+        NotebookPaper paper = s.page.paper;
+        Set<String> ids = s.ids;
+        scheduleResume();
+        endSelection();
+        requestFrame(false, dirty, UpdateMode.GC);
+        if (paper == null || (dx == 0f && dy == 0f)) {
+            if (listener != null) {
+                listener.onLassoCancelled();
+            }
+            return;
+        }
+        float bottom = 0f;
+        for (InkRenderer.InkStroke stroke : paper.strokes()) {
+            if (ids.contains(stroke.id)) {
+                bottom = Math.max(bottom, stroke.bounds.bottom + dy);
+            }
+        }
+        String adopt = null;
+        if (bottom >= paper.origin(paper.sliceCount()) && !shown.isEmpty()) {
+            Board tail = shown.page(shown.layout.size() - 1);
+            if (tail.sliceIndex >= paper.sliceCount()) {
+                adopt = tail.id;
+            }
+        }
+        paper.translate(ids, dx, dy, adopt);
+        invalidatePaper(shown, paper);
+        history.record(InkHistory.Edit.of(InkHistory.Part.paperShifted(s.page, ids, dx, dy)));
+        historyChanged();
+        notifyChanged(s.page);
+        if (listener != null) {
+            listener.onLassoMoved(new Lasso.Move(s.page, Map.of(), Map.of(), dx, dy));
+        }
+    }
+
+    /** The unsaved blank at the end of the stack, when this stroke grows into it. */
+    private static String adoptBlank(NotebookPaper paper, List<TouchPoint> paperPoints, InkViewport drawnOn) {
+        float bottom = 0f;
+        for (TouchPoint point : paperPoints) {
+            bottom = Math.max(bottom, point.y);
+        }
+        if (bottom < paper.origin(paper.sliceCount()) || drawnOn.layout.size() == 0) {
+            return null;
+        }
+        Board tail = drawnOn.page(drawnOn.layout.size() - 1);
+        return tail.sliceIndex >= paper.sliceCount() ? tail.id : null;
+    }
+
+    private void invalidatePaper(InkViewport view, NotebookPaper paper) {
+        for (int i = 0; i < view.layout.size(); i++) {
+            Board each = view.page(i);
+            if (each.paper == paper) {
+                invalidatePage(each.id);
+            }
+        }
+    }
+
+    /** One slice of the paper, drawn in the slice's own bitmap. */
+    private Bitmap renderSlice(Board page, int width, int height, Set<String> exclude) {
+        Bitmap bitmap = Bitmap.createBitmap(Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888);
+        bitmap.eraseColor(Color.WHITE);
+        if (page.paper == null) {
+            return bitmap;
+        }
+        Canvas canvas = new Canvas(bitmap);
+        canvas.save();
+        canvas.clipRect(0, 0, width, height);
+        canvas.translate(0f, -page.paperOrigin);
+        ArrayList<InkRenderer.InkStroke> rest = new ArrayList<>();
+        for (InkRenderer.InkStroke stroke : page.paper.touching(page.sliceIndex)) {
+            if (exclude == null || !exclude.contains(stroke.id)) {
+                rest.add(stroke);
+            }
+        }
+        InkRenderer.drawAll(canvas, paint, rest);
+        canvas.restore();
+        return bitmap;
+    }
+
     private static final class Selection {
         final Board page;
         final int index;
@@ -1197,6 +1442,9 @@ final class PageInkView extends FrameLayout {
         final Bitmap sprite;
         float dx;
         float dy;
+        /** Selection lives on the notebook paper, so the drag is one shift across slices. */
+        boolean acrossPaper;
+        Map<String, Bitmap> sliceBases;
         boolean sawDown;
         boolean dragging;
         float downX;

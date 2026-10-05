@@ -26,6 +26,11 @@ public class InkFileStore {
         return new File(dir, boardId + ".zdi");
     }
 
+    /** Notebook ink log. v19 only opens {@code .zdi} page files, so it never reads this. */
+    public File logFile(String sheetId) {
+        return new File(dir, sheetId + ".zdl");
+    }
+
     public void write(String boardId, byte[] bytes) throws IOException {
         commit(stage(boardId, "zdi", bytes), boardId);
     }
@@ -41,10 +46,47 @@ public class InkFileStore {
     }
 
     public void commit(File staged, String boardId) throws IOException {
-        File target = fileFor(boardId);
+        commitTo(staged, fileFor(boardId));
+    }
+
+    public void commitTo(File staged, File target) throws IOException {
         if (!staged.renameTo(target)) {
             throw new IOException("rename failed for " + target);
         }
+    }
+
+    /** Appends to the log. Does not rewrite the bytes already in the file. */
+    public void appendLog(String sheetId, byte[] suffix) throws IOException {
+        if (suffix == null || suffix.length == 0) {
+            return;
+        }
+        try (FileOutputStream out = new FileOutputStream(logFile(sheetId), true)) {
+            out.write(suffix);
+            out.getFD().sync();
+        }
+    }
+
+    public void writeLog(String sheetId, byte[] bytes) throws IOException {
+        commitTo(stage(sheetId, "zdl", bytes), logFile(sheetId));
+    }
+
+    public byte[] readLog(String sheetId) throws IOException {
+        File file = logFile(sheetId);
+        if (!file.exists()) {
+            return null;
+        }
+        byte[] buf = new byte[(int) file.length()];
+        try (FileInputStream in = new FileInputStream(file)) {
+            int read = 0;
+            while (read < buf.length) {
+                int n = in.read(buf, read, buf.length - read);
+                if (n < 0) {
+                    throw new IOException("short read " + file);
+                }
+                read += n;
+            }
+        }
+        return buf;
     }
 
     public void discard(File staged) {
