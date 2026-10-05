@@ -130,8 +130,6 @@ final class PageInkView extends FrameLayout {
     private boolean strokeOpen;
     private boolean pointsCommitted;
     private boolean penLifted;
-    /** A tool tap arrived while a stroke was open; pushed when that stroke ends. */
-    private boolean toolDeferred;
     private List<Rect> extraExcludeRects = new ArrayList<>();
 
     private final Paint boxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -172,8 +170,8 @@ final class PageInkView extends FrameLayout {
     /** {@code pageHeights[i]} is the height of {@code next.get(i)}; {@code gap} separates pages. */
     void setPages(List<Board> next, int[] pageHeights, int gap) {
         if (selection != null) {
-            endSelection();
             scheduleResume();
+            endSelection();
             if (listener != null) {
                 listener.onLassoCancelled();
             }
@@ -405,16 +403,13 @@ final class PageInkView extends FrameLayout {
         if (next != tool) {
             return;
         }
-        if (strokeOpen) {
-            toolDeferred = true;
-            return;
-        }
+        // The button and the firmware style stay the same tool. A stroke already
+        // down keeps the tool it started with via strokeTool, captured at pen-down.
         pushToolStyle();
     }
 
     /** The firmware follows the button. Raw drawing stays as it is; only the snapshot changes. */
     private void pushToolStyle() {
-        toolDeferred = false;
         firmwareTool = tool;
         syncRaw();
     }
@@ -532,7 +527,7 @@ final class PageInkView extends FrameLayout {
     }
 
     void close() {
-        removeCallbacks(resumeAfterLasso);
+        main.removeCallbacks(resumeAfterLasso);
         removeCallbacks(dragFrame);
         main.removeCallbacks(applyViewport);
         main.removeCallbacks(applyDespiteStuckPen);
@@ -798,9 +793,8 @@ final class PageInkView extends FrameLayout {
         }
     }
 
-    /** The pen is up. Apply a tool tap that waited, and turn fountain render back on after the side button. */
+    /** The pen is up. Turn fountain render back on after the side button. */
     private void closeStroke() {
-        boolean deferred = toolDeferred;
         boolean renderOff = eraseRenderOff;
         boolean toolLag = firmwareTool != tool;
         strokeOpen = false;
@@ -808,8 +802,7 @@ final class PageInkView extends FrameLayout {
         penLifted = false;
         pointsCommitted = false;
         eraseRenderOff = false;
-        toolDeferred = false;
-        if (deferred || renderOff || toolLag) {
+        if (renderOff || toolLag) {
             pushToolStyle();
         }
     }
@@ -1115,10 +1108,12 @@ final class PageInkView extends FrameLayout {
         removeCallbacks(dragFrame);
         RectF dirty = touchedArea(s);
         Lasso.Move move = Lasso.move(s.page, s.ids, s.dx, s.dy);
+        // Hold the pen off before dropping the selection, so this cannot turn
+        // raw drawing back on in the lasso style while the tool is about to be pen.
+        scheduleResume();
         endSelection();
         invalidatePage(s.page.id);
         requestFrame(false, dirty, UpdateMode.GC);
-        scheduleResume();
         if (move == null) {
             if (listener != null) {
                 listener.onLassoCancelled();
@@ -1150,9 +1145,9 @@ final class PageInkView extends FrameLayout {
         }
         removeCallbacks(dragFrame);
         RectF dirty = touchedArea(s);
+        scheduleResume();
         endSelection();
         requestFrame(false, dirty, UpdateMode.GC);
-        scheduleResume();
         if (listener != null) {
             listener.onLassoCancelled();
         }
@@ -1168,13 +1163,13 @@ final class PageInkView extends FrameLayout {
     }
 
     private void scheduleResume() {
-        removeCallbacks(resumeAfterLasso);
+        main.removeCallbacks(resumeAfterLasso);
         resumePending = true;
-        postDelayed(resumeAfterLasso, LASSO_RESUME_MS);
+        main.postDelayed(resumeAfterLasso, LASSO_RESUME_MS);
     }
 
     private void cancelResume() {
-        removeCallbacks(resumeAfterLasso);
+        main.removeCallbacks(resumeAfterLasso);
         resumePending = false;
     }
 

@@ -355,9 +355,10 @@ final class SurfaceWorker {
             h.setHandwritingPenState(pen);
             penState = pen;
         }
-        // setRawDrawingEnabled(true) restores the default pen: brush on, render on.
-        // The snapshot's style is written after that, so an enable is never the last
-        // word. A tool change while raw drawing is already on does not enable again.
+        // setRawDrawingEnabled(true) restores the default pen: brush on, render on,
+        // and the stroke style the firmware last had (the lasso dash survives a
+        // disable). The snapshot style is written after every enable and every
+        // disable, so it is never left behind and an enable is never last.
         if (on && !enabled) {
             h.setRawDrawingEnabled(true);
             // Enabling raw drawing resets the side-button eraser channel.
@@ -366,11 +367,17 @@ final class SurfaceWorker {
             style = null;
             LaunchLog.once("pen-applied", "pen enabled on the e-ink system");
         }
-        if (on && st != null && !st.equals(style)) {
-            writeStyle(h, st);
-        }
         if (!on && enabled) {
             disableRaw(h);
+        }
+        // While drawing is off, keep render off so this write cannot resume ink.
+        // The stroke style still changes, which is what the next stroke will use.
+        Style write = st;
+        if (write != null && !on && write.render) {
+            write = new Style(write.strokeStyle, write.width, write.brush, false);
+        }
+        if (write != null && !write.equals(style)) {
+            writeStyle(h, write);
         }
     }
 

@@ -11,12 +11,15 @@ import android.content.Context;
 import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 
 import androidx.test.core.app.ApplicationProvider;
 
 import com.onyx.android.sdk.data.note.TouchPoint;
+import com.onyx.android.sdk.pen.TouchHelper;
 import com.onyx.android.sdk.pen.data.TouchPointList;
 import com.zetteldraw.penpoc.data.TestStrokes;
 import com.zetteldraw.penpoc.data.ZettelData;
@@ -34,6 +37,7 @@ import org.robolectric.shadows.ShadowLooper;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * {@code setRawDrawingEnabled(true)} restores the default pen. These tests fail
@@ -90,6 +94,102 @@ public class ToolSwitchTest {
         assertTrue(pen.brush);
         assertTrue(pen.render);
         assertTrue(pen.lastStyle > pen.lastEnable);
+    }
+
+    @Test
+    public void penToLassoAppliesEvenWhenThePenStyleIsCachedAndDrawingIsOff() {
+        PageInkView ink = show(laidOut(new Board("a", 1L)));
+        settle();
+        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+        assertTrue(pen.raw);
+
+        ink.hold(PageInkView.Hold.SCROLL);
+        settle();
+        assertFalse(ink.penOn());
+        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+
+        ink.setTool(PageInkView.Tool.LASSO);
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertEquals(PageInkView.Tool.LASSO, ink.tool());
+        assertEquals("a cached pen style must not skip the lasso dash",
+                TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+        assertFalse(pen.raw);
+        assertTrue(pen.lastStyle > pen.lastEnable);
+
+        ink.release(PageInkView.Hold.SCROLL);
+        settle();
+        assertTrue(ink.penOn());
+        assertTrue(pen.raw);
+        assertTrue(pen.render);
+        assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+        assertTrue(pen.lastStyle > pen.lastEnable);
+    }
+
+    @Test
+    public void finishingALassoWritesThePenStyleLast() {
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(200f, 200f));
+        PageInkView ink = show(laidOut(page));
+        ink.setListener(new PageInkView.Listener() {
+            @Override
+            public void onPageChanged(Board changed) {
+            }
+
+            @Override
+            public void onPageBecameNonEmpty(Board changed) {
+            }
+
+            @Override
+            public void onLassoSelected(int selected) {
+            }
+
+            @Override
+            public void onLassoMoved(Lasso.Move move) {
+                ink.setTool(PageInkView.Tool.PEN);
+            }
+
+            @Override
+            public void onLassoCancelled() {
+            }
+
+            @Override
+            public void onHistoryChanged() {
+            }
+        });
+        settle();
+        ink.setTool(PageInkView.Tool.LASSO);
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+
+        ink.finishLasso(outlineAround(200f, 200f));
+        ShadowLooper.idleMainLooper();
+        assertTrue("the outline selects the stroke", ink.hasSelection());
+        // The selection's full repaint holds the pen. On the device it paints
+        // before the drag; settle here so that hold is not still outstanding.
+        settle();
+
+        touch(ink, MotionEvent.ACTION_DOWN, 210f, 205f);
+        touch(ink, MotionEvent.ACTION_MOVE, 260f, 235f);
+        touch(ink, MotionEvent.ACTION_UP, 310f, 285f);
+        settle();
+
+        assertEquals(PageInkView.Tool.PEN, ink.tool());
+        assertFalse(ink.penOn());
+        assertEquals("leaving the lasso replaces the dash before the next stroke",
+                TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+        assertFalse(pen.render);
+
+        ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS);
+        settle();
+        assertTrue("drawing resumes as the pen", ink.penOn());
+        assertTrue(pen.raw);
+        assertTrue(pen.brush);
+        assertTrue(pen.render);
+        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+        assertTrue("raw drawing coming back on must not restore the lasso dash",
+                pen.lastStyle > pen.lastEnable);
     }
 
     @Test
@@ -263,6 +363,22 @@ public class ToolSwitchTest {
         return list;
     }
 
+    private static ArrayList<TouchPoint> outlineAround(float x, float y) {
+        ArrayList<TouchPoint> outline = new ArrayList<>();
+        outline.add(new TouchPoint(x - 40f, y - 40f, 0.5f, 1f, 0, 0, 1L));
+        outline.add(new TouchPoint(x + 40f, y - 40f, 0.5f, 1f, 0, 0, 2L));
+        outline.add(new TouchPoint(x + 40f, y + 40f, 0.5f, 1f, 0, 0, 3L));
+        outline.add(new TouchPoint(x - 40f, y + 40f, 0.5f, 1f, 0, 0, 4L));
+        return outline;
+    }
+
+    private static void touch(View target, int action, float x, float y) {
+        long now = SystemClock.uptimeMillis();
+        MotionEvent event = MotionEvent.obtain(now, now, action, x, y, 0);
+        target.dispatchTouchEvent(event);
+        event.recycle();
+    }
+
     private static TouchPointList list(List<TouchPoint> points) {
         TouchPointList list = new TouchPointList();
         for (TouchPoint point : points) {
@@ -316,6 +432,7 @@ public class ToolSwitchTest {
         boolean raw;
         boolean brush;
         boolean render;
+        int strokeStyle = -1;
         private int seq;
         /** Sequence number of the last {@code setRawDrawingEnabled(true)}, or -1. */
         int lastEnable = -1;
@@ -344,6 +461,7 @@ public class ToolSwitchTest {
 
         @Override
         public void setStyle(SurfaceWorker.Style next) {
+            strokeStyle = next.strokeStyle;
             brush = next.brush;
             render = next.render;
             seq++;
