@@ -36,6 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.LongSupplier;
 
 /**
@@ -51,6 +52,11 @@ import java.util.function.LongSupplier;
  * a slow disk costs one write per page, not one per stroke.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
+    /**
+     * Calls that read a notebook's pages or open its ink log.
+     * Pressing Link must not move this: that work is what froze the screen.
+     */
+    public static final AtomicInteger notebookReads = new AtomicInteger();
     private static final String TAG = "zd-repo";
     private static final long SLOW_WRITE_MS = 250;
     private static final byte[] MIRROR_DELETE = new byte[0];
@@ -152,6 +158,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      */
     @Override
     public List<Board> pages(String notebookId) {
+        notebookReads.incrementAndGet();
         synchronized (lock) {
             OpenSheet sheet = sheets.get(NotebookPaper.sheetId(notebookId));
             if (sheet != null && sheet.ready) {
@@ -572,6 +579,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public PagePlace placeOf(String pageId) {
+        notebookReads.incrementAndGet();
         if (pageId == null) {
             return null;
         }
@@ -1778,6 +1786,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
+        notebookReads.incrementAndGet();
         if (pageHeight <= 0) {
             return;
         }

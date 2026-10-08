@@ -74,6 +74,8 @@ public final class CanvasActivity extends Activity {
     private Button linkConfirm;
     /** Page the Link control was pressed on. Null when the linking line is closed. */
     private String linkSourceId;
+    /** "notebook k/n" captured from the slot on screen. Not looked up again. */
+    private String linkSourceRef;
     private View toolbar;
     private PageInkView inkView;
     private PageScroller scroller;
@@ -1005,6 +1007,7 @@ public final class CanvasActivity extends Activity {
 
     private void startLinking(PageSlot slot) {
         linkSourceId = slot.page.id;
+        linkSourceRef = refOnScreen(slot);
         linkingBar.setVisibility(View.VISIBLE);
         refreshLinkingBar();
         updateExcludeRects();
@@ -1012,6 +1015,7 @@ public final class CanvasActivity extends Activity {
 
     private void cancelLinking() {
         linkSourceId = null;
+        linkSourceRef = null;
         linkingBar.setVisibility(View.GONE);
         linkConfirm.setVisibility(View.GONE);
         updateExcludeRects();
@@ -1044,23 +1048,36 @@ public final class CanvasActivity extends Activity {
     }
 
     private void refreshLinkingBar() {
-        if (linkSourceId == null || linkingBar.getVisibility() != View.VISIBLE) {
-            return;
-        }
-        String from = pageRef(linkSourceId);
-        if (from == null) {
-            cancelLinking();
+        if (linkSourceId == null || linkSourceRef == null || linkingBar.getVisibility() != View.VISIBLE) {
             return;
         }
         PageSlot front = frontSlot();
-        String to = front == null || front.page.id.equals(linkSourceId) ? null : pageRef(front.page.id);
-        if (to == null) {
-            linkingText.setText(getString(R.string.linking_from, from));
+        if (front == null || front.page.id.equals(linkSourceId)) {
+            linkingText.setText(getString(R.string.linking_from, linkSourceRef));
             linkConfirm.setVisibility(View.GONE);
         } else {
-            linkingText.setText(getString(R.string.link_from_to, from, to));
+            linkingText.setText(getString(R.string.link_from_to, linkSourceRef, refOnScreen(front)));
             linkConfirm.setVisibility(View.VISIBLE);
         }
+    }
+
+    /** Notebook name and k/n already drawn on this slot. Does not open a notebook or walk its pages. */
+    private String refOnScreen(PageSlot slot) {
+        return nameOnScreen() + " " + slot.number.getText();
+    }
+
+    private String nameOnScreen() {
+        if (SCRATCHPAD.equals(collectionId)) {
+            return getString(R.string.scratchpad);
+        }
+        if (shownNotebooks != null) {
+            for (BoardRepository.NotebookInfo each : shownNotebooks) {
+                if (each.id.equals(collectionId)) {
+                    return each.title;
+                }
+            }
+        }
+        return "";
     }
 
     /**

@@ -14,6 +14,7 @@ import android.widget.TextView;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.zetteldraw.penpoc.data.BoardRepository;
+import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
 import com.zetteldraw.penpoc.data.ZettelData;
 
@@ -38,6 +39,39 @@ public class PageLinksTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+    }
+
+    @Test
+    public void startingALinkOnALargeNotebookDoesNotReadPages() {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        BoardRepository.NotebookInfo dense = repo.createNotebook("dense");
+        repo.createNotebook("other-a");
+        repo.createNotebook("other-b");
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        openNotebook(root, "dense");
+        int height = repo.pages(dense.id).get(0).slicePx;
+        assertTrue(height > 40);
+        List<Board> pages = repo.pages(dense.id);
+        pages.get(0).paper.appendStroke(TestStrokes.stroke(3f, 39f * height + 10f), pages.get(0).id);
+        repo.saveInk(pages.get(0));
+        openNotebook(root, "dense");
+        assertEquals(41, repo.pages(dense.id).size());
+
+        TextView control = textIn((View) find(root, "40/41").getParent(), "Link");
+        assertNotNull(control);
+        int reads = RoomBoardRepository.notebookReads.get();
+        long start = System.nanoTime();
+        assertTrue(control.performClick());
+        long ms = (System.nanoTime() - start) / 1_000_000L;
+        assertEquals("pressing Link walked a notebook", reads, RoomBoardRepository.notebookReads.get());
+        assertTrue("pressing Link took " + ms + " ms", ms < 200);
+        assertNotNull(find(root, "Linking from dense 40/41"));
+        assertNull(find(root, "Confirm"));
+
+        controller.pause().stop().destroy();
     }
 
     @Test
