@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Boox Pen POC</string>
+    <string name="app_name">Zetteldraw</string>
     <string name="scratchpad">Scratchpad</string>
     <string name="pen">Pen</string>
     <string name="eraser">Eraser</string>

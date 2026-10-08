@@ -8,6 +8,7 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
+import android.graphics.Rect;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -413,6 +414,71 @@ public class CanvasActivitySmokeTest {
         assertEquals(PageInkView.Tool.LASSO, ink.tool());
 
         controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void penReaderLeavesHolesForTheBarsAndHugsMove() {
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        CanvasActivity activity = controller.get();
+        View root = activity.getWindow().getDecorView();
+        idle();
+        PageInkView ink = findInk(root);
+        List<Rect> holes = ink.penExcludes();
+
+        View toolbar = (View) byDescription(root, "Lasso").get(0).getParent();
+        View topBar = (View) byDescription(root, "Scratchpad").get(0).getParent();
+        assertNotNull("toolbar is a hole in the pen reader", cover(ink, toolbar, holes));
+        assertNotNull("tab bar is a hole in the pen reader", cover(ink, topBar, holes));
+
+        TextView move = null;
+        Rect hole = null;
+        for (TextView candidate : collectAll(root, "Move")) {
+            Rect found = cover(ink, candidate, holes);
+            if (found != null) {
+                move = candidate;
+                hole = found;
+                break;
+            }
+        }
+        assertNotNull("a visible Move is excluded", hole);
+        Rect glyphs = new Rect();
+        String word = move.getText().toString();
+        move.getPaint().getTextBounds(word, 0, word.length(), glyphs);
+        int textWidth = Math.max(glyphs.width(), (int) Math.ceil(move.getPaint().measureText(word)));
+        int textHeight = Math.max(glyphs.height(), move.getLineHeight());
+        assertTrue("Move hole is the word plus a few pixels, wide " + hole.width() + " vs text " + textWidth,
+                hole.width() <= textWidth + 8);
+        assertTrue("Move hole is the word plus a few pixels, tall " + hole.height() + " vs text " + textHeight,
+                hole.height() <= textHeight + 8);
+
+        TextView number = pageLabelViews(root).get(0);
+        float sp = number.getTextSize() / number.getResources().getDisplayMetrics().scaledDensity;
+        assertEquals(13f, sp, 0.1f);
+        assertTrue(number.getCurrentTextColor() != android.graphics.Color.BLACK);
+        assertTrue(number.getCurrentTextColor() != android.graphics.Color.GRAY);
+        assertNotNull("page number hole grows with the text", cover(ink, number, holes));
+        assertEquals("Zetteldraw", activity.getString(com.zetteldraw.penpoc.R.string.app_name));
+
+        controller.pause().stop().destroy();
+    }
+
+    /** The exclude rect that contains {@code view}, in the ink surface's coordinates. */
+    private static Rect cover(PageInkView ink, View view, List<Rect> holes) {
+        int[] origin = new int[2];
+        int[] loc = new int[2];
+        ink.getLocationOnScreen(origin);
+        view.getLocationOnScreen(loc);
+        Rect bounds = new Rect(
+                loc[0] - origin[0],
+                loc[1] - origin[1],
+                loc[0] - origin[0] + view.getWidth(),
+                loc[1] - origin[1] + view.getHeight());
+        for (Rect hole : holes) {
+            if (hole.contains(bounds)) {
+                return hole;
+            }
+        }
+        return null;
     }
 
     /** Every ⋯ that is not a page's own menu button. */

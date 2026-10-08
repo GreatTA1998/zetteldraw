@@ -66,6 +66,7 @@ public final class CanvasActivity extends Activity {
     /** In-window menu or form (Move, notebook menu, name, delete confirm). */
     private FrameLayout overlay;
     private LinearLayout topBar;
+    private View toolbar;
     private PageInkView inkView;
     private PageScroller scroller;
     private LinearLayout pageColumn;
@@ -134,7 +135,8 @@ public final class CanvasActivity extends Activity {
         topBar = buildTopBar();
         column.addView(topBar, matchWrap());
         column.addView(rule(), ruleLp());
-        column.addView(buildToolbar(), matchWrap());
+        toolbar = buildToolbar();
+        column.addView(toolbar, matchWrap());
         column.addView(rule(), ruleLp());
 
         drawingArea = new FrameLayout(this);
@@ -1275,28 +1277,38 @@ public final class CanvasActivity extends Activity {
         int[] origin = new int[2];
         int[] loc = new int[2];
         inkView.getLocationOnScreen(origin);
+        // The reader owns the stylus wherever it can draw. Every control is a hole,
+        // in the surface view's coordinates, including the bars above the page.
+        addExclude(rects, topBar, dp(6), origin, loc);
+        addExclude(rects, toolbar, dp(6), origin, loc);
         int top = scroller.getScrollY();
         int bottom = top + scroller.getHeight();
         for (PageSlot slot : slots) {
             if (slot.getBottom() < top || slot.getTop() > bottom) {
                 continue;
             }
-            // No ink under a page's controls or its number, so neither can pass for page content.
-            for (View chrome : new View[]{slot.actions, slot.number}) {
-                if (chrome.getWidth() <= 0) {
-                    continue;
-                }
-                chrome.getLocationOnScreen(loc);
-                Rect rect = new Rect(
-                        loc[0] - origin[0],
-                        loc[1] - origin[1],
-                        loc[0] - origin[0] + chrome.getWidth(),
-                        loc[1] - origin[1] + chrome.getHeight());
-                rect.inset(-dp(6), -dp(6));
-                rects.add(rect);
-            }
+            // Move is only the word. ⋯ and the page number keep a small margin.
+            addExclude(rects, slot.moveButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
+            addExclude(rects, slot.moreButton, dp(6), origin, loc);
+            addExclude(rects, slot.number, dp(6), origin, loc);
         }
         inkView.setExtraExcludeRects(rects);
+    }
+
+    /** A couple of pixels: ink reaches the word Move, and the hole is that box. */
+    private static final int MOVE_EXCLUDE_PAD_PX = 2;
+
+    private void addExclude(List<Rect> rects, View chrome, int padPx, int[] origin, int[] loc) {
+        if (chrome == null || chrome.getWidth() <= 0 || chrome.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        chrome.getLocationOnScreen(loc);
+        Rect rect = new Rect(
+                loc[0] - origin[0] - padPx,
+                loc[1] - origin[1] - padPx,
+                loc[0] - origin[0] + chrome.getWidth() + padPx,
+                loc[1] - origin[1] + chrome.getHeight() + padPx);
+        rects.add(rect);
     }
 
     private PageSlot slotFor(String pageId) {
@@ -1356,8 +1368,9 @@ public final class CanvasActivity extends Activity {
             this.page = page;
             number = new TextView(context);
             number.setText(index + "/" + total);
-            number.setTextColor(Color.GRAY);
-            number.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+            // One step up from 11sp, and gray rather than ink-black, so it reads on e-ink.
+            number.setTextColor(Color.rgb(0x55, 0x55, 0x55));
+            number.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
             number.setContentDescription(getString(R.string.page_number, index, total));
             FrameLayout.LayoutParams labelLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -1368,8 +1381,15 @@ public final class CanvasActivity extends Activity {
             addView(number, labelLp);
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
+            actions.setGravity(Gravity.CENTER_VERTICAL);
             moveButton = tinyButton(getString(R.string.move), 14);
-            moveButton.setMinimumHeight(dp(48));
+            // The hole the pen skips is this view. Keep it to the word plus a couple of pixels.
+            moveButton.setMinimumWidth(0);
+            moveButton.setMinimumHeight(0);
+            moveButton.setMinWidth(0);
+            moveButton.setMinHeight(0);
+            moveButton.setPadding(2, 2, 2, 2);
+            moveButton.setIncludeFontPadding(false);
             moreButton = tinyButton(getString(R.string.notebook_options), 18);
             moreButton.setMinimumHeight(dp(48));
             moreButton.setMinimumWidth(dp(48));

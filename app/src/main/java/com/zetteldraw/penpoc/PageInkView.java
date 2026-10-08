@@ -380,6 +380,15 @@ final class PageInkView extends FrameLayout {
         requestFrame(true, null, null);
     }
 
+    /** Rectangles the pen reader is told to leave alone, in this view's coordinates. */
+    List<Rect> penExcludes() {
+        ArrayList<Rect> copy = new ArrayList<>(excludeRects.size());
+        for (Rect rect : excludeRects) {
+            copy.add(new Rect(rect));
+        }
+        return copy;
+    }
+
     void setExtraExcludeRects(List<Rect> rects) {
         extraExcludeRects = rects == null ? new ArrayList<>() : rects;
         updateExcludeRects();
