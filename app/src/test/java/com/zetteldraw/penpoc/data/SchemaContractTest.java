@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
 public class SchemaContractTest {
-    private static final List<String> SYNCED = Arrays.asList("notebooks", "boards", "notebook_logs");
+    private static final List<String> SYNCED = Arrays.asList("notebooks", "boards", "notebook_logs", "page_links");
 
     @Test
     public void roomMatchesPostgresMigrations() throws Exception {

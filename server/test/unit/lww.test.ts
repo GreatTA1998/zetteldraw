@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { needsConflictCopy, resolveBoard, resolveLog, resolveNotebook, type BoardRow, type LogRow } from "../../src/lww.js";
+import { needsConflictCopy, resolveBoard, resolveLink, resolveLog, resolveNotebook, type BoardRow, type LogRow } from "../../src/lww.js";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const HASH_A = "a".repeat(64);
@@ -183,5 +183,27 @@ describe("resolveNotebook", () => {
     expect(won.status).toBe("conflict_won");
     expect(won.write?.parent_id).toBe(parent);
     expect(won.write?.title).toBe("jokes");
+  });
+});
+
+describe("resolveLink", () => {
+  const link = {
+    id: ID,
+    source_id: "11111111-1111-4111-8111-111111111111",
+    target_id: "22222222-2222-4222-8222-222222222222",
+    created_at: 1,
+    updated_at: 100,
+    deleted_at: null,
+    rev: 3,
+  };
+  it("is last-write-wins and keeps no conflict copy", () => {
+    expect(resolveLink(null, { ...link, base_rev: 0 }).status).toBe("applied");
+    expect(resolveLink(link, { ...link, deleted_at: 200, updated_at: 200, base_rev: 1 }).status).toBe("conflict_won");
+    expect(resolveLink(link, { ...link, deleted_at: 50, updated_at: 50, base_rev: 1 })).toMatchObject({
+      status: "conflict_lost",
+      restamp: true,
+      copy: null,
+    });
+    expect(resolveLink(link, { ...link, base_rev: 1 }).status).toBe("applied");
   });
 });

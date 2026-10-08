@@ -17,11 +17,23 @@ import com.zetteldraw.penpoc.LaunchLog;
  * {@code Migration} here; {@code SchemaContractTest} keeps the two in step.
  */
 @Database(
-        entities = {NotebookEntity.class, BoardEntity.class, NotebookLogEntity.class, OutboxEntry.class, SyncState.class},
+        entities = {NotebookEntity.class, BoardEntity.class, NotebookLogEntity.class, PageLinkEntity.class,
+                OutboxEntry.class, SyncState.class},
         version = ZettelDatabase.SCHEMA_VERSION,
         exportSchema = true)
 public abstract class ZettelDatabase extends RoomDatabase {
-    public static final int SCHEMA_VERSION = 3;
+    public static final int SCHEMA_VERSION = 4;
+
+    /** Page links by the two page ids. No ink, and no foreign key: a slice id is not a board row. */
+    public static final Migration MIGRATION_3_4 = new Migration(3, 4) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase db) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS `page_links` ("
+                    + "`id` TEXT NOT NULL, `source_id` TEXT NOT NULL, `target_id` TEXT NOT NULL, "
+                    + "`created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, `rev` INTEGER NOT NULL, "
+                    + "`deleted_at` INTEGER, PRIMARY KEY(`id`))");
+        }
+    };
 
     /** Nullable parent. Null is top-level. The column is metadata, not an ink merge. */
     public static final Migration MIGRATION_2_3 = new Migration(2, 3) {
@@ -56,7 +68,7 @@ public abstract class ZettelDatabase extends RoomDatabase {
     public static ZettelDatabase open(Context context) {
         return Room.databaseBuilder(context.getApplicationContext(), ZettelDatabase.class, NAME)
                 .allowMainThreadQueries()
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .addCallback(new Callback() {
                     @Override
                     public void onCreate(@NonNull SupportSQLiteDatabase db) {

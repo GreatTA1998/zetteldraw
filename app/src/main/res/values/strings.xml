@@ -16,6 +16,12 @@
     <string name="undo_nothing">Nothing left to undo</string>
     <string name="redo_nothing">Nothing left to redo</string>
     <string name="move">Move</string>
+    <string name="link">Link</string>
+    <string name="linking_from">Linking from %1$s</string>
+    <string name="link_from_to">Link from %1$s to %2$s</string>
+    <string name="confirm">Confirm</string>
+    <string name="link_outgoing">→ %1$s</string>
+    <string name="link_incoming">← %1$s</string>
     <string name="wipe">Wipe</string>
     <string name="page_options">Page options</string>
     <string name="page_number">Page %1$d of %2$d</string>

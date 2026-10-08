@@ -8,7 +8,7 @@ Stack: TypeScript, Node 22, Fastify, `pg`, `@aws-sdk/client-s3`. I picked Node o
 
 ```bash
 docker compose up -d --build --wait
-curl localhost:8787/healthz          # {"ok":true,"schema_version":3}
+curl localhost:8787/healthz          # {"ok":true,"schema_version":4}
 ```
 
 | Service | Address | Credentials |
@@ -40,21 +40,24 @@ KEEP=1 npm run test:integration          # leave the stack running afterwards
 
 Every `/sync/*` call sends `Authorization: Bearer <device token>` and `X-Zetteldraw-Schema: <n>`. A wrong token returns `401`. A schema mismatch returns `409 {"error":"schema_mismatch","server_schema":n}`.
 
-`rev` is a server revision taken from one sequence shared by notebooks, boards, and notebook logs. The client sends back the rev it last saw as `base_rev`; `0` means new. All times are epoch milliseconds.
+`rev` is a server revision taken from one sequence shared by notebooks, boards, notebook logs, and page links. The client sends back the rev it last saw as `base_rev`; `0` means new. All times are epoch milliseconds.
 
 `logs` is one append-only ink log per notebook. Two devices editing one notebook are editing that one object. Last-write-wins shelves the other log whole as a hidden conflict copy. A pull replaces the log. It does not merge strokes. Omit `logs` and it is treated as empty, so an older body still parses. The page blobs in `boards` stay; migration does not delete them.
+
+`links` connects two pages by id and copies no ink. Last-write-wins, with no conflict copy. A delete of either page is a tombstone on the link. Omit `links` and it is treated as empty.
 
 ### `POST /sync/push`
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "device_id": "…",
   "notebooks": [{ "id", "title", "position", "parent_id", "created_at", "updated_at", "deleted_at", "base_rev" }],
   "boards":    [{ "id", "notebook_id", "position", "ink_hash", "ink_bytes", "thumb_hash", "conflict_of",
                   "created_at", "updated_at", "deleted_at", "base_rev" }],
   "logs":     [{ "id", "notebook_id", "ink_hash", "ink_bytes", "slice_height", "conflict_of",
                 "created_at", "updated_at", "deleted_at", "base_rev" }],
+  "links":    [{ "id", "source_id", "target_id", "created_at", "updated_at", "deleted_at", "base_rev" }],
   "blobs": { "<sha256 hex>": "<base64 ink file>" }
 }
 ```
@@ -77,9 +80,10 @@ Notebook create, rename and delete are ordinary notebook rows. A delete is a tom
 ### `GET /sync/pull?since=<cursor>&limit=<n≤500>`
 
 ```json
-{ "schema_version": 3, "cursor": 123, "has_more": false,
+{ "schema_version": 4, "cursor": 123, "has_more": false,
   "notebooks": [{ …row, "rev" }], "boards": [{ …row, "rev" }],
   "logs": [{ …row, "rev" }],
+  "links": [{ …row, "rev" }],
   "blobs": { "<sha256>": "<base64>" } }
 ```
 

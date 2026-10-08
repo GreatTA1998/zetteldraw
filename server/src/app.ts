@@ -68,7 +68,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
     const results = await push(deps.pool, deps.storage, body);
     req.log.info(
-      { device: body.device_id, notebooks: body.notebooks.length, boards: body.boards.length, logs: body.logs.length },
+      {
+        device: body.device_id,
+        notebooks: body.notebooks.length,
+        boards: body.boards.length,
+        logs: body.logs.length,
+        links: body.links.length,
+      },
       "push",
     );
     return { schema_version: deps.schemaVersion, results };

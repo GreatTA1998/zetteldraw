@@ -45,6 +45,16 @@ export interface LogRow {
   rev: number;
 }
 
+export interface LinkRow {
+  id: string;
+  source_id: string;
+  target_id: string;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+  rev: number;
+}
+
 export type Incoming<T> = Omit<T, "rev"> & { base_rev: number };
 
 export type Status = "applied" | "conflict_won" | "conflict_lost";
@@ -173,6 +183,29 @@ export function resolveLog(
 function withoutLogRev(row: Omit<LogRow, "rev">): Omit<LogRow, "rev"> {
   const { rev: _rev, ...rest } = row as LogRow;
   return rest;
+}
+
+function sameLink(a: Omit<LinkRow, "rev">, b: Omit<LinkRow, "rev">): boolean {
+  return (
+    a.source_id === b.source_id &&
+    a.target_id === b.target_id &&
+    a.deleted_at === b.deleted_at &&
+    a.updated_at === b.updated_at
+  );
+}
+
+/** Last-write-wins for a page link. A link copies no ink, so there is no conflict copy. */
+export function resolveLink(existing: LinkRow | null, incoming: Incoming<LinkRow>): Decision<LinkRow> {
+  const row = stripBase(incoming);
+  if (existing === null || incoming.base_rev === existing.rev) {
+    return { status: "applied", write: row, restamp: false, copy: null };
+  }
+  if (sameLink(existing, row)) {
+    return { status: "applied", write: null, restamp: false, copy: null };
+  }
+  return row.updated_at > existing.updated_at
+    ? { status: "conflict_won", write: row, restamp: false, copy: null }
+    : { status: "conflict_lost", write: null, restamp: true, copy: null };
 }
 
 export type NotebookPush = Omit<Incoming<NotebookRow>, "parent_id"> & { parent_id?: string | null };

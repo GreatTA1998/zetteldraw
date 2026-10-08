@@ -11,6 +11,7 @@ import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
+import com.zetteldraw.penpoc.data.db.PageLinkEntity;
 import com.zetteldraw.penpoc.data.db.SyncState;
 import com.zetteldraw.penpoc.data.db.ZettelDao;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
@@ -439,6 +440,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 if (dest != null && dest.ready && moving.sliceIndex >= 0
                         && moving.sliceIndex < moving.paper.sliceCount()) {
                     moving.paper.tearMove(moving.sliceIndex, dest.paper);
+                    // The slice id does not survive the move, so a link to it would name a missing page.
+                    tombstoneLinksTouchingLocked(boardId);
                     writer.execute(() -> flushSheet(NotebookPaper.sheetId(notebookId)));
                     writer.execute(() -> flushSheet(moving.sheetId));
                 }
@@ -510,12 +513,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     @Override
     public void deletePage(String boardId) {
         synchronized (lock) {
+            if (deletePaperSliceLocked(boardId)) {
+                return;
+            }
             Board board = cache.get(boardId);
             if (board != null && board.paper != null) {
-                if (board.sliceIndex >= 0 && board.sliceIndex < board.paper.sliceCount()) {
-                    board.paper.tearDelete(board.sliceIndex);
-                    writer.execute(() -> flushSheet(board.sheetId));
-                }
+                // The trailing blank is not a slice yet, and it cannot be deleted.
                 return;
             }
             BoardEntity row = dao.board(boardId);
@@ -523,9 +526,80 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 return;
             }
             tombstoneLocked(row);
+            tombstoneLinksTouchingLocked(row.id);
             trimTrailingBlanksLocked(row.notebookId);
             ensureTrailingBlankLocked(row.notebookId);
         }
+    }
+
+    @Override
+    public PageLink createLink(String sourceId, String targetId) {
+        if (sourceId == null || targetId == null || sourceId.equals(targetId)) {
+            return null;
+        }
+        synchronized (lock) {
+            if (dao.liveLink(sourceId, targetId) != null) {
+                return null;
+            }
+            long now = clock.getAsLong();
+            PageLinkEntity row = new PageLinkEntity();
+            row.id = UUID.randomUUID().toString();
+            row.sourceId = sourceId;
+            row.targetId = targetId;
+            row.createdAt = now;
+            row.updatedAt = now;
+            db.runInTransaction(() -> {
+                dao.upsertPageLink(row);
+                queueLocked(OutboxEntry.LINK, row.id, OutboxEntry.UPSERT);
+            });
+            return new PageLink(row.id, row.sourceId, row.targetId);
+        }
+    }
+
+    @Override
+    public List<PageLink> linksTouching(String pageId) {
+        synchronized (lock) {
+            ArrayList<PageLink> out = new ArrayList<>();
+            if (pageId == null) {
+                return out;
+            }
+            for (PageLinkEntity row : dao.liveLinksTouching(pageId)) {
+                out.add(new PageLink(row.id, row.sourceId, row.targetId));
+            }
+            return out;
+        }
+    }
+
+    @Override
+    public PagePlace placeOf(String pageId) {
+        if (pageId == null) {
+            return null;
+        }
+        PagePlace found = placeIn(null, pageId);
+        if (found != null) {
+            return found;
+        }
+        for (NotebookInfo info : notebooks()) {
+            found = placeIn(info.id, pageId);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    /** Opens the sheet if this screen already knows a page height, then looks the id up. */
+    private PagePlace placeIn(String notebookId, String pageId) {
+        if (knownPageHeight > 0) {
+            ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
+        }
+        List<Board> list = pages(notebookId);
+        for (int i = 0; i < list.size(); i++) {
+            if (pageId.equals(list.get(i).id)) {
+                return new PagePlace(notebookId, i, list.size());
+            }
+        }
+        return null;
     }
 
     @Override
@@ -654,6 +728,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     }
                     logs.add(row);
                     logQueuedAt.put(row.id, entry.queuedAt);
+                } else if (OutboxEntry.LINK.equals(entry.entity)) {
+                    PageLinkEntity row = dao.pageLink(entry.id);
+                    if (row == null) {
+                        dao.deleteOutbox(entry.entity, entry.id);
+                        continue;
+                    }
+                    batch.links.add(row);
+                    batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
                 } else if (OutboxEntry.BOARD.equals(entry.entity)) {
                     BoardEntity row = dao.board(entry.id);
                     if (row == null) {
@@ -828,7 +910,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 ink.discard(s.file);
             }
         }
-        if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty()) {
+        if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty() || !page.links.isEmpty()) {
             boolean post;
             synchronized (refreshLock) {
                 for (Map.Entry<String, List<InkRenderer.InkStroke>> e : refreshed.entrySet()) {
@@ -959,6 +1041,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         for (NotebookLogEntity remote : page.logs) {
                             applyRemoteLogLocked(remote, logBytes, mirrorOps);
                         }
+                        for (PageLinkEntity remote : page.links) {
+                            applyRemoteLinkLocked(remote);
+                        }
                         for (NotebookEntity remote : page.notebooks) {
                             NotebookEntity now = dao.notebook(remote.id);
                             if (now != null && now.deletedAt != null) {
@@ -993,7 +1078,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     boardsSeen.put(id, board);
                 }
             }
-            if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty()) {
+            if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty() || !page.links.isEmpty()) {
                 scheduleIndex();
             }
         }
@@ -1267,10 +1352,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 return;
             }
             if (blank != null) {
+                String blankId = blank.id;
                 cache.remove(blank.id);
                 trailingBlanks.remove(key);
+                tombstoneLinksTouchingLocked(blankId);
             } else {
-                tombstoneLocked(rows.get(rows.size() - 1));
+                BoardEntity dropped = rows.get(rows.size() - 1);
+                tombstoneLocked(dropped);
+                tombstoneLinksTouchingLocked(dropped.id);
             }
         }
     }
@@ -1290,6 +1379,48 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         pendingInk.remove(row.id);
         mirrorInk(row.id, null);
         scheduleIndex();
+    }
+
+    /** Finds the slice by id on an open sheet, so a stale cache cannot delete the wrong page. */
+    private boolean deletePaperSliceLocked(String boardId) {
+        if (boardId == null) {
+            return false;
+        }
+        for (Map.Entry<String, OpenSheet> entry : sheets.entrySet()) {
+            OpenSheet sheet = entry.getValue();
+            if (!sheet.ready || sheet.paper == null) {
+                continue;
+            }
+            NotebookPaper paper = sheet.paper;
+            for (int i = 0; i < paper.sliceCount(); i++) {
+                if (!boardId.equals(paper.sliceId(i))) {
+                    continue;
+                }
+                paper.tearDelete(i);
+                tombstoneLinksTouchingLocked(boardId);
+                String sheetId = entry.getKey();
+                writer.execute(() -> flushSheet(sheetId));
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A deleted page takes its links with it. The user never sees a missing-page row. */
+    private void tombstoneLinksTouchingLocked(String pageId) {
+        if (pageId == null) {
+            return;
+        }
+        long now = clock.getAsLong();
+        for (PageLinkEntity row : dao.liveLinksTouching(pageId)) {
+            row.deletedAt = now;
+            row.updatedAt = now;
+            PageLinkEntity stored = row;
+            db.runInTransaction(() -> {
+                dao.upsertPageLink(stored);
+                queueLocked(OutboxEntry.LINK, stored.id, OutboxEntry.DELETE);
+            });
+        }
     }
 
     private void queueLocked(String entity, String id, String op) {
@@ -1314,6 +1445,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (row != null && rev > row.rev) {
                 row.rev = rev;
                 dao.upsertNotebookLog(row);
+            }
+        } else if (OutboxEntry.LINK.equals(entity)) {
+            PageLinkEntity row = dao.pageLink(id);
+            if (row != null && rev > row.rev) {
+                row.rev = rev;
+                dao.upsertPageLink(row);
             }
         } else {
             BoardEntity row = dao.board(id);
@@ -1403,6 +1540,21 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         dao.upsertNotebookLog(remote);
         dao.deleteOutbox(OutboxEntry.LOG, remote.id);
+    }
+
+    private void applyRemoteLinkLocked(PageLinkEntity remote) {
+        PageLinkEntity local = dao.pageLink(remote.id);
+        if (local != null) {
+            if (remote.rev <= local.rev) {
+                return;
+            }
+            if (pendingLocked(OutboxEntry.LINK, remote.id)
+                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
+                return;
+            }
+        }
+        dao.upsertPageLink(remote);
+        dao.deleteOutbox(OutboxEntry.LINK, remote.id);
     }
 
     private void applyRemoteBoardLocked(BoardEntity remote, Map<String, Staged> staged,
@@ -1609,6 +1761,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 boards.put(b);
             }
             root.put("boards", boards);
+            JSONArray links = new JSONArray();
+            for (PageLinkEntity row : dao.livePageLinks()) {
+                links.put(new JSONObject()
+                        .put("id", row.id)
+                        .put("source_id", row.sourceId)
+                        .put("target_id", row.targetId));
+            }
+            root.put("links", links);
             return root.toString(2);
         } catch (JSONException e) {
             Log.e(TAG, "index build failed", e);

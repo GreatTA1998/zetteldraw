@@ -53,9 +53,26 @@ public interface BoardRepository {
     /**
      * Tombstones the page (blank or not) so the delete syncs. Every list ends
      * in exactly one blank page; that page cannot be deleted (a no-op), so a
-     * delete never looks like it undid itself.
+     * delete never looks like it undid itself. A link that names this page is
+     * tombstoned with it. Nothing is left that would show a missing page.
      */
     void deletePage(String boardId);
+
+    /**
+     * Stores one link from {@code sourceId} to {@code targetId}. Null when the
+     * two ids are the same or that live pair already exists. Copies no ink.
+     */
+    PageLink createLink(String sourceId, String targetId);
+
+    /** Live links that start or end at this page, oldest first. */
+    List<PageLink> linksTouching(String pageId);
+
+    /**
+     * Where this page sits right now, read from the lists already in memory.
+     * Null when the page is gone. {@code notebookId} null is the Scratchpad.
+     * {@code index} is 0-based and {@code count} includes the trailing blank.
+     */
+    PagePlace placeOf(String pageId);
 
     /** New top-level notebook, ordered after every existing one. Blank titles are rejected (returns null). */
     NotebookInfo createNotebook(String title);
@@ -105,6 +122,32 @@ public interface BoardRepository {
             this.id = id;
             this.title = title;
             this.parentId = parentId;
+        }
+    }
+
+    /** One stored link. The label is resolved when the page is shown, not stored here. */
+    final class PageLink {
+        public final String id;
+        public final String sourceId;
+        public final String targetId;
+
+        public PageLink(String id, String sourceId, String targetId) {
+            this.id = id;
+            this.sourceId = sourceId;
+            this.targetId = targetId;
+        }
+    }
+
+    /** A page's place in its notebook. {@code notebookId} null is the Scratchpad. */
+    final class PagePlace {
+        public final String notebookId;
+        public final int index;
+        public final int count;
+
+        public PagePlace(String notebookId, int index, int count) {
+            this.notebookId = notebookId;
+            this.index = index;
+            this.count = count;
         }
     }
 }

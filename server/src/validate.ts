@@ -1,4 +1,4 @@
-import type { BoardRow, Incoming, LogRow, NotebookPush } from "./lww.js";
+import type { BoardRow, Incoming, LinkRow, LogRow, NotebookPush } from "./lww.js";
 
 export class BadRequest extends Error {}
 
@@ -13,6 +13,8 @@ export interface PushBody {
   boards: Incoming<BoardRow>[];
   /** Whole notebook logs. Absent on an older body, which means none. */
   logs: Incoming<LogRow>[];
+  /** Page links. Absent means none. A link copies no ink. */
+  links: Incoming<LinkRow>[];
   blobs: Record<string, string>;
 }
 
@@ -114,6 +116,19 @@ export function parsePushBody(raw: unknown): PushBody {
       base_rev: int(o, "base_rev", w),
     };
   });
+  const links = array(body, "links").map((v, i) => {
+    const w = `links[${i}]`;
+    const o = obj(v, w);
+    return {
+      id: str(o, "id", w, UUID).toLowerCase(),
+      source_id: str(o, "source_id", w, UUID).toLowerCase(),
+      target_id: str(o, "target_id", w, UUID).toLowerCase(),
+      created_at: int(o, "created_at", w),
+      updated_at: int(o, "updated_at", w),
+      deleted_at: intOrNull(o, "deleted_at", w),
+      base_rev: int(o, "base_rev", w),
+    };
+  });
   const blobsRaw = obj(body.blobs ?? {}, "blobs");
   const blobs: Record<string, string> = {};
   for (const [hash, b64] of Object.entries(blobsRaw)) {
@@ -128,6 +143,7 @@ export function parsePushBody(raw: unknown): PushBody {
     notebooks,
     boards,
     logs,
+    links,
     blobs,
   };
 }

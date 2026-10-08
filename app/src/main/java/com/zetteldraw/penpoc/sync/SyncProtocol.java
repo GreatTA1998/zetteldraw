@@ -4,6 +4,7 @@ import com.zetteldraw.penpoc.data.SyncStore;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
+import com.zetteldraw.penpoc.data.db.PageLinkEntity;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -49,6 +50,11 @@ final class SyncProtocol {
             logs.put(logJson(log).put("base_rev", log.rev));
         }
         body.put("logs", logs);
+        JSONArray links = new JSONArray();
+        for (PageLinkEntity link : batch.links) {
+            links.put(linkJson(link).put("base_rev", link.rev));
+        }
+        body.put("links", links);
         JSONObject blobs = new JSONObject();
         for (Map.Entry<String, byte[]> e : batch.blobs.entrySet()) {
             blobs.put(e.getKey(), Base64.getEncoder().encodeToString(e.getValue()));
@@ -107,6 +113,10 @@ final class SyncProtocol {
         for (int i = 0; logs != null && i < logs.length(); i++) {
             page.logs.add(logFrom(logs.getJSONObject(i)));
         }
+        JSONArray links = response.optJSONArray("links");
+        for (int i = 0; links != null && i < links.length(); i++) {
+            page.links.add(linkFrom(links.getJSONObject(i)));
+        }
         JSONObject blobs = response.optJSONObject("blobs");
         if (blobs != null) {
             Iterator<String> keys = blobs.keys();
@@ -116,6 +126,28 @@ final class SyncProtocol {
             }
         }
         return page;
+    }
+
+    private static JSONObject linkJson(PageLinkEntity link) throws JSONException {
+        return new JSONObject()
+                .put("id", link.id)
+                .put("source_id", link.sourceId)
+                .put("target_id", link.targetId)
+                .put("created_at", link.createdAt)
+                .put("updated_at", link.updatedAt)
+                .put("deleted_at", orNull(link.deletedAt));
+    }
+
+    private static PageLinkEntity linkFrom(JSONObject j) throws JSONException {
+        PageLinkEntity link = new PageLinkEntity();
+        link.id = j.getString("id");
+        link.sourceId = j.getString("source_id");
+        link.targetId = j.getString("target_id");
+        link.createdAt = j.getLong("created_at");
+        link.updatedAt = j.getLong("updated_at");
+        link.rev = j.getLong("rev");
+        link.deletedAt = optLong(j, "deleted_at");
+        return link;
     }
 
     private static JSONObject logJson(NotebookLogEntity log) throws JSONException {

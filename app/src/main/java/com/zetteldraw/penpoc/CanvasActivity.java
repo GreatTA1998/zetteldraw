@@ -69,6 +69,11 @@ public final class CanvasActivity extends Activity {
     /** In-window menu or form (Move, notebook menu, name, delete confirm). */
     private FrameLayout overlay;
     private LinearLayout topBar;
+    private LinearLayout linkingBar;
+    private TextView linkingText;
+    private Button linkConfirm;
+    /** Page the Link control was pressed on. Null when the linking line is closed. */
+    private String linkSourceId;
     private View toolbar;
     private PageInkView inkView;
     private PageScroller scroller;
@@ -147,6 +152,8 @@ public final class CanvasActivity extends Activity {
         column.addView(topBar, matchWrap());
         column.addView(rule(), ruleLp());
         column.addView(lowerBars, matchWrap());
+        linkingBar = buildLinkingBar();
+        column.addView(linkingBar, matchWrap());
         toolbar = buildToolbar();
         column.addView(toolbar, matchWrap());
         column.addView(rule(), ruleLp());
@@ -222,6 +229,7 @@ public final class CanvasActivity extends Activity {
             scroller.post(() -> {
                 scroller.scrollTo(0, target);
                 inkView.setContentScrollY(scroller.getScrollY());
+                refreshLinkingBar();
                 updateExcludeRects();
             });
         });
@@ -610,6 +618,10 @@ public final class CanvasActivity extends Activity {
     }
 
     private void openScratchpad() {
+        openScratchpad(null);
+    }
+
+    private void openScratchpad(Integer keepScroll) {
         boolean hadBars = !childBars.isEmpty();
         trail.clear();
         if (hadBars) {
@@ -617,10 +629,14 @@ public final class CanvasActivity extends Activity {
         } else {
             styleTabs();
         }
-        openCollection(SCRATCHPAD);
+        openCollection(SCRATCHPAD, keepScroll);
     }
 
     private void openNotebook(String id) {
+        openNotebook(id, null);
+    }
+
+    private void openNotebook(String id, Integer keepScroll) {
         ArrayList<String> next = new ArrayList<>();
         HashSet<String> seen = new HashSet<>();
         boolean refreshed = false;
@@ -651,7 +667,7 @@ public final class CanvasActivity extends Activity {
         } else {
             rebuildBars();
         }
-        openCollection(id);
+        openCollection(id, keepScroll);
         NotebookTab selected = tabFor(id);
         if (selected != null && selected.getParent() instanceof View
                 && selected.getParent().getParent() instanceof HorizontalScrollView) {
@@ -702,6 +718,10 @@ public final class CanvasActivity extends Activity {
     }
 
     private void openCollection(String id) {
+        openCollection(id, null);
+    }
+
+    private void openCollection(String id, Integer keepScroll) {
         dismissOverlay();
         if (!id.equals(collectionId)) {
             inkView.clearHistory();
@@ -714,7 +734,8 @@ public final class CanvasActivity extends Activity {
         syncNav();
         // The tab is marked now; its pages load off the main thread, so a tap never waits on
         // storage. The old pages stay up with the pen held until the new ones replace them.
-        startLoad(id, null, true);
+        // A non-null keepScroll (a page link) wins over the last-inked-page jump.
+        startLoad(id, keepScroll, true);
     }
 
     /**
@@ -935,6 +956,7 @@ public final class CanvasActivity extends Activity {
         inkView.setPages(pages, heights, gap, targetScrollY);
         pendingScrollY = Math.max(0, targetScrollY);
         pageColumn.requestLayout();
+        refreshLinkingBar();
     }
 
     /**
@@ -952,6 +974,132 @@ public final class CanvasActivity extends Activity {
         return heightOf(pages.get(0)) * index;
     }
 
+    /** One line under the notebook bars. Confirm is absent while the page in front is the source. */
+    private LinearLayout buildLinkingBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(8), dp(4), dp(8), dp(4));
+        bar.setVisibility(View.GONE);
+        bar.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
+        linkingText = new TextView(this);
+        linkingText.setTextColor(Color.BLACK);
+        linkingText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        linkingText.setSingleLine(false);
+        bar.addView(linkingText, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        linkConfirm = tinyButton(getString(R.string.confirm), 15);
+        styleButton(linkConfirm, true);
+        linkConfirm.setVisibility(View.GONE);
+        linkConfirm.setOnClickListener(v -> confirmLinking());
+        Button cancel = tinyButton(getString(R.string.cancel), 15);
+        cancel.setOnClickListener(v -> cancelLinking());
+        LinearLayout.LayoutParams confirmLp = wrap();
+        confirmLp.leftMargin = dp(8);
+        bar.addView(linkConfirm, confirmLp);
+        LinearLayout.LayoutParams cancelLp = wrap();
+        cancelLp.leftMargin = dp(8);
+        bar.addView(cancel, cancelLp);
+        return bar;
+    }
+
+    private void startLinking(PageSlot slot) {
+        linkSourceId = slot.page.id;
+        linkingBar.setVisibility(View.VISIBLE);
+        refreshLinkingBar();
+        updateExcludeRects();
+    }
+
+    private void cancelLinking() {
+        linkSourceId = null;
+        linkingBar.setVisibility(View.GONE);
+        linkConfirm.setVisibility(View.GONE);
+        updateExcludeRects();
+    }
+
+    private void confirmLinking() {
+        PageSlot front = frontSlot();
+        if (linkSourceId == null || front == null || front.page.id.equals(linkSourceId)) {
+            refreshLinkingBar();
+            return;
+        }
+        repository.createLink(linkSourceId, front.page.id);
+        int scroll = scroller.getScrollY();
+        cancelLinking();
+        reloadPages(scroll);
+    }
+
+    /** The page at the top of the viewport: the first slot whose bottom is still below the scroll. */
+    private PageSlot frontSlot() {
+        int scroll = scroller.getScrollY();
+        for (PageSlot slot : slots) {
+            if (slot.getHeight() <= 0) {
+                continue;
+            }
+            if (slot.getBottom() > scroll) {
+                return slot;
+            }
+        }
+        return null;
+    }
+
+    private void refreshLinkingBar() {
+        if (linkSourceId == null || linkingBar.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        String from = pageRef(linkSourceId);
+        if (from == null) {
+            cancelLinking();
+            return;
+        }
+        PageSlot front = frontSlot();
+        String to = front == null || front.page.id.equals(linkSourceId) ? null : pageRef(front.page.id);
+        if (to == null) {
+            linkingText.setText(getString(R.string.linking_from, from));
+            linkConfirm.setVisibility(View.GONE);
+        } else {
+            linkingText.setText(getString(R.string.link_from_to, from, to));
+            linkConfirm.setVisibility(View.VISIBLE);
+        }
+    }
+
+    /**
+     * Notebook name and k/n, read now. A rename or a deleted page above the
+     * target changes the text the next time the page is shown.
+     */
+    private String pageRef(String pageId) {
+        BoardRepository.PagePlace place = repository.placeOf(pageId);
+        if (place == null) {
+            return null;
+        }
+        String name = place.notebookId == null
+                ? getString(R.string.scratchpad)
+                : titleOf(place.notebookId);
+        if (name == null || name.isEmpty()) {
+            return null;
+        }
+        return name + " " + (place.index + 1) + "/" + place.count;
+    }
+
+    /** Opens that page the way tapping its notebook and scrolling there would. */
+    private void openLinkedPage(String pageId) {
+        BoardRepository.PagePlace place = repository.placeOf(pageId);
+        if (place == null) {
+            return;
+        }
+        List<Board> pages = repository.pages(place.notebookId);
+        int gap = layoutGap(pages);
+        int scroll = 0;
+        for (int i = 0; i < place.index && i < pages.size(); i++) {
+            scroll += heightOf(pages.get(i)) + gap;
+        }
+        if (place.notebookId == null) {
+            openScratchpad(scroll);
+        } else {
+            openNotebook(place.notebookId, scroll);
+        }
+    }
+
     private List<Board> pagesIn(String id) {
         return repository.pages(SCRATCHPAD.equals(id) ? null : id);
     }
@@ -962,6 +1110,7 @@ public final class CanvasActivity extends Activity {
             inkView.hold(PageInkView.Hold.SCROLL);
         }
         inkView.setContentScrollY(scrollY);
+        refreshLinkingBar();
         scroller.removeCallbacks(scrollSettled);
         scroller.postDelayed(scrollSettled, SCROLL_SETTLE_MS);
     }
@@ -1555,6 +1704,7 @@ public final class CanvasActivity extends Activity {
         for (View bar : childBars) {
             addExclude(rects, bar, dp(6), origin, loc);
         }
+        addExclude(rects, linkingBar, MOVE_EXCLUDE_PAD_PX, origin, loc);
         addExclude(rects, toolbar, dp(6), origin, loc);
         int top = scroller.getScrollY();
         int bottom = top + scroller.getHeight();
@@ -1562,10 +1712,14 @@ public final class CanvasActivity extends Activity {
             if (slot.getBottom() < top || slot.getTop() > bottom) {
                 continue;
             }
-            // Move is only the word. ⋯ and the page number keep a small margin.
+            // Move and Link are only the word. The link lines are the same kind of hole.
+            addExclude(rects, slot.linkButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
             addExclude(rects, slot.moveButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
             addExclude(rects, slot.moreButton, dp(6), origin, loc);
             addExclude(rects, slot.number, dp(6), origin, loc);
+            for (View line : slot.linkLines) {
+                addExclude(rects, line, MOVE_EXCLUDE_PAD_PX, origin, loc);
+            }
         }
         inkView.setExtraExcludeRects(rects);
     }
@@ -1635,8 +1789,10 @@ public final class CanvasActivity extends Activity {
         final Board page;
         final TextView number;
         final LinearLayout actions;
+        final Button linkButton;
         final Button moveButton;
         final Button moreButton;
+        final ArrayList<View> linkLines = new ArrayList<>();
 
         PageSlot(Context context, Board page, int index, int total) {
             super(context);
@@ -1657,22 +1813,23 @@ public final class CanvasActivity extends Activity {
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
             actions.setGravity(Gravity.CENTER_VERTICAL);
+            linkButton = tinyButton(getString(R.string.link), 14);
             moveButton = tinyButton(getString(R.string.move), 14);
             // The hole the pen skips is this view. Keep it to the word plus a couple of pixels.
-            moveButton.setMinimumWidth(0);
-            moveButton.setMinimumHeight(0);
-            moveButton.setMinWidth(0);
-            moveButton.setMinHeight(0);
-            moveButton.setPadding(2, 2, 2, 2);
-            moveButton.setIncludeFontPadding(false);
+            tighten(linkButton);
+            tighten(moveButton);
             moreButton = tinyButton(getString(R.string.notebook_options), 18);
             moreButton.setMinimumHeight(dp(48));
             moreButton.setMinimumWidth(dp(48));
             moreButton.setPadding(dp(10), 0, dp(10), dp(4));
             moreButton.setContentDescription(getString(R.string.page_options));
+            linkButton.setOnClickListener(v -> startLinking(this));
             moveButton.setOnClickListener(v -> showMoveMenu(this));
             moreButton.setOnClickListener(v -> showPageMenu(this));
-            actions.addView(moveButton, wrap());
+            actions.addView(linkButton, wrap());
+            LinearLayout.LayoutParams linkGap = wrap();
+            linkGap.leftMargin = dp(6);
+            actions.addView(moveButton, linkGap);
             LinearLayout.LayoutParams lp = wrap();
             lp.leftMargin = dp(6);
             actions.addView(moreButton, lp);
@@ -1684,6 +1841,17 @@ public final class CanvasActivity extends Activity {
             int mark = page.paper != null ? dp(2) : pageGap;
             actionsLp.bottomMargin = (page.paper != null ? 0 : pageGap) + dp(10);
             addView(actions, actionsLp);
+
+            LinearLayout lines = new LinearLayout(context);
+            lines.setOrientation(LinearLayout.VERTICAL);
+            fillLinkLines(lines);
+            FrameLayout.LayoutParams linesLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT);
+            linesLp.gravity = Gravity.BOTTOM | Gravity.START;
+            linesLp.leftMargin = dp(10);
+            linesLp.bottomMargin = (page.paper != null ? 0 : pageGap) + dp(10);
+            addView(lines, linesLp);
 
             FrameLayout.LayoutParams dashLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT, mark);
@@ -1700,6 +1868,51 @@ public final class CanvasActivity extends Activity {
             }
             moreButton.setVisibility(isTrailingBlank(this) ? View.INVISIBLE : View.VISIBLE);
         }
+
+        /** Outgoing lines first, then backlinks. A missing page is not shown. */
+        private void fillLinkLines(LinearLayout lines) {
+            ArrayList<BoardRepository.PageLink> outgoing = new ArrayList<>();
+            ArrayList<BoardRepository.PageLink> incoming = new ArrayList<>();
+            for (BoardRepository.PageLink link : repository.linksTouching(page.id)) {
+                if (page.id.equals(link.sourceId)) {
+                    outgoing.add(link);
+                } else if (page.id.equals(link.targetId)) {
+                    incoming.add(link);
+                }
+            }
+            for (BoardRepository.PageLink link : outgoing) {
+                addLinkLine(lines, link.targetId, true);
+            }
+            for (BoardRepository.PageLink link : incoming) {
+                addLinkLine(lines, link.sourceId, false);
+            }
+        }
+
+        private void addLinkLine(LinearLayout lines, String otherId, boolean outgoing) {
+            String ref = pageRef(otherId);
+            if (ref == null) {
+                return;
+            }
+            TextView line = new TextView(getContext());
+            line.setText(getString(outgoing ? R.string.link_outgoing : R.string.link_incoming, ref));
+            line.setTextColor(Color.BLACK);
+            line.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            line.setPadding(2, 2, 2, 2);
+            line.setIncludeFontPadding(false);
+            line.setOnClickListener(v -> openLinkedPage(otherId));
+            lines.addView(line, wrap());
+            linkLines.add(line);
+        }
+    }
+
+    /** Link and Move are only as big as the word. */
+    private static void tighten(Button button) {
+        button.setMinimumWidth(0);
+        button.setMinimumHeight(0);
+        button.setMinWidth(0);
+        button.setMinHeight(0);
+        button.setPadding(2, 2, 2, 2);
+        button.setIncludeFontPadding(false);
     }
 
     private static final class DashedRule extends View {
