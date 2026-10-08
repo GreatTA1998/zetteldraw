@@ -14,11 +14,22 @@ export interface Config {
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
-  const value = env[name];
+  const value = env[name]?.trim();
   if (!value) {
     throw new Error(`${name} is required`);
   }
   return value;
+}
+
+/** First non-empty value. Older compose names are listed before the names Render already sets. */
+function firstSet(env: NodeJS.ProcessEnv, names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const value = env[name]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -38,8 +49,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       endpoint: env.S3_ENDPOINT || undefined,
       region: env.S3_REGION ?? "us-east-1",
       bucket: required(env, "S3_BUCKET"),
-      accessKeyId: env.S3_ACCESS_KEY || env.S3_ACCESS_KEY_ID || undefined,
-      secretAccessKey: env.S3_SECRET_KEY || env.S3_SECRET_ACCESS_KEY || undefined,
+      accessKeyId: firstSet(env, ["S3_ACCESS_KEY", "S3_ACCESS_KEY_ID"]),
+      secretAccessKey: firstSet(env, ["S3_SECRET_KEY", "S3_SECRET_ACCESS_KEY"]),
     },
     migrationsDir: env.MIGRATIONS_DIR ?? new URL("../migrations", import.meta.url).pathname,
   };
