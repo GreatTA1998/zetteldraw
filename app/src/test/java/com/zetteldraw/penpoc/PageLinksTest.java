@@ -3,6 +3,7 @@ package com.zetteldraw.penpoc;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
@@ -46,8 +47,8 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo dense = repo.createNotebook("dense");
-        repo.createNotebook("other-a");
-        repo.createNotebook("other-b");
+        BoardRepository.NotebookInfo otherA = repo.createNotebook("other-a");
+        BoardRepository.NotebookInfo otherB = repo.createNotebook("other-b");
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -60,16 +61,51 @@ public class PageLinksTest {
         openNotebook(root, "dense");
         assertEquals(41, repo.pages(dense.id).size());
 
+        // Logs on disk, sheets dropped. The old press replayed each of them once and cached the
+        // sheet, so the first press froze and the tenth did not.
+        RoomBoardRepository room = (RoomBoardRepository) repo;
+        room.ensureSheet(otherA.id, height, height, 1L);
+        room.ensureSheet(otherB.id, height, height, 1L);
+        ink(repo, otherA.id, 10f);
+        ink(repo, otherB.id, 30f * height + 10f);
+        room.forgetSheetForTest(otherA.id);
+        room.forgetSheetForTest(otherB.id);
+
         TextView control = textIn((View) find(root, "40/41").getParent(), "Link");
         assertNotNull(control);
+        View slot = (View) control.getParent();
+        View area = (View) pageScroller(root).getParent();
+        int areaBefore = area.getHeight();
         int reads = RoomBoardRepository.notebookReads.get();
-        long start = System.nanoTime();
-        assertTrue(control.performClick());
-        long ms = (System.nanoTime() - start) / 1_000_000L;
-        assertEquals("pressing Link walked a notebook", reads, RoomBoardRepository.notebookReads.get());
-        assertTrue("pressing Link took " + ms + " ms", ms < 200);
-        assertNotNull(find(root, "Linking from dense 40/41"));
-        assertNull(find(root, "Confirm"));
+        int replays = RoomBoardRepository.logReplays.get();
+        int reflows = CanvasActivity.pageReflows.get();
+        long worst = 0;
+        for (int press = 1; press <= 10; press++) {
+            long start = System.nanoTime();
+            assertTrue(control.performClick());
+            idle();
+            relayout(root);
+            long ms = (System.nanoTime() - start) / 1_000_000L;
+            if (ms > worst) {
+                worst = ms;
+            }
+            assertEquals("press " + press + " walked a notebook", reads, RoomBoardRepository.notebookReads.get());
+            assertEquals("press " + press + " replayed an ink log", replays, RoomBoardRepository.logReplays.get());
+            assertEquals("press " + press + " reflowed the notebook", reflows, CanvasActivity.pageReflows.get());
+            assertTrue("press " + press + " did not open the linking line", area.getHeight() < areaBefore);
+            assertSame("press " + press + " rebuilt the page list", slot, control.getParent());
+            assertNotNull(find(root, "Linking from dense 40/41"));
+            assertNull(find(root, "Confirm"));
+            click(root, "Cancel");
+            idle();
+            relayout(root);
+            assertEquals("cancel " + press + " walked a notebook", reads, RoomBoardRepository.notebookReads.get());
+            assertEquals("cancel " + press + " replayed an ink log", replays, RoomBoardRepository.logReplays.get());
+            assertEquals("cancel " + press + " reflowed the notebook", reflows, CanvasActivity.pageReflows.get());
+            assertEquals("cancel " + press + " left the linking line's space", areaBefore, area.getHeight());
+            assertSame("cancel " + press + " rebuilt the page list", slot, control.getParent());
+        }
+        assertTrue("the slowest Link press took " + worst + " ms", worst < 200);
 
         controller.pause().stop().destroy();
     }

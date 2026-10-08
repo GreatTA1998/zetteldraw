@@ -93,6 +93,9 @@ public final class CanvasActivity extends Activity {
     private final Runnable clearHint = () -> toolHint.setText("");
     private final ArrayList<NotebookTab> notebookTabs = new ArrayList<>();
     private final ArrayList<PageSlot> slots = new ArrayList<>();
+    /** Top of each slot, plus the column bottom. Zero stride means the heights differ. */
+    private int[] slotTops = new int[0];
+    private int slotStride;
 
     /** Height of a page: the drawing area minus the gap, so a whole page and its controls fit on screen. */
     private volatile int pageHeight;
@@ -106,6 +109,8 @@ public final class CanvasActivity extends Activity {
     private static final long FIRST_LOAD_DEADLINE_MS = 1_000;
     private static final long LOAD_DEADLINE_MAX_MS = 8_000;
     private static final String TAG = "zd-canvas";
+    /** Times a drawing-area resize threw the page list away. Link must not move this. */
+    static final java.util.concurrent.atomic.AtomicInteger pageReflows = new java.util.concurrent.atomic.AtomicInteger();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Runnable remoteChanged = this::onRemoteChange;
     /** The page list on screen, for re-laying it out when the page height changes. */
@@ -264,6 +269,12 @@ public final class CanvasActivity extends Activity {
             return;
         }
         int next = Math.min(window, area - pageGap);
+        // The linking line sits in this column. Showing it shrinks the drawing area, and treating
+        // that as a new page height reloaded every page on the first press (the sheets then stayed
+        // open, so the next press was cheap). Put the line's height back and keep the pages.
+        if (linkingBar != null && linkingBar.getVisibility() == View.VISIBLE && linkingBar.getHeight() > 0) {
+            next = Math.min(window, area + linkingBar.getHeight() - pageGap);
+        }
         if (next == pageHeight && window == legacyPageHeight) {
             return;
         }
@@ -277,8 +288,10 @@ public final class CanvasActivity extends Activity {
             if (awaitingLayout != null) {
                 Loaded loaded = awaitingLayout;
                 awaitingLayout = null;
+                pageReflows.incrementAndGet();
                 startLoad(loaded.id, loaded.keepScroll, false);
             } else if (!first && currentPages != null && !loading()) {
+                pageReflows.incrementAndGet();
                 startLoad(collectionId, scroller.getScrollY(), false);
             }
         });
@@ -944,14 +957,28 @@ public final class CanvasActivity extends Activity {
         pageColumn.removeAllViews();
         slots.clear();
         int[] heights = new int[pages.size()];
+        slotTops = new int[pages.size() + 1];
         int gap = layoutGap(pages);
+        int cursor = 0;
+        int stride = -1;
+        boolean uniform = true;
         for (int i = 0; i < pages.size(); i++) {
             heights[i] = heightOf(pages.get(i));
+            slotTops[i] = cursor;
+            int span = heights[i] + gap;
+            if (stride < 0) {
+                stride = span;
+            } else if (span != stride) {
+                uniform = false;
+            }
+            cursor += span;
             PageSlot slot = new PageSlot(this, pages.get(i), i + 1, pages.size());
             slots.add(slot);
             pageColumn.addView(slot, new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT, heights[i] + gap));
+                    LinearLayout.LayoutParams.MATCH_PARENT, span));
         }
+        slotTops[pages.size()] = cursor;
+        slotStride = uniform && stride > 0 ? stride : 0;
         for (PageSlot slot : slots) {
             slot.syncEnabled();
         }
@@ -1033,18 +1060,44 @@ public final class CanvasActivity extends Activity {
         reloadPages(scroll);
     }
 
-    /** The page at the top of the viewport: the first slot whose bottom is still below the scroll. */
+    /**
+     * The page at the top of the viewport. Scroll offset divided by the page
+     * height: the slots above it are not visited.
+     */
     private PageSlot frontSlot() {
-        int scroll = scroller.getScrollY();
-        for (PageSlot slot : slots) {
-            if (slot.getHeight() <= 0) {
-                continue;
-            }
-            if (slot.getBottom() > scroll) {
-                return slot;
+        int index = indexAt(scroller.getScrollY());
+        if (index < 0) {
+            return null;
+        }
+        return slots.get(index);
+    }
+
+    /** Slot that contains content offset {@code y}, from the tops recorded when the list was shown. */
+    private int indexAt(int y) {
+        int n = slots.size();
+        if (n == 0) {
+            return -1;
+        }
+        if (y <= 0) {
+            return 0;
+        }
+        if (slotStride > 0) {
+            return Math.min(n - 1, y / slotStride);
+        }
+        if (slotTops.length != n + 1) {
+            return 0;
+        }
+        int lo = 0;
+        int hi = n - 1;
+        while (lo < hi) {
+            int mid = (lo + hi + 1) >>> 1;
+            if (slotTops[mid] <= y) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
             }
         }
-        return null;
+        return lo;
     }
 
     private void refreshLinkingBar() {
@@ -1725,10 +1778,10 @@ public final class CanvasActivity extends Activity {
         addExclude(rects, toolbar, dp(6), origin, loc);
         int top = scroller.getScrollY();
         int bottom = top + scroller.getHeight();
-        for (PageSlot slot : slots) {
-            if (slot.getBottom() < top || slot.getTop() > bottom) {
-                continue;
-            }
+        int first = indexAt(top);
+        int last = indexAt(Math.max(top, bottom - 1));
+        for (int i = first; i >= 0 && i <= last && i < slots.size(); i++) {
+            PageSlot slot = slots.get(i);
             // Move and Link are only the word. The link lines are the same kind of hole.
             addExclude(rects, slot.linkButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
             addExclude(rects, slot.moveButton, MOVE_EXCLUDE_PAD_PX, origin, loc);

@@ -57,6 +57,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * Pressing Link must not move this: that work is what froze the screen.
      */
     public static final AtomicInteger notebookReads = new AtomicInteger();
+
+    /**
+     * Ink logs actually replayed. A cache hit does not count: the first Link
+     * press used to pay this, and every press after it was cheap.
+     */
+    public static final AtomicInteger logReplays = new AtomicInteger();
     private static final String TAG = "zd-repo";
     private static final long SLOW_WRITE_MS = 250;
     private static final byte[] MIRROR_DELETE = new byte[0];
@@ -1784,6 +1790,13 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
+    /** Drops one cached sheet so the next open replays its log. Link presses must not be that next open. */
+    public void forgetSheetForTest(String notebookId) {
+        synchronized (lock) {
+            sheets.remove(NotebookPaper.sheetId(notebookId));
+        }
+    }
+
     @Override
     public void ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
         notebookReads.incrementAndGet();
@@ -1815,6 +1828,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         if (existing != null) {
             try {
+                logReplays.incrementAndGet();
                 installSheet(notebookId, sheetId, NotebookPaper.replay(existing), existing.length, false);
             } catch (IOException e) {
                 Log.e(TAG, "ink log will not replay " + sheetId, e);
@@ -1837,6 +1851,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 rows.remove(rows.size() - 1);
             }
         }
+        logReplays.incrementAndGet();
         ArrayList<NotebookPaper.SourcePage> sources = new ArrayList<>();
         for (BoardEntity row : rows) {
             if (row.conflictOf != null) {
