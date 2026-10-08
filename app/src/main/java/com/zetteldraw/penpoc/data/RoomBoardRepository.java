@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.io.File;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -137,7 +138,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             ArrayList<NotebookInfo> result = new ArrayList<>();
             for (NotebookEntity row : dao.liveNotebooks()) {
-                result.add(new NotebookInfo(row.id, row.title));
+                result.add(new NotebookInfo(row.id, row.title, row.parentId));
             }
             return result;
         }
@@ -529,15 +530,27 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public NotebookInfo createNotebook(String title) {
+        return createNotebook(title, null);
+    }
+
+    @Override
+    public NotebookInfo createNotebook(String title, String parentId) {
         String clean = cleanTitle(title);
         if (clean == null) {
             return null;
         }
         synchronized (lock) {
+            if (parentId != null) {
+                NotebookEntity parent = dao.notebook(parentId);
+                if (parent == null || parent.deletedAt != null) {
+                    return null;
+                }
+            }
             long now = clock.getAsLong();
             NotebookEntity row = new NotebookEntity();
             row.id = UUID.randomUUID().toString();
             row.title = clean;
+            row.parentId = parentId;
             row.position = Positions.after(dao.lastNotebookPosition());
             row.createdAt = now;
             row.updatedAt = now;
@@ -546,7 +559,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
             });
             scheduleIndex();
-            return new NotebookInfo(row.id, row.title);
+            return new NotebookInfo(row.id, row.title, row.parentId);
         }
     }
 
@@ -581,10 +594,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             long now = clock.getAsLong();
             row.deletedAt = now;
             row.updatedAt = now;
+            String promoteTo = row.parentId;
             db.runInTransaction(() -> {
                 dao.upsertNotebook(row);
                 queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.DELETE);
                 returnPagesToScratchpadLocked(notebookId);
+                promoteChildrenLocked(notebookId, promoteTo);
             });
             Board blank = trailingBlanks.remove(listKey(notebookId));
             if (blank != null) {
@@ -949,7 +964,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                             if (now != null && now.deletedAt != null) {
                                 // Pages still filed here (e.g. moved in on this device after the
                                 // other device deleted it) go back to the scratchpad.
+                                // Children still pointing here are promoted, including one whose
+                                // own row was not in this pull page.
                                 returnPagesToScratchpadLocked(remote.id);
+                                promoteChildrenLocked(remote.id, now.parentId);
                             }
                         }
                         SyncState state = dao.syncState();
@@ -1093,6 +1111,68 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         String t = title.trim().replaceAll("\\s+", " ");
         return t.isEmpty() ? null : t;
+    }
+
+    /**
+     * Live notebooks whose parent is {@code notebookId} take {@code newParent}
+     * (null is top-level). Their position and pages stay. Each repair is queued.
+     */
+    private void promoteChildrenLocked(String notebookId, String newParent) {
+        long now = clock.getAsLong();
+        for (NotebookEntity child : dao.liveNotebooks()) {
+            if (!notebookId.equals(child.parentId)) {
+                continue;
+            }
+            child.parentId = newParent;
+            child.updatedAt = now;
+            dao.upsertNotebook(child);
+            queueLocked(OutboxEntry.NOTEBOOK, child.id, OutboxEntry.UPSERT);
+        }
+    }
+
+    /** False when {@code parentId} is this notebook or a descendant, or the chain is broken. */
+    private boolean wouldCycle(String notebookId, String parentId) {
+        HashSet<String> seen = new HashSet<>();
+        String cursor = parentId;
+        while (cursor != null) {
+            if (!seen.add(cursor) || cursor.equals(notebookId)) {
+                return true;
+            }
+            NotebookEntity row = dao.notebook(cursor);
+            if (row == null || row.deletedAt != null) {
+                return true;
+            }
+            cursor = row.parentId;
+        }
+        return false;
+    }
+
+    @Override
+    public boolean placeNotebook(String notebookId, String parentId) {
+        synchronized (lock) {
+            NotebookEntity row = dao.notebook(notebookId);
+            if (row == null || row.deletedAt != null) {
+                return false;
+            }
+            if (parentId != null) {
+                NotebookEntity parent = dao.notebook(parentId);
+                if (parent == null || parent.deletedAt != null || wouldCycle(notebookId, parentId)) {
+                    return false;
+                }
+            }
+            if (Objects.equals(row.parentId, parentId)) {
+                return true;
+            }
+            row.parentId = parentId;
+            row.position = Positions.after(dao.lastNotebookPosition());
+            row.updatedAt = clock.getAsLong();
+            db.runInTransaction(() -> {
+                dao.upsertNotebook(row);
+                queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+            });
+            scheduleIndex();
+            return true;
+        }
     }
 
     /** Moves the notebook's live pages to the end of the scratchpad, keeping their order. */
@@ -1508,7 +1588,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 notebooks.put(new JSONObject()
                         .put("id", row.id)
                         .put("title", row.title)
-                        .put("position", row.position));
+                        .put("position", row.position)
+                        .put("parent_id", row.parentId == null ? JSONObject.NULL : row.parentId));
             }
             root.put("notebooks", notebooks);
             JSONArray boards = new JSONArray();

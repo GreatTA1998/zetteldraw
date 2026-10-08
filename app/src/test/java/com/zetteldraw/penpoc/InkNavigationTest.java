@@ -311,7 +311,11 @@ public class InkNavigationTest {
         ink.addStroke(points(120f, 200f));
         idle();
         assertEquals(before + 1, firstComedy.paper.strokes().size());
-        assertEquals(200f, firstComedy.paper.strokes().get(before).points.get(0).y, 0f);
+        // Opening the notebook shows its last inked page, so the surface point lands there.
+        float y = firstComedy.paper.strokes().get(before).points.get(0).y;
+        int slice = firstComedy.paper.sliceIndexAt(y);
+        assertEquals(firstComedy.paper.lastInkedSlice(), slice);
+        assertEquals(200f, y - firstComedy.paper.origin(slice), 0.01f);
         assertTrue(scratch.strokes.isEmpty());
         controller.pause().stop().destroy();
     }

@@ -28,7 +28,7 @@ const BOARD_COLS = [
   "updated_at",
   "deleted_at",
 ] as const;
-const NOTEBOOK_COLS = ["id", "title", "position", "created_at", "updated_at", "deleted_at"] as const;
+const NOTEBOOK_COLS = ["id", "title", "position", "parent_id", "created_at", "updated_at", "deleted_at"] as const;
 const LOG_COLS = [
   "id",
   "notebook_id",

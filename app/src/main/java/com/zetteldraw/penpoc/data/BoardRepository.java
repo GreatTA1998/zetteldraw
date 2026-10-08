@@ -57,17 +57,31 @@ public interface BoardRepository {
      */
     void deletePage(String boardId);
 
-    /** New notebook, ordered after every existing one. Blank titles are rejected (returns null). */
+    /** New top-level notebook, ordered after every existing one. Blank titles are rejected (returns null). */
     NotebookInfo createNotebook(String title);
+
+    /**
+     * New notebook under {@code parentId}, or top-level when that is null.
+     * Blank titles and a missing parent are rejected (returns null).
+     */
+    NotebookInfo createNotebook(String title, String parentId);
 
     /** Blank titles are ignored. */
     void renameNotebook(String notebookId, String title);
 
     /**
-     * Tombstones the notebook. Its pages are not deleted: they move back to
-     * the Scratchpad, appended as newest in their notebook order.
+     * Tombstones the notebook. Its own pages move back to the Scratchpad.
+     * Its children are not deleted: each is promoted to this notebook's parent
+     * (or to top-level) and keeps its pages.
      */
     void deleteNotebook(String notebookId);
+
+    /**
+     * Files the notebook under {@code parentId}, or makes it top-level when
+     * that is null. False when the parent is missing, or is this notebook or
+     * one of its descendants. Already being there changes nothing.
+     */
+    boolean placeNotebook(String notebookId, String parentId);
 
     /** Replaces every remote-change listener with this one (null clears them). Tests and single-screen tools. */
     void setRemoteChangeListener(Runnable listener);
@@ -84,10 +98,13 @@ public interface BoardRepository {
     final class NotebookInfo {
         public final String id;
         public final String title;
+        /** Null when this notebook is top-level. */
+        public final String parentId;
 
-        public NotebookInfo(String id, String title) {
+        public NotebookInfo(String id, String title, String parentId) {
             this.id = id;
             this.title = title;
+            this.parentId = parentId;
         }
     }
 }

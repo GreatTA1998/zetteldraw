@@ -10,6 +10,8 @@ export interface NotebookRow {
   id: string;
   title: string;
   position: string;
+  /** Null is top-level. Absent on an incoming push means "leave the stored parent". */
+  parent_id: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -82,6 +84,7 @@ function sameNotebook(a: Omit<NotebookRow, "rev">, b: Omit<NotebookRow, "rev">):
   return (
     a.title === b.title &&
     a.position === b.position &&
+    a.parent_id === b.parent_id &&
     a.deleted_at === b.deleted_at &&
     a.updated_at === b.updated_at
   );
@@ -172,11 +175,17 @@ function withoutLogRev(row: Omit<LogRow, "rev">): Omit<LogRow, "rev"> {
   return rest;
 }
 
+export type NotebookPush = Omit<Incoming<NotebookRow>, "parent_id"> & { parent_id?: string | null };
+
 export function resolveNotebook(
   existing: NotebookRow | null,
-  incoming: Incoming<NotebookRow>,
+  incoming: NotebookPush,
 ): Decision<NotebookRow> {
-  const row = stripBase(incoming);
+  const row = stripBase(incoming) as Omit<NotebookRow, "rev"> & { parent_id?: string | null };
+  // A flat client that does not send parent_id must not clear the tree.
+  if (row.parent_id === undefined) {
+    row.parent_id = existing?.parent_id ?? null;
+  }
   if (existing === null || incoming.base_rev === existing.rev) {
     return { status: "applied", write: row, restamp: false, copy: null };
   }

@@ -41,6 +41,21 @@ public class NotebookPaperTest {
     }
 
     @Test
+    public void lastInkedSliceIsRememberedWithoutWalkingPages() throws Exception {
+        NotebookPaper paper = NotebookPaper.empty(100);
+        assertEquals(-1, paper.lastInkedSlice());
+        paper.appendStroke(line(null, 4f, 10f, 20f));
+        assertEquals(0, paper.lastInkedSlice());
+        paper.appendStroke(line(null, 4f, 210f, 250f));
+        assertEquals(2, paper.lastInkedSlice());
+        assertEquals(3, paper.sliceCount());
+        NotebookPaper again = NotebookPaper.replay(paper.bytes());
+        assertEquals(2, again.lastInkedSlice());
+        again.deleteIds(java.util.List.of(again.strokes().get(1).id));
+        assertEquals(0, again.lastInkedSlice());
+    }
+
+    @Test
     public void aStrokeCrossingTwoSlicesIsOneId() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(1420);
         InkRenderer.InkStroke stroke = line(null, 40f, 1400f, 1500f);

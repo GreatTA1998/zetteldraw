@@ -1,4 +1,4 @@
-import type { BoardRow, Incoming, LogRow, NotebookRow } from "./lww.js";
+import type { BoardRow, Incoming, LogRow, NotebookPush } from "./lww.js";
 
 export class BadRequest extends Error {}
 
@@ -9,7 +9,7 @@ const POSITION = /^[0-9A-Za-z]+$/;
 export interface PushBody {
   schema_version: number;
   device_id: string;
-  notebooks: Incoming<NotebookRow>[];
+  notebooks: NotebookPush[];
   boards: Incoming<BoardRow>[];
   /** Whole notebook logs. Absent on an older body, which means none. */
   logs: Incoming<LogRow>[];
@@ -66,6 +66,9 @@ export function parsePushBody(raw: unknown): PushBody {
       id: str(o, "id", w, UUID).toLowerCase(),
       title: str(o, "title", w),
       position: str(o, "position", w, POSITION),
+      parent_id: Object.prototype.hasOwnProperty.call(o, "parent_id")
+        ? strOrNull(o, "parent_id", w, UUID)?.toLowerCase() ?? null
+        : undefined,
       created_at: int(o, "created_at", w),
       updated_at: int(o, "updated_at", w),
       deleted_at: intOrNull(o, "deleted_at", w),

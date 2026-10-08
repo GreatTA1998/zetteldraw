@@ -46,7 +46,9 @@ public class SchemaContractTest {
 
         Map<String, Map<String, Boolean>> postgres = new TreeMap<>();
         for (File f : files) {
-            parseCreateTables(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8), postgres);
+            String sql = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+            parseCreateTables(sql, postgres);
+            parseAddColumns(sql, postgres);
         }
 
         File roomJson = new File(root, "app/schemas/com.zetteldraw.penpoc.data.db.ZettelDatabase/"
@@ -88,6 +90,21 @@ public class SchemaContractTest {
                 cols.put(name, upper.contains("NOT NULL") || upper.contains("PRIMARY KEY"));
             }
             out.put(m.group(1), cols);
+        }
+    }
+
+    /** {@code ALTER TABLE name ADD COLUMN col type ...} in a later migration. */
+    private static void parseAddColumns(String sql, Map<String, Map<String, Boolean>> out) {
+        String noComments = sql.replaceAll("--[^\\n]*", "");
+        Matcher m = Pattern.compile("ALTER TABLE (\\w+) ADD COLUMN (\\w+)([^;]*)", Pattern.CASE_INSENSITIVE)
+                .matcher(noComments);
+        while (m.find()) {
+            Map<String, Boolean> cols = out.get(m.group(1));
+            if (cols == null) {
+                continue;
+            }
+            String rest = m.group(3).toUpperCase();
+            cols.put(m.group(2), rest.contains("NOT NULL"));
         }
     }
 }

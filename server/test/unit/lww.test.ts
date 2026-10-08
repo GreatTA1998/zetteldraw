@@ -148,7 +148,17 @@ describe("resolveLog", () => {
 });
 
 describe("resolveNotebook", () => {
-  const nb = { id: ID, title: "comedy", position: "a0", created_at: 1, updated_at: 100, deleted_at: null, rev: 3 };
+  const parent = "33333333-3333-4333-8333-333333333333";
+  const nb = {
+    id: ID,
+    title: "comedy",
+    position: "a0",
+    parent_id: null as string | null,
+    created_at: 1,
+    updated_at: 100,
+    deleted_at: null,
+    rev: 3,
+  };
   it("LWW without copies", () => {
     expect(resolveNotebook(nb, { ...nb, title: "jokes", updated_at: 200, base_rev: 1 }).status).toBe("conflict_won");
     expect(resolveNotebook(nb, { ...nb, title: "jokes", updated_at: 50, base_rev: 1 })).toMatchObject({
@@ -157,5 +167,21 @@ describe("resolveNotebook", () => {
       copy: null,
     });
     expect(resolveNotebook(nb, { ...nb, base_rev: 1 }).status).toBe("applied");
+  });
+
+  it("treats a parent change as a real change", () => {
+    const stored = { ...nb, rev: 9 };
+    const won = resolveNotebook(stored, { ...stored, parent_id: parent, updated_at: 200, base_rev: 1 });
+    expect(won.status).toBe("conflict_won");
+    expect(won.write?.parent_id).toBe(parent);
+  });
+
+  it("keeps the stored parent when a newer push omits parent_id", () => {
+    const stored = { ...nb, parent_id: parent, rev: 9 };
+    const { parent_id: _drop, rev: _rev, ...flat } = stored;
+    const won = resolveNotebook(stored, { ...flat, title: "jokes", updated_at: 200, base_rev: 1 });
+    expect(won.status).toBe("conflict_won");
+    expect(won.write?.parent_id).toBe(parent);
+    expect(won.write?.title).toBe("jokes");
   });
 });

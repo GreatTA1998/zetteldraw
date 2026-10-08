@@ -40,13 +40,16 @@ import com.zetteldraw.penpoc.data.ZettelData;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * One top bar: Scratchpad | notebook tabs | +. Each collection is a continuous
- * vertical scroll of pages; every page has Move (to a notebook) and Wipe.
+ * Top bar: Scratchpad | top-level notebooks | +. A selected notebook with
+ * children opens another bar of only those children. Each collection is a
+ * continuous vertical scroll of its own pages.
  */
 public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
@@ -104,6 +107,11 @@ public final class CanvasActivity extends Activity {
     private Loaded awaitingLayout;
     private Integer pendingKeepScroll;
     private List<BoardRepository.NotebookInfo> shownNotebooks;
+    /** Selected notebook and its ancestors, root first. Empty on the Scratchpad. */
+    private final ArrayList<String> trail = new ArrayList<>();
+    /** One bar per selected notebook that has children, under the top bar. */
+    private LinearLayout lowerBars;
+    private final ArrayList<View> childBars = new ArrayList<>();
     /** Bumped by every page-list load; a background load whose number is stale is dropped. */
     private int loadGeneration;
     private int shownGeneration;
@@ -132,9 +140,13 @@ public final class CanvasActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
+        lowerBars = new LinearLayout(this);
+        lowerBars.setOrientation(LinearLayout.VERTICAL);
+        lowerBars.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
         topBar = buildTopBar();
         column.addView(topBar, matchWrap());
         column.addView(rule(), ruleLp());
+        column.addView(lowerBars, matchWrap());
         toolbar = buildToolbar();
         column.addView(toolbar, matchWrap());
         column.addView(rule(), ruleLp());
@@ -290,7 +302,7 @@ public final class CanvasActivity extends Activity {
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
         scratchpadTab = iconButton(R.drawable.ic_scratchpad, R.string.scratchpad);
-        scratchpadTab.setOnClickListener(v -> openCollection(SCRATCHPAD));
+        scratchpadTab.setOnClickListener(v -> openScratchpad());
         scratchpadTab.setOnLongClickListener(v -> {
             showLaunchLog();
             return true;
@@ -416,31 +428,14 @@ public final class CanvasActivity extends Activity {
             return;
         }
         shownNotebooks = notebooks == null ? null : new ArrayList<>(notebooks);
-        notebookStrip.removeAllViews();
-        notebookTabs.clear();
-        if (notebooks == null) {
-            notebooks = new ArrayList<>();
-        } else if (notebooks.isEmpty()) {
-            TextView hint = new TextView(this);
-            hint.setText(R.string.no_notebooks_bar);
-            hint.setTextColor(Color.BLACK);
-            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-            hint.setPadding(dp(4), 0, dp(4), 0);
-            notebookStrip.addView(hint, wrap());
-        }
-        for (BoardRepository.NotebookInfo each : notebooks) {
-            NotebookTab tab = new NotebookTab(this, each);
-            LinearLayout.LayoutParams lp = wrap();
-            if (!notebookTabs.isEmpty()) {
-                lp.leftMargin = dp(4);
+        pruneTrail();
+        rebuildBars();
+        if (shownNotebooks != null && !SCRATCHPAD.equals(collectionId)) {
+            BoardRepository.NotebookInfo open = notebookById(collectionId);
+            if (open != null && (trail.isEmpty() || !trail.get(trail.size() - 1).equals(collectionId))) {
+                openNotebook(collectionId);
             }
-            notebookStrip.addView(tab, lp);
-            notebookTabs.add(tab);
         }
-        LinearLayout.LayoutParams addLp = wrap();
-        addLp.leftMargin = dp(4);
-        notebookStrip.addView(addButton, addLp);
-        styleTabs();
     }
 
     private boolean sameNotebooks(List<BoardRepository.NotebookInfo> notebooks) {
@@ -450,11 +445,131 @@ public final class CanvasActivity extends Activity {
         for (int i = 0; i < notebooks.size(); i++) {
             BoardRepository.NotebookInfo a = shownNotebooks.get(i);
             BoardRepository.NotebookInfo b = notebooks.get(i);
-            if (!a.id.equals(b.id) || !a.title.equals(b.title)) {
+            if (!a.id.equals(b.id) || !a.title.equals(b.title) || !Objects.equals(a.parentId, b.parentId)) {
                 return false;
             }
         }
         return true;
+    }
+
+    /** Drops the trail at the first notebook that is gone or no longer under the one above it. */
+    private void pruneTrail() {
+        if (shownNotebooks == null) {
+            return;
+        }
+        int keep = 0;
+        String parent = null;
+        while (keep < trail.size()) {
+            BoardRepository.NotebookInfo info = notebookById(trail.get(keep));
+            if (info == null || !Objects.equals(info.parentId, parent)) {
+                break;
+            }
+            parent = info.id;
+            keep++;
+        }
+        if (keep < trail.size()) {
+            trail.subList(keep, trail.size()).clear();
+        }
+    }
+
+    private void rebuildBars() {
+        notebookStrip.removeAllViews();
+        notebookTabs.clear();
+        lowerBars.removeAllViews();
+        childBars.clear();
+        List<BoardRepository.NotebookInfo> top = childrenOf(null);
+        if (shownNotebooks != null && top.isEmpty()) {
+            TextView hint = new TextView(this);
+            hint.setText(R.string.no_notebooks_bar);
+            hint.setTextColor(Color.BLACK);
+            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            hint.setPadding(dp(4), 0, dp(4), 0);
+            notebookStrip.addView(hint, wrap());
+        }
+        fillStrip(notebookStrip, top, addButton, 0);
+        if (shownNotebooks != null) {
+            for (int depth = 0; depth < trail.size(); depth++) {
+                String parentId = trail.get(depth);
+                List<BoardRepository.NotebookInfo> kids = childrenOf(parentId);
+                if (kids.isEmpty()) {
+                    continue;
+                }
+                if (lowerBars.getChildCount() > 0) {
+                    lowerBars.addView(rule(), ruleLp());
+                }
+                LinearLayout bar = row(Gravity.CENTER_VERTICAL);
+                bar.setContentDescription(getString(R.string.child_notebooks));
+                HorizontalScrollView scroll = new HorizontalScrollView(this);
+                scroll.setHorizontalScrollBarEnabled(false);
+                LinearLayout strip = new LinearLayout(this);
+                strip.setOrientation(LinearLayout.HORIZONTAL);
+                strip.setGravity(Gravity.CENTER_VERTICAL);
+                Button plus = tinyButton(getString(R.string.add_notebook), 22);
+                plus.setContentDescription(getString(R.string.new_notebook));
+                plus.setPadding(dp(8), 0, dp(8), dp(2));
+                String createUnder = parentId;
+                plus.setOnClickListener(v -> showNameForm(null, null, plus, createUnder));
+                fillStrip(strip, kids, plus, depth + 1);
+                scroll.addView(strip, new FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+                bar.addView(scroll, new LinearLayout.LayoutParams(0,
+                        LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+                lowerBars.addView(bar, matchWrap());
+                childBars.add(bar);
+            }
+        }
+        styleTabs();
+    }
+
+    private void fillStrip(LinearLayout strip, List<BoardRepository.NotebookInfo> notebooks, Button plus, int depth) {
+        for (BoardRepository.NotebookInfo each : notebooks) {
+            NotebookTab tab = new NotebookTab(this, each, depth);
+            LinearLayout.LayoutParams lp = wrap();
+            if (strip.getChildCount() > 0) {
+                lp.leftMargin = dp(4);
+            }
+            strip.addView(tab, lp);
+            notebookTabs.add(tab);
+        }
+        LinearLayout.LayoutParams addLp = wrap();
+        addLp.leftMargin = dp(4);
+        strip.addView(plus, addLp);
+    }
+
+    private List<BoardRepository.NotebookInfo> childrenOf(String parentId) {
+        ArrayList<BoardRepository.NotebookInfo> kids = new ArrayList<>();
+        if (shownNotebooks == null) {
+            return kids;
+        }
+        for (BoardRepository.NotebookInfo each : shownNotebooks) {
+            if (Objects.equals(each.parentId, parentId)) {
+                kids.add(each);
+            }
+        }
+        return kids;
+    }
+
+    private BoardRepository.NotebookInfo notebookById(String id) {
+        if (shownNotebooks == null || id == null) {
+            return null;
+        }
+        for (BoardRepository.NotebookInfo each : shownNotebooks) {
+            if (each.id.equals(id)) {
+                return each;
+            }
+        }
+        return null;
+    }
+
+    /** Parents that currently show a child bar, in trail order. */
+    private ArrayList<String> barParents(List<String> chain) {
+        ArrayList<String> out = new ArrayList<>();
+        for (String id : chain) {
+            if (!childrenOf(id).isEmpty()) {
+                out.add(id);
+            }
+        }
+        return out;
     }
 
     /**
@@ -494,22 +609,64 @@ public final class CanvasActivity extends Activity {
         }
     }
 
+    private void openScratchpad() {
+        boolean hadBars = !childBars.isEmpty();
+        trail.clear();
+        if (hadBars) {
+            rebuildBars();
+        } else {
+            styleTabs();
+        }
+        openCollection(SCRATCHPAD);
+    }
+
     private void openNotebook(String id) {
+        ArrayList<String> next = new ArrayList<>();
+        HashSet<String> seen = new HashSet<>();
+        boolean refreshed = false;
+        String cursor = id;
+        while (cursor != null && seen.add(cursor)) {
+            BoardRepository.NotebookInfo info = notebookById(cursor);
+            if (info == null && !refreshed) {
+                shownNotebooks = repository.notebooks();
+                refreshed = true;
+                info = notebookById(cursor);
+            }
+            if (info == null) {
+                break;
+            }
+            next.add(0, info.id);
+            cursor = info.parentId;
+        }
+        if (next.isEmpty()) {
+            openNotebooks();
+            return;
+        }
+        boolean sameBars = !refreshed && barParents(trail).equals(barParents(next));
+        trail.clear();
+        trail.addAll(next);
         notebookId = id;
+        if (sameBars) {
+            styleTabs();
+        } else {
+            rebuildBars();
+        }
         openCollection(id);
         NotebookTab selected = tabFor(id);
-        if (selected != null) {
-            notebookScroll.post(() -> revealTab(selected, true));
+        if (selected != null && selected.getParent() instanceof View
+                && selected.getParent().getParent() instanceof HorizontalScrollView) {
+            HorizontalScrollView strip = (HorizontalScrollView) selected.getParent().getParent();
+            strip.post(() -> revealTab(strip, selected, true));
         }
     }
 
     /** Scrolls the strip only as far as needed to show the whole tab. */
-    private void revealTab(NotebookTab tab, boolean smooth) {
-        int viewport = notebookScroll.getWidth();
+    private void revealTab(HorizontalScrollView strip, NotebookTab tab, boolean smooth) {
+        int viewport = strip.getWidth();
         if (viewport <= 0) {
             return;
         }
-        int x = notebookScroll.getScrollX();
+        int x = strip.getScrollX();
         int target = x;
         if (tab.getLeft() < x) {
             target = Math.max(0, tab.getLeft() - dp(24));
@@ -520,9 +677,9 @@ public final class CanvasActivity extends Activity {
             return;
         }
         if (smooth) {
-            notebookScroll.smoothScrollTo(target, 0);
+            strip.smoothScrollTo(target, 0);
         } else {
-            notebookScroll.scrollTo(target, 0);
+            strip.scrollTo(target, 0);
         }
     }
 
@@ -678,9 +835,13 @@ public final class CanvasActivity extends Activity {
             return;
         }
         rebuildNotebookTabs(loaded.notebooks);
-        if (!SCRATCHPAD.equals(loaded.id) && tabFor(loaded.id) == null) {
+        if (!SCRATCHPAD.equals(loaded.id) && notebookById(loaded.id) == null) {
             // The notebook went away (deleted elsewhere).
-            openNotebooks(loaded.notebooks);
+            if (!trail.isEmpty()) {
+                openNotebook(trail.get(trail.size() - 1));
+            } else {
+                openNotebooks(loaded.notebooks);
+            }
             return;
         }
         if (pageHeight == 0) {
@@ -697,15 +858,19 @@ public final class CanvasActivity extends Activity {
         int target;
         if (loaded.keepScroll != null) {
             target = loaded.keepScroll;
-        } else if (scrollByCollection.containsKey(loaded.id)) {
-            target = scrollByCollection.get(loaded.id);
-        } else {
-            target = 0;
-            if (SCRATCHPAD.equals(loaded.id)) {
+        } else if (SCRATCHPAD.equals(loaded.id)) {
+            if (scrollByCollection.containsKey(loaded.id)) {
+                target = scrollByCollection.get(loaded.id);
+            } else {
+                target = 0;
                 for (int i = 0; i < loaded.pages.size() - 1; i++) {
                     target += heightOf(loaded.pages.get(i)) + layoutGap(loaded.pages);
                 }
             }
+        } else {
+            // A fresh selection jumps to the last inked page. An explicit
+            // keepScroll (a refresh, or a link opened later) already won above.
+            target = lastInkOffset(loaded.pages);
         }
         showPages(loaded.pages, target);
         syncNav();
@@ -767,9 +932,24 @@ public final class CanvasActivity extends Activity {
         for (PageSlot slot : slots) {
             slot.syncEnabled();
         }
-        inkView.setPages(pages, heights, gap);
+        inkView.setPages(pages, heights, gap, targetScrollY);
         pendingScrollY = Math.max(0, targetScrollY);
         pageColumn.requestLayout();
+    }
+
+    /**
+     * Scroll offset of the last slice that already has ink. Page height times
+     * that index: no walk of the pages, and no second read of the log.
+     */
+    private int lastInkOffset(List<Board> pages) {
+        if (pages.isEmpty() || pages.get(0).paper == null) {
+            return 0;
+        }
+        int index = pages.get(0).paper.lastInkedSlice();
+        if (index <= 0) {
+            return 0;
+        }
+        return heightOf(pages.get(0)) * index;
     }
 
     private List<Board> pagesIn(String id) {
@@ -798,13 +978,21 @@ public final class CanvasActivity extends Activity {
      * appear on the Boox over the TouchHelper surface.
      */
     private void showMoveMenu(PageSlot slot) {
-        LinearLayout list = panel();
-        for (BoardRepository.NotebookInfo each : repository.notebooks()) {
-            addPanelButton(list, each.title, () -> moveTo(slot, each.id));
+        if (shownNotebooks == null) {
+            shownNotebooks = repository.notebooks();
         }
-        addPanelButton(list, getString(R.string.new_notebook_item), () -> showNameForm(null, slot, null));
+        LinearLayout list = panel();
+        addMoveTree(list, null, 0, slot);
+        addPanelButton(list, getString(R.string.new_notebook_item), 0, () -> showNameForm(null, slot, null, null));
 
         showOverlay(list, pageAnchoredLp(slot.moveButton, list), drawingArea);
+    }
+
+    private void addMoveTree(LinearLayout list, String parentId, int depth, PageSlot slot) {
+        for (BoardRepository.NotebookInfo each : childrenOf(parentId)) {
+            addPanelButton(list, each.title, depth, () -> moveTo(slot, each.id));
+            addMoveTree(list, each.id, depth + 1, slot);
+        }
     }
 
     /** Above the page's bottom-right controls, right-aligned with them; below if there is no room above. */
@@ -909,12 +1097,71 @@ public final class CanvasActivity extends Activity {
         if (tab == null) {
             return;
         }
-        revealTab(tab, false);
+        if (tab.getParent() instanceof View && tab.getParent().getParent() instanceof HorizontalScrollView) {
+            revealTab((HorizontalScrollView) tab.getParent().getParent(), tab, false);
+        }
         LinearLayout menu = panel();
         menu.setMinimumWidth(Math.max(dp(200), tab.getWidth()));
-        addPanelButton(menu, getString(R.string.rename), () -> showNameForm(id, null, tab));
-        addPanelButton(menu, getString(R.string.delete), () -> confirmDelete(id, tab));
+        addPanelButton(menu, getString(R.string.rename), 0, () -> showNameForm(id, null, tab, null));
+        addPanelButton(menu, getString(R.string.place_under), 0, () -> showPlaceMenu(id, tab));
+        addPanelButton(menu, getString(R.string.make_top_level), 0, () -> {
+            if (repository.placeNotebook(id, null) && trail.contains(id)) {
+                openNotebook(id);
+            } else {
+                rebuildNotebookTabs();
+            }
+        });
+        addPanelButton(menu, getString(R.string.delete), 0, () -> confirmDelete(id, tab));
         showOverlay(menu, anchoredLp(tab, menu), root);
+    }
+
+    /** Indented tree of every notebook that is not this one and not under it. */
+    private void showPlaceMenu(String id, View anchor) {
+        HashSet<String> skip = descendantIds(id);
+        LinearLayout menu = panel();
+        menu.setMinimumWidth(dp(200));
+        if (!addPlaceTree(menu, null, 0, id, skip)) {
+            menu.addView(panelText(getString(R.string.no_place_target), 14));
+        }
+        showOverlay(menu, anchoredLp(anchor, menu), root);
+    }
+
+    private boolean addPlaceTree(LinearLayout menu, String parentId, int depth, String moving, HashSet<String> skip) {
+        boolean any = false;
+        for (BoardRepository.NotebookInfo each : childrenOf(parentId)) {
+            if (each.id.equals(moving) || skip.contains(each.id)) {
+                continue;
+            }
+            any = true;
+            addPanelButton(menu, each.title, depth, () -> {
+                if (repository.placeNotebook(moving, each.id)) {
+                    if (trail.contains(moving)) {
+                        openNotebook(moving);
+                    } else {
+                        rebuildNotebookTabs();
+                    }
+                }
+            });
+            if (addPlaceTree(menu, each.id, depth + 1, moving, skip)) {
+                any = true;
+            }
+        }
+        return any;
+    }
+
+    private HashSet<String> descendantIds(String id) {
+        HashSet<String> skip = new HashSet<>();
+        ArrayList<String> queue = new ArrayList<>();
+        queue.add(id);
+        for (int i = 0; i < queue.size(); i++) {
+            for (BoardRepository.NotebookInfo each : childrenOf(queue.get(i))) {
+                if (skip.add(each.id)) {
+                    queue.add(each.id);
+                }
+            }
+        }
+        skip.remove(id);
+        return skip;
     }
 
     /**
@@ -923,6 +1170,14 @@ public final class CanvasActivity extends Activity {
      * {@code anchor} in the top bar the form hangs under it.
      */
     private void showNameForm(String id, PageSlot moveAfter, View anchor) {
+        showNameForm(id, moveAfter, anchor, null);
+    }
+
+    /**
+     * Create ({@code id == null}) or rename a notebook. {@code parentId} is
+     * the parent of a notebook created from a child bar; null is top-level.
+     */
+    private void showNameForm(String id, PageSlot moveAfter, View anchor, String parentId) {
         LinearLayout form = panel();
         form.addView(panelText(getString(id == null ? R.string.new_notebook : R.string.rename_notebook), 15));
         EditText name = new EditText(this);
@@ -952,7 +1207,7 @@ public final class CanvasActivity extends Activity {
                 syncNav();
                 return;
             }
-            BoardRepository.NotebookInfo created = repository.createNotebook(text);
+            BoardRepository.NotebookInfo created = repository.createNotebook(text, parentId);
             rebuildNotebookTabs();
             if (created == null) {
                 syncNav();
@@ -1023,8 +1278,19 @@ public final class CanvasActivity extends Activity {
             dismissOverlay();
             repository.deleteNotebook(id);
             scrollByCollection.remove(id);
+            int cut = trail.indexOf(id);
+            if (cut >= 0) {
+                trail.subList(cut, trail.size()).clear();
+            }
+            boolean opened = id.equals(collectionId);
             rebuildNotebookTabs();
-            openNotebooks();
+            if (opened) {
+                if (!trail.isEmpty()) {
+                    openNotebook(trail.get(trail.size() - 1));
+                } else {
+                    openNotebooks();
+                }
+            }
         });
         actions.addView(cancel, wrap());
         LinearLayout.LayoutParams lp = wrap();
@@ -1093,7 +1359,12 @@ public final class CanvasActivity extends Activity {
     }
 
     private void addPanelButton(LinearLayout list, String label, Runnable action) {
+        addPanelButton(list, label, 0, action);
+    }
+
+    private void addPanelButton(LinearLayout list, String label, int depth, Runnable action) {
         Button item = tinyButton(label, 16);
+        item.setPadding(dp(12 + 16 * depth), 0, dp(12), 0);
         item.setMinimumHeight(dp(48));
         item.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         item.setSingleLine(true);
@@ -1125,17 +1396,15 @@ public final class CanvasActivity extends Activity {
                 View.MeasureSpec.makeMeasureSpec(root.getHeight(), View.MeasureSpec.AT_MOST));
         int[] rootAt = new int[2];
         int[] anchorAt = new int[2];
-        int[] barAt = new int[2];
         root.getLocationInWindow(rootAt);
         anchor.getLocationInWindow(anchorAt);
-        topBar.getLocationInWindow(barAt);
         int left = anchorAt[0] - rootAt[0];
         left = Math.max(dp(8), Math.min(left, root.getWidth() - content.getMeasuredWidth() - dp(8)));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         lp.gravity = Gravity.TOP | Gravity.START;
         lp.leftMargin = left;
-        lp.topMargin = barAt[1] - rootAt[1] + topBar.getHeight() - dp(4);
+        lp.topMargin = anchorAt[1] - rootAt[1] + anchor.getHeight() - dp(4);
         return lp;
     }
 
@@ -1202,10 +1471,11 @@ public final class CanvasActivity extends Activity {
     }
 
     private void styleTabs() {
-        boolean scratch = SCRATCHPAD.equals(collectionId);
+        boolean scratch = trail.isEmpty() && SCRATCHPAD.equals(collectionId);
         styleTool(scratchpadTab, scratch);
         for (NotebookTab tab : notebookTabs) {
-            tab.setCurrent(!scratch && tab.id.equals(collectionId));
+            boolean current = tab.depth < trail.size() && trail.get(tab.depth).equals(tab.id);
+            tab.setCurrent(current);
         }
     }
 
@@ -1241,11 +1511,13 @@ public final class CanvasActivity extends Activity {
      */
     private final class NotebookTab extends LinearLayout {
         final String id;
+        final int depth;
         final Button label;
 
-        NotebookTab(Context context, BoardRepository.NotebookInfo info) {
+        NotebookTab(Context context, BoardRepository.NotebookInfo info, int depth) {
             super(context);
             id = info.id;
+            this.depth = depth;
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
             label = new Button(context, null, android.R.attr.borderlessButtonStyle);
@@ -1280,6 +1552,9 @@ public final class CanvasActivity extends Activity {
         // The reader owns the stylus wherever it can draw. Every control is a hole,
         // in the surface view's coordinates, including the bars above the page.
         addExclude(rects, topBar, dp(6), origin, loc);
+        for (View bar : childBars) {
+            addExclude(rects, bar, dp(6), origin, loc);
+        }
         addExclude(rects, toolbar, dp(6), origin, loc);
         int top = scroller.getScrollY();
         int bottom = top + scroller.getHeight();

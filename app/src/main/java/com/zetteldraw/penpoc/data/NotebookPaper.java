@@ -44,6 +44,11 @@ public final class NotebookPaper {
     private final ArrayList<InkRenderer.InkStroke> strokes = new ArrayList<>();
     /** Bytes of the log so far. Appending a record only adds to the end. */
     private byte[] log;
+    /**
+     * Highest slice that holds ink, or -1. Updated while the log is applied
+     * and when a stroke moves, so opening a notebook does not walk the pages.
+     */
+    private int lastInked = -1;
 
     private NotebookPaper(int sliceHeight, byte[] log) {
         if (sliceHeight <= 0) {
@@ -218,6 +223,11 @@ public final class NotebookPaper {
         return heights.size();
     }
 
+    /** Highest slice index that holds ink, or -1 when the sheet is blank. O(1). */
+    public int lastInkedSlice() {
+        return lastInked;
+    }
+
     public int heightAt(int index) {
         return heights.get(index);
     }
@@ -263,6 +273,24 @@ public final class NotebookPaper {
         return hit;
     }
 
+    /** A stroke that ends on a slice boundary belongs to the slice above that line. */
+    private void noteStroke(InkRenderer.InkStroke stroke) {
+        if (stroke == null || stroke.bounds == null) {
+            return;
+        }
+        int index = sliceIndexAt(Math.max(0f, stroke.bounds.bottom - 0.001f));
+        if (index > lastInked) {
+            lastInked = index;
+        }
+    }
+
+    private void refreshLastInked() {
+        lastInked = -1;
+        for (InkRenderer.InkStroke stroke : strokes) {
+            noteStroke(stroke);
+        }
+    }
+
     public int sliceIndexAt(float paperY) {
         if (paperY < 0f) {
             return -1;
@@ -301,6 +329,7 @@ public final class NotebookPaper {
             extend(id, sliceHeight);
         }
         strokes.add(stroke);
+        noteStroke(stroke);
         append(record(OP_APPEND, strokePayload(stroke)));
     }
 
@@ -320,6 +349,7 @@ public final class NotebookPaper {
         });
         if (!gone.isEmpty()) {
             append(record(OP_DELETE, idsPayload(gone)));
+            refreshLastInked();
         }
     }
 
@@ -376,6 +406,7 @@ public final class NotebookPaper {
                 throw new IllegalStateException(e);
             }
             append(record(OP_TRANSLATE, raw.toByteArray()));
+            refreshLastInked();
         }
     }
 
@@ -403,6 +434,7 @@ public final class NotebookPaper {
         closeGap(slice);
         rememberTear(slice, TEAR_DELETE, cut);
         trimTail();
+        refreshLastInked();
         return cut;
     }
 
@@ -415,6 +447,7 @@ public final class NotebookPaper {
         rememberTear(slice, kind, cut);
         // A wiped slice stays, so pages under it do not move. An empty tail does not.
         trimTail();
+        refreshLastInked();
         return cut;
     }
 
@@ -532,12 +565,16 @@ public final class NotebookPaper {
 
     private void applyOp(int op, ByteBuffer in) throws IOException {
         switch (op) {
-            case OP_APPEND:
-                strokes.add(readStroke(in));
+            case OP_APPEND: {
+                InkRenderer.InkStroke added = readStroke(in);
+                strokes.add(added);
+                noteStroke(added);
                 break;
+            }
             case OP_DELETE:
                 HashSet<String> gone = new HashSet<>(readIds(in));
                 strokes.removeIf(stroke -> gone.contains(stroke.id));
+                refreshLastInked();
                 break;
             case OP_TRANSLATE: {
                 List<String> ids = readIds(in);
@@ -549,6 +586,7 @@ public final class NotebookPaper {
                         strokes.set(i, strokes.get(i).translated(dx, dy));
                     }
                 }
+                refreshLastInked();
                 break;
             }
             case OP_TEAR: {
@@ -559,6 +597,7 @@ public final class NotebookPaper {
                     break;
                 }
                 applyTear(slice, kind, newIds);
+                refreshLastInked();
                 break;
             }
             case OP_EXTEND: {

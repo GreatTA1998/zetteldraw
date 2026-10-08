@@ -32,6 +32,7 @@ final class SyncProtocol {
                     .put("id", n.id)
                     .put("title", n.title)
                     .put("position", n.position)
+                    .put("parent_id", orNull(n.parentId))
                     .put("created_at", n.createdAt)
                     .put("updated_at", n.updatedAt)
                     .put("deleted_at", orNull(n.deletedAt))
@@ -78,6 +79,7 @@ final class SyncProtocol {
             n.id = j.getString("id");
             n.title = j.getString("title");
             n.position = j.getString("position");
+            n.parentId = optString(j, "parent_id");
             n.createdAt = j.getLong("created_at");
             n.updatedAt = j.getLong("updated_at");
             n.rev = j.getLong("rev");

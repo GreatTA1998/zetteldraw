@@ -21,7 +21,15 @@ import com.zetteldraw.penpoc.LaunchLog;
         version = ZettelDatabase.SCHEMA_VERSION,
         exportSchema = true)
 public abstract class ZettelDatabase extends RoomDatabase {
-    public static final int SCHEMA_VERSION = 2;
+    public static final int SCHEMA_VERSION = 3;
+
+    /** Nullable parent. Null is top-level. The column is metadata, not an ink merge. */
+    public static final Migration MIGRATION_2_3 = new Migration(2, 3) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase db) {
+            db.execSQL("ALTER TABLE notebooks ADD COLUMN parent_id TEXT");
+        }
+    };
 
     /**
      * Adds the notebook ink log beside the per-page rows. Does not touch
@@ -48,7 +56,7 @@ public abstract class ZettelDatabase extends RoomDatabase {
     public static ZettelDatabase open(Context context) {
         return Room.databaseBuilder(context.getApplicationContext(), ZettelDatabase.class, NAME)
                 .allowMainThreadQueries()
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .addCallback(new Callback() {
                     @Override
                     public void onCreate(@NonNull SupportSQLiteDatabase db) {

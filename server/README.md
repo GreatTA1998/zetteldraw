@@ -8,7 +8,7 @@ Stack: TypeScript, Node 22, Fastify, `pg`, `@aws-sdk/client-s3`. I picked Node o
 
 ```bash
 docker compose up -d --build --wait
-curl localhost:8787/healthz          # {"ok":true,"schema_version":2}
+curl localhost:8787/healthz          # {"ok":true,"schema_version":3}
 ```
 
 | Service | Address | Credentials |
@@ -48,9 +48,9 @@ Every `/sync/*` call sends `Authorization: Bearer <device token>` and `X-Zetteld
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "device_id": "…",
-  "notebooks": [{ "id", "title", "position", "created_at", "updated_at", "deleted_at", "base_rev" }],
+  "notebooks": [{ "id", "title", "position", "parent_id", "created_at", "updated_at", "deleted_at", "base_rev" }],
   "boards":    [{ "id", "notebook_id", "position", "ink_hash", "ink_bytes", "thumb_hash", "conflict_of",
                   "created_at", "updated_at", "deleted_at", "base_rev" }],
   "logs":     [{ "id", "notebook_id", "ink_hash", "ink_bytes", "slice_height", "conflict_of",
@@ -72,10 +72,12 @@ Blobs are checked against their sha256 (`400` if they don't match) and stored at
 
 Notebook create, rename and delete are ordinary notebook rows. A delete is a tombstone (`deleted_at`). The deleting device also pushes that notebook's pages, re-filed into the scratchpad (`notebook_id: null`). A device that pulls the tombstone moves any pages it still has in that notebook back to its scratchpad.
 
+`parent_id` is null for a top-level notebook, or the id of its one parent. It is metadata: each notebook keeps its own ink log. A push that omits `parent_id` leaves the stored parent in place, so a client that lists notebooks flat does not clear the tree.
+
 ### `GET /sync/pull?since=<cursor>&limit=<n≤500>`
 
 ```json
-{ "schema_version": 2, "cursor": 123, "has_more": false,
+{ "schema_version": 3, "cursor": 123, "has_more": false,
   "notebooks": [{ …row, "rev" }], "boards": [{ …row, "rev" }],
   "logs": [{ …row, "rev" }],
   "blobs": { "<sha256>": "<base64>" } }

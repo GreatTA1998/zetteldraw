@@ -85,6 +85,8 @@ final class PageInkView extends FrameLayout {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final ArrayList<Rect> excludeRects = new ArrayList<>();
     private final LinkedHashMap<String, Bitmap> bitmaps = new LinkedHashMap<>(8, 0.75f, true);
+    /** Page ids laid out into bitmaps since the last {@link #setPages}. */
+    private final ArrayList<String> paintedPageIds = new ArrayList<>();
     private final InkHistory history = new InkHistory();
     private final Handler main = new Handler(Looper.getMainLooper());
     private final SurfaceWorker worker;
@@ -171,6 +173,15 @@ final class PageInkView extends FrameLayout {
 
     /** {@code pageHeights[i]} is the height of {@code next.get(i)}; {@code gap} separates pages. */
     void setPages(List<Board> next, int[] pageHeights, int gap) {
+        setPages(next, pageHeights, gap, target().scrollY);
+    }
+
+    /**
+     * Same as {@link #setPages(List, int[], int)}, and the first paint uses
+     * {@code scrollY}. Pages above that offset are not laid out into bitmaps.
+     */
+    void setPages(List<Board> next, int[] pageHeights, int gap, int scrollY) {
+        paintedPageIds.clear();
         if (selection != null) {
             scheduleResume();
             endSelection();
@@ -178,7 +189,12 @@ final class PageInkView extends FrameLayout {
                 listener.onLassoCancelled();
             }
         }
-        requestViewport(target().withLayout(new InkViewport.Layout(next, pageHeights, gap)));
+        requestViewport(new InkViewport(new InkViewport.Layout(next, pageHeights, gap), scrollY));
+    }
+
+    /** Page ids rendered into bitmaps since the last {@link #setPages}. */
+    List<String> paintedPageIds() {
+        return new ArrayList<>(paintedPageIds);
     }
 
     void setContentScrollY(int y) {
@@ -310,9 +326,15 @@ final class PageInkView extends FrameLayout {
         for (int index = next.firstVisible(); index <= last; index++) {
             Board page = next.page(index);
             int height = next.layout.heights[index];
+            // Paper ink is drawn from the sheet in the on-screen slice only.
+            // Snapshotting page.strokes here would cache a blank bitmap.
+            if (page.paper != null) {
+                continue;
+            }
             Bitmap cached = bitmaps.get(page.id);
             if (cached == null || cached.getHeight() != height) {
                 jobs.add(new RenderJob(page, new ArrayList<>(page.strokes), height));
+                paintedPageIds.add(page.id);
             }
         }
         return jobs;
@@ -1421,6 +1443,7 @@ final class PageInkView extends FrameLayout {
 
     /** One slice of the paper, drawn in the slice's own bitmap. */
     private Bitmap renderSlice(Board page, int width, int height, Set<String> exclude) {
+        paintedPageIds.add(page.id);
         Bitmap bitmap = Bitmap.createBitmap(Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888);
         bitmap.eraseColor(Color.WHITE);
         if (page.paper == null) {
