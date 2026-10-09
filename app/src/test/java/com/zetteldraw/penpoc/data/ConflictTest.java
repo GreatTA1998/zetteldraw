@@ -46,7 +46,6 @@ public class ConflictTest {
         page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 10f);
         repo.saveInk(page);
-        repo.createScratchpadPage();
     }
 
     @After
@@ -74,7 +73,7 @@ public class ConflictTest {
         BoardEntity local = device.db.dao().board(page.id);
         List<InkRenderer.InkStroke> localInk = new ArrayList<>(page.strokes);
         AtomicInteger notified = new AtomicInteger();
-        repo.setRemoteChangeListener(notified::incrementAndGet);
+        repo.addRemoteChangeListener(notified::incrementAndGet);
 
         List<InkRenderer.InkStroke> remoteInk = Collections.singletonList(TestInk.stroke(500f, 600f, 9));
         SyncStore.PullPage pulled = remotePage(local, remoteInk, local.updatedAt + 5_000, 10);

@@ -36,9 +36,14 @@ public final class SyncEngine {
 
     public Result run() throws IOException {
         Result result = new Result();
-        push(result);
-        pull(result);
-        store.markSynced(clock.getAsLong());
+        store.beginRemoteBatch();
+        try {
+            push(result);
+            pull(result);
+            store.markSynced(clock.getAsLong());
+        } finally {
+            store.endRemoteBatch();
+        }
         return result;
     }
 

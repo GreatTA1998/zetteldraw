@@ -23,6 +23,32 @@ public interface ZettelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertNotebook(NotebookEntity notebook);
 
+    // Notebook ink logs. One live row per notebook; conflict copies stay hidden.
+
+    @Query("SELECT * FROM notebook_logs WHERE id = :id")
+    NotebookLogEntity notebookLog(String id);
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    void upsertNotebookLog(NotebookLogEntity log);
+
+    // Page links. A live pair is unique; a tombstone may share the same pages.
+
+    @Query("SELECT * FROM page_links WHERE id = :id")
+    PageLinkEntity pageLink(String id);
+
+    @Query("SELECT * FROM page_links WHERE deleted_at IS NULL AND source_id = :sourceId AND target_id = :targetId LIMIT 1")
+    PageLinkEntity liveLink(String sourceId, String targetId);
+
+    @Query("SELECT * FROM page_links WHERE deleted_at IS NULL AND (source_id = :pageId OR target_id = :pageId)"
+            + " ORDER BY created_at, id")
+    List<PageLinkEntity> liveLinksTouching(String pageId);
+
+    @Query("SELECT * FROM page_links WHERE deleted_at IS NULL ORDER BY created_at, id")
+    List<PageLinkEntity> livePageLinks();
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    void upsertPageLink(PageLinkEntity link);
+
     // Boards
 
     @Query("SELECT * FROM boards WHERE notebook_id IS NULL AND deleted_at IS NULL"

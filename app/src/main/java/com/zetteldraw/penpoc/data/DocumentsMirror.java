@@ -55,6 +55,23 @@ public final class DocumentsMirror implements InkMirror {
         write(ROOT, "index.json", "application/json", json.getBytes(StandardCharsets.UTF_8));
     }
 
+    @Override
+    public void writeLog(String sheetId, byte[] bytes) {
+        write(INK, sheetId + ".zdl", "application/octet-stream", bytes);
+    }
+
+    @Override
+    public void deleteLog(String sheetId) {
+        try {
+            Uri uri = find(INK, sheetId + ".zdl");
+            if (uri != null) {
+                resolver.delete(uri, null, null);
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "mirror log delete failed " + sheetId, e);
+        }
+    }
+
     private void write(String relativePath, String name, String mime, byte[] bytes) {
         try {
             Uri uri = find(relativePath, name);

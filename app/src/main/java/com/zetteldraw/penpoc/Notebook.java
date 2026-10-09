@@ -26,13 +26,4 @@ public enum Notebook {
         this.uuid = UUID.nameUUIDFromBytes(("zetteldraw:notebook:" + id)
                 .getBytes(StandardCharsets.UTF_8)).toString();
     }
-
-    public static Notebook fromId(String id) {
-        for (Notebook notebook : values()) {
-            if (notebook.id.equals(id)) {
-                return notebook;
-            }
-        }
-        return null;
-    }
 }

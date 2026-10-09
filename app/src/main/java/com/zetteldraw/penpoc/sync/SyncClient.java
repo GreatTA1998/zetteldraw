@@ -13,7 +13,9 @@ import java.nio.charset.StandardCharsets;
 
 /** Plain HttpURLConnection transport with the device token as a bearer token. */
 public final class SyncClient {
-    private static final int TIMEOUT_MS = 30_000;
+    private static final int CONNECT_TIMEOUT_MS = 30_000;
+    /** Long enough for a Render free instance to wake from sleep (~30-60 s) on the first request. */
+    private static final int READ_TIMEOUT_MS = 90_000;
 
     private final SyncConfig config;
     private final int schemaVersion;
@@ -44,6 +46,11 @@ public final class SyncClient {
         return request("POST", "/sync/push", body.toString().getBytes(StandardCharsets.UTF_8));
     }
 
+    /** The on-device launch log, so it can be read from the server. */
+    public void uploadDeviceLog(JSONObject body) throws IOException {
+        request("POST", "/sync/device-log", body.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
     JSONObject pull(long since, int limit) throws IOException {
         return request("GET", "/sync/pull?since=" + since + "&limit=" + limit, null);
     }
@@ -52,8 +59,8 @@ public final class SyncClient {
         HttpURLConnection conn = (HttpURLConnection) new URL(config.serverUrl + path).openConnection();
         try {
             conn.setRequestMethod(method);
-            conn.setConnectTimeout(TIMEOUT_MS);
-            conn.setReadTimeout(TIMEOUT_MS);
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(READ_TIMEOUT_MS);
             conn.setRequestProperty("Authorization", "Bearer " + config.deviceToken);
             conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
             conn.setRequestProperty("Accept", "application/json");

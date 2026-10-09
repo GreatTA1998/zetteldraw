@@ -10,10 +10,11 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 33
-        versionCode = 7
-        versionName = "1.6"
+        versionCode = 25
+        versionName = "3.4"
         ndk {
-            abiFilters += "arm64-v8a"
+            // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
+            abiFilters += if (project.hasProperty("zetteldraw.emulator")) "x86_64" else "arm64-v8a"
         }
         // Sync stays off until a server URL is set (here via -Pzetteldraw.syncUrl, or at runtime in SyncConfig).
         buildConfigField("String", "SYNC_URL", "\"${project.findProperty("zetteldraw.syncUrl") ?: ""}\"")
@@ -92,7 +93,6 @@ dependencies {
     implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.5")
     implementation("com.onyx.android.sdk:onyxsdk-device:1.3.6")
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
-    implementation("androidx.viewpager2:viewpager2:1.1.0")
     implementation("androidx.room:room-runtime:2.6.1")
     annotationProcessor("androidx.room:room-compiler:2.6.1")
     implementation("androidx.work:work-runtime:2.9.1")
