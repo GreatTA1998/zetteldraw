@@ -111,6 +111,57 @@ public class PageLinksTest {
     }
 
     @Test
+    public void linkAndMoveSitInOppositeCornersWithRefsAboveLink() {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
+        BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        openNotebook(root, "frombook");
+        openNotebook(root, "tobook");
+        ink(repo, from.id, 10f);
+        ink(repo, to.id, 10f);
+        openNotebook(root, "frombook");
+        clickOnPage(root, "1/2", "Link");
+        openNotebook(root, "tobook");
+        click(root, "Confirm");
+        openNotebook(root, "frombook");
+        relayout(root);
+
+        TextView page = find(root, "1/2");
+        assertNotNull(page);
+        View slot = (View) page.getParent();
+        TextView link = textIn(slot, "Link");
+        TextView move = textIn(slot, "Move");
+        TextView more = textIn(slot, "⋮");
+        TextView ref = find(root, "→ tobook 1/2");
+        assertNotNull(link);
+        assertNotNull(move);
+        assertNotNull(more);
+        assertNotNull(ref);
+        int[] linkLoc = new int[2];
+        int[] moveLoc = new int[2];
+        int[] refLoc = new int[2];
+        int[] slotLoc = new int[2];
+        link.getLocationOnScreen(linkLoc);
+        move.getLocationOnScreen(moveLoc);
+        ref.getLocationOnScreen(refLoc);
+        slot.getLocationOnScreen(slotLoc);
+        int mid = slotLoc[0] + slot.getWidth() / 2;
+        assertTrue("Link sits on the left", linkLoc[0] < mid);
+        assertTrue("Move sits on the right", moveLoc[0] > mid);
+        assertTrue("⋮ is a menu, not an ellipsis", "⋮".contentEquals(more.getText()));
+        assertEquals("Link and Move share the bottom inset",
+                linkLoc[1] + link.getHeight(), moveLoc[1] + move.getHeight());
+        assertTrue("references stack above Link",
+                refLoc[1] + ref.getHeight() <= linkLoc[1] + 2);
+
+        controller.pause().stop().destroy();
+    }
+
+    @Test
     public void confirmCreatesOneLinkAndBothDirectionsRender() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
