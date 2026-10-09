@@ -77,9 +77,11 @@ public class ToolSwitchTest {
         ink.setTool(PageInkView.Tool.ERASER);
         ShadowLooper.idleMainLooper();
         assertEquals(PageInkView.Tool.ERASER, ink.tool());
-        assertTrue("raw drawing stays on for an eraser drag", ink.penOn());
+        // A full bitmap frame holds the pen off until frozen ink is re-pushed
+        // (scribble render just dropped). After that frame, drawing comes back on.
 
         settle();
+        assertTrue("raw drawing stays on for an eraser drag once the frame is up", ink.penOn());
         assertTrue(pen.raw);
         assertFalse(pen.brush);
         assertFalse(pen.render);
@@ -211,6 +213,31 @@ public class ToolSwitchTest {
         assertEquals(enable, pen.lastEnable);
         assertTrue(pen.brush);
         assertTrue(pen.render);
+    }
+
+    @Test
+    public void selectingEraserKeepsStrokesAndRepaintsFrozenInk() {
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(80f, 120f));
+        page.strokes.add(TestStrokes.stroke(220f, 340f));
+        page.strokes.add(TestStrokes.stroke(400f, 500f));
+        PageInkView ink = show(laidOut(page));
+        settle();
+        int framesBefore = ink.fullFramesPainted();
+        assertEquals(3, page.strokes.size());
+        assertTrue(pen.render);
+
+        ink.setTool(PageInkView.Tool.ERASER);
+        ShadowLooper.idleMainLooper();
+        settle();
+
+        assertEquals(PageInkView.Tool.ERASER, ink.tool());
+        assertEquals("selecting the eraser must not delete strokes", 3, page.strokes.size());
+        assertFalse(pen.brush);
+        assertFalse(pen.render);
+        assertTrue("turning scribble render off must re-push frozen bitmaps",
+                ink.fullFramesPainted() > framesBefore);
+        assertTrue("raw drawing stays on so the next erase drag works", ink.penOn());
     }
 
     @Test

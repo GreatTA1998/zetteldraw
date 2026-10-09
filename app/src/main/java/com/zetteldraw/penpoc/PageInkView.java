@@ -441,10 +441,30 @@ final class PageInkView extends FrameLayout {
         pushToolStyle();
     }
 
-    /** The firmware follows the button. Raw drawing stays as it is; only the snapshot changes. */
+    /**
+     * The firmware follows the button. Raw drawing stays as it is; only the
+     * snapshot changes — except when that snapshot turns scribble render off.
+     * On Boox, {@code setRawDrawingRenderEnabled(false)} drops the live overlay
+     * (and often refreshes the panel). Without a full bitmap frame in the same
+     * breath, every stroke vanishes from the glass while still sitting in
+     * memory. Keep the two display layers in lockstep: suppress scribble only
+     * together with a re-push of frozen ink.
+     */
     private void pushToolStyle() {
+        boolean droppingScribble = scribbleRenderOn() && tool == Tool.ERASER;
         firmwareTool = tool;
-        syncRaw();
+        if (droppingScribble && surfaceVisible() && surfaceView.getWidth() > 0) {
+            // Full frame holds raw drawing off until the bitmaps are painted,
+            // then onFramePainted syncs the eraser style with drawing back on.
+            requestFrame(true, null, null);
+        } else {
+            syncRaw();
+        }
+    }
+
+    /** Whether the current firmware snapshot would leave the scribble overlay painting. */
+    private boolean scribbleRenderOn() {
+        return firmwareTool != Tool.ERASER && !eraseRenderOff;
     }
 
     Tool tool() {
