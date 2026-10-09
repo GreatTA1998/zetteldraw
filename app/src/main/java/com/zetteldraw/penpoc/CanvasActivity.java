@@ -1308,7 +1308,7 @@ public final class CanvasActivity extends Activity {
         return lp;
     }
 
-    /** Wipe and Delete for one page, anchored to its ⋯; each confirms in the same spot. */
+    /** Wipe and Delete for one page, anchored to its ⋮; each confirms in the same spot. */
     private void showPageMenu(PageSlot slot) {
         if (isTrailingBlank(slot)) {
             return;
@@ -1919,9 +1919,10 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Transparent stand-in for one page above the ink surface: carries the
-     * page's "k/n" number (top-left, n counting the trailing blank), Move and
-     * ⋯ (Wipe, Delete) (bottom-right) and the dashed separator below it.
-     * Slots are rebuilt whenever the list changes, so n is always current.
+     * page's "k/n" number (top-left, n counting the trailing blank), Link with
+     * stacked references (bottom-left), Move and ⋮ (bottom-right), and the
+     * dashed separator below it. Slots are rebuilt whenever the list changes,
+     * so n is always current.
      */
     private final class PageSlot extends FrameLayout {
         final Board page;
@@ -1947,9 +1948,7 @@ public final class CanvasActivity extends Activity {
             labelLp.leftMargin = dp(10);
             labelLp.topMargin = dp(6);
             addView(number, labelLp);
-            actions = new LinearLayout(context);
-            actions.setOrientation(LinearLayout.HORIZONTAL);
-            actions.setGravity(Gravity.CENTER_VERTICAL);
+
             linkButton = tinyButton(getString(R.string.link), 14);
             moveButton = tinyButton(getString(R.string.move), 14);
             // The hole the pen skips is this view. Keep it to the word plus a couple of pixels.
@@ -1963,32 +1962,44 @@ public final class CanvasActivity extends Activity {
             linkButton.setOnClickListener(v -> startLinking(this));
             moveButton.setOnClickListener(v -> showMoveMenu(this));
             moreButton.setOnClickListener(v -> showPageMenu(this));
-            actions.addView(linkButton, wrap());
-            LinearLayout.LayoutParams linkGap = wrap();
-            linkGap.leftMargin = dp(6);
-            actions.addView(moveButton, linkGap);
-            LinearLayout.LayoutParams lp = wrap();
-            lp.leftMargin = dp(6);
-            actions.addView(moreButton, lp);
+
+            int mark = page.paper != null ? dp(2) : pageGap;
+            int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(10);
+
+            // Left: references stack up above Link, same bottom inset as Move.
+            LinearLayout left = new LinearLayout(context);
+            left.setOrientation(LinearLayout.VERTICAL);
+            left.setGravity(Gravity.START);
+            LinearLayout lines = new LinearLayout(context);
+            lines.setOrientation(LinearLayout.VERTICAL);
+            fillLinkLines(lines);
+            left.addView(lines, wrap());
+            left.addView(linkButton, wrap());
+            FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT);
+            leftLp.gravity = Gravity.BOTTOM | Gravity.START;
+            leftLp.leftMargin = dp(10);
+            leftLp.bottomMargin = chromeBottom;
+            addView(left, leftLp);
+
+            // Right: Move and ⋮, bottoms aligned so Move matches Link's inset.
+            actions = new LinearLayout(context);
+            actions.setOrientation(LinearLayout.HORIZONTAL);
+            actions.setGravity(Gravity.BOTTOM);
+            // Default baseline alignment lifts Move relative to the taller ⋮.
+            actions.setBaselineAligned(false);
+            actions.addView(moveButton, wrap());
+            LinearLayout.LayoutParams moreLp = wrap();
+            moreLp.leftMargin = dp(6);
+            actions.addView(moreButton, moreLp);
             FrameLayout.LayoutParams actionsLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
             actionsLp.gravity = Gravity.BOTTOM | Gravity.END;
             actionsLp.rightMargin = dp(10);
-            int mark = page.paper != null ? dp(2) : pageGap;
-            actionsLp.bottomMargin = (page.paper != null ? 0 : pageGap) + dp(10);
+            actionsLp.bottomMargin = chromeBottom;
             addView(actions, actionsLp);
-
-            LinearLayout lines = new LinearLayout(context);
-            lines.setOrientation(LinearLayout.VERTICAL);
-            fillLinkLines(lines);
-            FrameLayout.LayoutParams linesLp = new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT);
-            linesLp.gravity = Gravity.BOTTOM | Gravity.START;
-            linesLp.leftMargin = dp(10);
-            linesLp.bottomMargin = (page.paper != null ? 0 : pageGap) + dp(10);
-            addView(lines, linesLp);
 
             FrameLayout.LayoutParams dashLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.MATCH_PARENT, mark);

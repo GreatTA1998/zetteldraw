@@ -51,7 +51,7 @@ public class CanvasActivitySmokeTest {
         idle();
 
         assertNotNull("seed tabs share the top bar with Scratchpad", find(root, "comedy"));
-        assertTrue("no ⋯ in the top bar", tabMenus(root).isEmpty());
+        assertTrue("no options glyph in the top bar", tabMenus(root).isEmpty());
         assertNull("no separate Notebooks row", find(root, "Notebooks"));
         click(root, "comedy");
         View comedyTab = (View) find(root, "comedy").getParent();
@@ -60,7 +60,7 @@ public class CanvasActivitySmokeTest {
                 && !(comedyTab.getBackground() instanceof android.graphics.drawable.GradientDrawable));
         assertNull("other tabs have no background", ((View) find(root, "journal").getParent()).getBackground());
         assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
-        assertTrue("still no tab ⋯ once a notebook is open", tabMenus(root).isEmpty());
+        assertTrue("still no tab options glyph once a notebook is open", tabMenus(root).isEmpty());
         View plus = find(root, "+");
         assertSame("+ scrolls with the tabs", find(root, "comedy").getParent().getParent(), plus.getParent());
         ViewGroup strip = (ViewGroup) plus.getParent();
@@ -148,7 +148,7 @@ public class CanvasActivitySmokeTest {
         View root = controller.get().getWindow().getDecorView();
         idle();
         List<View> menus = byDescription(root, "Page options");
-        assertEquals("every page but the trailing blank has a ⋯", 2, menus.size());
+        assertEquals("every page but the trailing blank has a ⋮", 2, menus.size());
         assertEquals(java.util.Arrays.asList("1/3", "2/3", "3/3"), pageLabels(root));
         assertNull("Wipe lives in the menu now", find(root, "Wipe"));
 
@@ -197,7 +197,7 @@ public class CanvasActivitySmokeTest {
         idle();
 
         click(root, "comedy");
-        assertTrue("an empty notebook's one blank page has no ⋯", byDescription(root, "Page options").isEmpty());
+        assertTrue("an empty notebook's one blank page has no ⋮", byDescription(root, "Page options").isEmpty());
         assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
         assertEquals(1, byDescription(root, "Page 1 of 1").size());
         assertNull("no empty-notebook hint any more", find(root, "No notebooks yet. Tap + to add one."));
@@ -481,10 +481,15 @@ public class CanvasActivitySmokeTest {
         return null;
     }
 
-    /** Every ⋯ that is not a page's own menu button. */
+    /** Every options glyph in the tab bar (pages use content-description "Page options"). */
     private static List<View> tabMenus(View root) {
         List<View> out = new ArrayList<>();
         for (TextView view : collectAll(root, "⋯")) {
+            if (!"Page options".contentEquals(String.valueOf(view.getContentDescription()))) {
+                out.add(view);
+            }
+        }
+        for (TextView view : collectAll(root, "⋮")) {
             if (!"Page options".contentEquals(String.valueOf(view.getContentDescription()))) {
                 out.add(view);
             }
