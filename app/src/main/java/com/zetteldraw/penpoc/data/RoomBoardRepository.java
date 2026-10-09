@@ -1940,8 +1940,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private List<Board> projectLocked(String notebookId, NotebookPaper paper) {
         String sheetId = NotebookPaper.sheetId(notebookId);
         ArrayList<Board> pages = new ArrayList<>();
+        HashSet<String> sliceIds = new HashSet<>();
         for (int i = 0; i < paper.sliceCount(); i++) {
             String id = paper.sliceId(i);
+            sliceIds.add(id);
             Board board = cache.get(id);
             if (board == null) {
                 BoardEntity row = dao.board(id);
@@ -1960,9 +1962,16 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         String key = listKey(notebookId);
         if (needBlank) {
             Board blank = trailingBlanks.get(key);
+            // First ink adopts the trailing blank's id as a real slice. That
+            // board stays as the slice; mint a fresh blank for the new tail.
+            if (blank != null && sliceIds.contains(blank.id)) {
+                trailingBlanks.remove(key);
+                blank = null;
+            }
             if (blank == null) {
                 blank = Board.blank();
                 trailingBlanks.put(key, blank);
+                cache.put(blank.id, blank);
             }
             blank.paper = paper;
             blank.sheetId = sheetId;

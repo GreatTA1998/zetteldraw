@@ -93,6 +93,27 @@ public class RoomBoardRepositoryTest {
     }
 
     @Test
+    public void sheetFirstStrokeAdoptsBlankIdAndMintsAFreshTrailingBlank() {
+        repo.ensureSheet(null, 800, 800, 0L);
+        Board blank = repo.scratchpadPages().get(0);
+        assertTrue(blank.isBlank());
+        assertNotNull(blank.paper);
+        String adopted = blank.id;
+        blank.paper.appendStroke(TestInk.stroke(10f, 20f, 8), adopted);
+        repo.saveInk(blank);
+
+        List<Board> pages = repo.scratchpadPages();
+        assertEquals(2, pages.size());
+        assertEquals(adopted, pages.get(0).id);
+        assertSame("the adopted blank stays as slice 0", blank, pages.get(0));
+        assertFalse(pages.get(0).isBlank());
+        assertTrue(pages.get(1).isBlank());
+        assertFalse("a new blank id follows; the adopted one must not appear twice",
+                adopted.equals(pages.get(1).id));
+        assertSame(pages.get(1), repo.scratchpadPages().get(1));
+    }
+
+    @Test
     public void saveWithoutChangesDoesNotRequeue() {
         Board page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 10f);

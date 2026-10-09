@@ -50,7 +50,12 @@ public class InkViewportTest {
     @Test
     public void appendingAPageKeepsEveryStrokeMapping() {
         InkViewport before = new InkViewport(layout(a, b), 300);
-        assertTrue(before.mapsLike(new InkViewport(layout(a, b, c), before.scrollY)));
+        InkViewport longer = new InkViewport(layout(a, b, c), before.scrollY);
+        assertTrue(before.mapsLike(longer));
+        // The longer list is not a subset of the shorter one — callers that ask
+        // whether geometry remapped must use shown.mapsLike(next), not the reverse.
+        assertFalse("next.mapsLike(shown) is the wrong direction for an append",
+                longer.mapsLike(before));
         assertTrue(before.mapsLike(before.withScroll(300)));
         assertFalse("scrolling remaps", before.mapsLike(before.withScroll(301)));
         assertFalse("another list remaps", before.mapsLike(new InkViewport(layout(c), before.scrollY)));

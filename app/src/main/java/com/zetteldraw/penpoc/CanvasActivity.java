@@ -940,8 +940,12 @@ public final class CanvasActivity extends Activity {
     }
 
     private void reloadPages(int targetScrollY) {
+        List<Board> pages = pagesIn(collectionId);
+        if (tryAppendTrailingBlank(pages, targetScrollY)) {
+            return;
+        }
         ++loadGeneration;
-        showPages(pagesIn(collectionId), targetScrollY);
+        showPages(pages, targetScrollY);
     }
 
     private void showPages(List<Board> pages, int targetScrollY) {
@@ -949,6 +953,70 @@ public final class CanvasActivity extends Activity {
         awaitingLayout = null;
         inkView.release(PageInkView.Hold.LOADING);
         layoutPages(pages, targetScrollY);
+    }
+
+    /**
+     * First ink on the trailing blank grows the list by exactly one new blank
+     * under an unchanged stack. Append that slot and extend the ink viewport
+     * instead of tearing every page down (which flashes and holds the pen off).
+     */
+    private boolean tryAppendTrailingBlank(List<Board> pages, int targetScrollY) {
+        if (loading() || currentPages == null || slots.isEmpty() || pageHeight <= 0) {
+            return false;
+        }
+        if (pages.size() != currentPages.size() + 1 || pages.size() != slots.size() + 1) {
+            return false;
+        }
+        if (targetScrollY != scroller.getScrollY()) {
+            return false;
+        }
+        int gap = layoutGap(pages);
+        if (gap != layoutGap(currentPages)) {
+            return false;
+        }
+        for (int i = 0; i < currentPages.size(); i++) {
+            Board was = currentPages.get(i);
+            Board now = pages.get(i);
+            if (!was.id.equals(now.id) || heightOf(was) != heightOf(now) || slots.get(i).page != now) {
+                return false;
+            }
+        }
+        Board blank = pages.get(pages.size() - 1);
+        if (!blank.isBlank()) {
+            return false;
+        }
+        currentPages = pages;
+        int height = heightOf(blank);
+        int span = height + gap;
+        int top = slotTops[slots.size()];
+        int[] nextTops = new int[slotTops.length + 1];
+        System.arraycopy(slotTops, 0, nextTops, 0, slotTops.length);
+        nextTops[nextTops.length - 1] = top + span;
+        slotTops = nextTops;
+        if (slotStride > 0 && span != slotStride) {
+            slotStride = 0;
+        }
+        int total = pages.size();
+        for (int i = 0; i < slots.size(); i++) {
+            slots.get(i).setIndex(i + 1, total);
+        }
+        PageSlot slot = new PageSlot(this, blank, total, total);
+        slots.add(slot);
+        pageColumn.addView(slot, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, span));
+        // After the new blank is in slots so isTrailingBlank sees it as the tail.
+        for (PageSlot each : slots) {
+            each.syncEnabled();
+        }
+        int[] heights = new int[pages.size()];
+        for (int i = 0; i < pages.size(); i++) {
+            heights[i] = heightOf(pages.get(i));
+        }
+        inkView.extendPages(pages, heights, gap);
+        pageColumn.requestLayout();
+        refreshLinkingBar();
+        updateExcludeRects();
+        return true;
     }
 
     /** Builds the page slots and ink layout for {@code pages}; needs a page height. */
@@ -1868,11 +1936,10 @@ public final class CanvasActivity extends Activity {
             super(context);
             this.page = page;
             number = new TextView(context);
-            number.setText(index + "/" + total);
             // One step up from 11sp, and gray rather than ink-black, so it reads on e-ink.
             number.setTextColor(Color.rgb(0x55, 0x55, 0x55));
             number.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-            number.setContentDescription(getString(R.string.page_number, index, total));
+            setIndex(index, total);
             FrameLayout.LayoutParams labelLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
@@ -1928,6 +1995,11 @@ public final class CanvasActivity extends Activity {
             dashLp.gravity = Gravity.BOTTOM;
             addView(new DashedRule(context), dashLp);
             syncEnabled();
+        }
+
+        void setIndex(int index, int total) {
+            number.setText(index + "/" + total);
+            number.setContentDescription(getString(R.string.page_number, index, total));
         }
 
         void syncEnabled() {
