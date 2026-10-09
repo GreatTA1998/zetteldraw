@@ -22,7 +22,7 @@
             android:name=".CanvasActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true"
-            android:screenOrientation="portrait"
+            android:screenOrientation="sensorPortrait"
             android:windowSoftInputMode="adjustPan"
             android:theme="@style/Theme.PenPoc">
             <intent-filter>
