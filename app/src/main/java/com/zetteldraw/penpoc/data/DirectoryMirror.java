@@ -37,6 +37,17 @@ public final class DirectoryMirror implements InkMirror {
         write(new File(root, "index.json"), json.getBytes(StandardCharsets.UTF_8));
     }
 
+    @Override
+    public void writeLog(String sheetId, byte[] bytes) {
+        write(new File(inkDir, sheetId + ".zdl"), bytes);
+    }
+
+    @Override
+    public void deleteLog(String sheetId) {
+        //noinspection ResultOfMethodCallIgnored
+        new File(inkDir, sheetId + ".zdl").delete();
+    }
+
     private static void write(File file, byte[] bytes) {
         File parent = file.getParentFile();
         if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {

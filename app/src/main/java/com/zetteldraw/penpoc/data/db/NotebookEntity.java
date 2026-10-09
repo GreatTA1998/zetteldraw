@@ -15,6 +15,9 @@ public class NotebookEntity {
     public String title = "";
     @NonNull
     public String position = "";
+    /** Null when this notebook is top-level. Metadata only: not an ink merge. */
+    @ColumnInfo(name = "parent_id")
+    public String parentId;
     @ColumnInfo(name = "created_at")
     public long createdAt;
     @ColumnInfo(name = "updated_at")
@@ -29,6 +32,7 @@ public class NotebookEntity {
         c.id = id;
         c.title = title;
         c.position = position;
+        c.parentId = parentId;
         c.createdAt = createdAt;
         c.updatedAt = updatedAt;
         c.rev = rev;

@@ -38,6 +38,10 @@ final class PageScroller extends ScrollView {
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (stylusTarget instanceof PageInkView && ((PageInkView) stylusTarget).capturesTouches()) {
+            forwardingStylus = false;
+            return stylusTarget.dispatchTouchEvent(ev);
+        }
         if (stylusTarget != null && PageInkView.isStylus(ev)) {
             if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 forwardingStylus = !hitsClickable(this, ev.getRawX(), ev.getRawY());

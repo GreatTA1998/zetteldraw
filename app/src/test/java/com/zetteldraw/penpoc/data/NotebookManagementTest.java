@@ -1,6 +1,8 @@
 package com.zetteldraw.penpoc.data;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -112,7 +114,7 @@ public class NotebookManagementTest {
         Board a = inked(10f);
         BoardRepository.NotebookInfo fresh = repo.createNotebook("fresh");
         repo.movePageToNotebook(a.id, fresh.id);
-        assertEquals(RoomBoardRepositoryTest.ids(a), RoomBoardRepositoryTest.ids(repo.notebookPages(fresh.id)));
+        assertEquals(RoomBoardRepositoryTest.ids(a), RoomBoardRepositoryTest.ids(RoomBoardRepositoryTest.stored(repo.notebookPages(fresh.id))));
 
         repo.deleteNotebook(fresh.id);
         Board b = inked(20f);
@@ -153,13 +155,93 @@ public class NotebookManagementTest {
         assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, a.id));
     }
 
+    @Test
+    public void parentPagesExcludeTheChildsInk() {
+        BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        assertEquals(shelf.id, chapter.parentId);
+        repo.ensureSheet(shelf.id, 800, 800, 0L);
+        repo.ensureSheet(chapter.id, 800, 800, 0L);
+        Board parentPage = repo.pages(shelf.id).get(0);
+        Board childPage = repo.pages(chapter.id).get(0);
+        assertNotEquals(parentPage.sheetId, childPage.sheetId);
+        parentPage.paper.appendStroke(TestInk.stroke(11f, 20f, 4));
+        childPage.paper.appendStroke(TestInk.stroke(99f, 20f, 4));
+        repo.saveInk(parentPage);
+        repo.saveInk(childPage);
+
+        for (Board page : repo.pages(shelf.id)) {
+            if (page.paper == null) {
+                continue;
+            }
+            for (com.zetteldraw.penpoc.InkRenderer.InkStroke stroke : page.paper.strokes()) {
+                assertTrue(stroke.points.get(0).x < 50f);
+            }
+        }
+        assertEquals(99f, repo.pages(chapter.id).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
+        assertEquals(2, repo.pages(shelf.id).size());
+    }
+
+    @Test
+    public void placeRejectsSelfParentAndDescendants() {
+        BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        BoardRepository.NotebookInfo scene = repo.createNotebook("scene", chapter.id);
+        assertFalse(repo.placeNotebook(shelf.id, shelf.id));
+        assertFalse(repo.placeNotebook(shelf.id, chapter.id));
+        assertFalse(repo.placeNotebook(shelf.id, scene.id));
+        assertFalse(repo.placeNotebook(chapter.id, "not-a-notebook"));
+        assertEquals(shelf.id, device.db.dao().notebook(chapter.id).parentId);
+        assertTrue(repo.placeNotebook(chapter.id, null));
+        assertNull(device.db.dao().notebook(chapter.id).parentId);
+        assertEquals(chapter.id, device.db.dao().notebook(scene.id).parentId);
+        assertTrue("already top-level is a no-op", repo.placeNotebook(chapter.id, null));
+    }
+
+    @Test
+    public void deletePromotesChildrenAndKeepsTheirPages() {
+        BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        Board childPage = inked(30f);
+        repo.movePageToNotebook(childPage.id, chapter.id);
+        Board parentPage = inked(40f);
+        repo.movePageToNotebook(parentPage.id, shelf.id);
+        String childPos = device.db.dao().notebook(chapter.id).position;
+
+        repo.deleteNotebook(shelf.id);
+
+        NotebookEntity child = device.db.dao().notebook(chapter.id);
+        assertNull(child.deletedAt);
+        assertNull(child.parentId);
+        assertEquals(childPos, child.position);
+        assertTrue(RoomBoardRepositoryTest.ids(repo.notebookPages(chapter.id)).contains(childPage.id));
+        assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(parentPage.id));
+        assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id));
+    }
+
+    @Test
+    public void pulledTombstonePromotesLocalChildren() throws Exception {
+        BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        NotebookEntity remote = device.db.dao().notebook(shelf.id).copy();
+        remote.deletedAt = device.tick();
+        remote.updatedAt = remote.deletedAt;
+        remote.rev = 8;
+        SyncStore.PullPage page = new SyncStore.PullPage();
+        page.notebooks.add(remote);
+        page.cursor = 8;
+        repo.applyPull(page);
+        assertNull(device.db.dao().notebook(chapter.id).parentId);
+        assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id));
+        assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id).op);
+    }
+
     private Board inked(float x) {
         List<Board> pages = repo.scratchpadPages();
         Board page = pages.get(pages.size() - 1);
         TestInk.draw(page, x);
         device.tick();
         repo.saveInk(page);
-        repo.createScratchpadPage();
         return page;
     }
 }

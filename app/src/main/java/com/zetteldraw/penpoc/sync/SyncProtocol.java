@@ -3,6 +3,8 @@ package com.zetteldraw.penpoc.sync;
 import com.zetteldraw.penpoc.data.SyncStore;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
+import com.zetteldraw.penpoc.data.db.PageLinkEntity;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -31,6 +33,7 @@ final class SyncProtocol {
                     .put("id", n.id)
                     .put("title", n.title)
                     .put("position", n.position)
+                    .put("parent_id", orNull(n.parentId))
                     .put("created_at", n.createdAt)
                     .put("updated_at", n.updatedAt)
                     .put("deleted_at", orNull(n.deletedAt))
@@ -42,6 +45,16 @@ final class SyncProtocol {
             boards.put(boardJson(b).put("base_rev", b.rev));
         }
         body.put("boards", boards);
+        JSONArray logs = new JSONArray();
+        for (NotebookLogEntity log : batch.logs) {
+            logs.put(logJson(log).put("base_rev", log.rev));
+        }
+        body.put("logs", logs);
+        JSONArray links = new JSONArray();
+        for (PageLinkEntity link : batch.links) {
+            links.put(linkJson(link).put("base_rev", link.rev));
+        }
+        body.put("links", links);
         JSONObject blobs = new JSONObject();
         for (Map.Entry<String, byte[]> e : batch.blobs.entrySet()) {
             blobs.put(e.getKey(), Base64.getEncoder().encodeToString(e.getValue()));
@@ -72,6 +85,7 @@ final class SyncProtocol {
             n.id = j.getString("id");
             n.title = j.getString("title");
             n.position = j.getString("position");
+            n.parentId = optString(j, "parent_id");
             n.createdAt = j.getLong("created_at");
             n.updatedAt = j.getLong("updated_at");
             n.rev = j.getLong("rev");
@@ -95,6 +109,14 @@ final class SyncProtocol {
             b.deletedAt = optLong(j, "deleted_at");
             page.boards.add(b);
         }
+        JSONArray logs = response.optJSONArray("logs");
+        for (int i = 0; logs != null && i < logs.length(); i++) {
+            page.logs.add(logFrom(logs.getJSONObject(i)));
+        }
+        JSONArray links = response.optJSONArray("links");
+        for (int i = 0; links != null && i < links.length(); i++) {
+            page.links.add(linkFrom(links.getJSONObject(i)));
+        }
         JSONObject blobs = response.optJSONObject("blobs");
         if (blobs != null) {
             Iterator<String> keys = blobs.keys();
@@ -104,6 +126,56 @@ final class SyncProtocol {
             }
         }
         return page;
+    }
+
+    private static JSONObject linkJson(PageLinkEntity link) throws JSONException {
+        return new JSONObject()
+                .put("id", link.id)
+                .put("source_id", link.sourceId)
+                .put("target_id", link.targetId)
+                .put("created_at", link.createdAt)
+                .put("updated_at", link.updatedAt)
+                .put("deleted_at", orNull(link.deletedAt));
+    }
+
+    private static PageLinkEntity linkFrom(JSONObject j) throws JSONException {
+        PageLinkEntity link = new PageLinkEntity();
+        link.id = j.getString("id");
+        link.sourceId = j.getString("source_id");
+        link.targetId = j.getString("target_id");
+        link.createdAt = j.getLong("created_at");
+        link.updatedAt = j.getLong("updated_at");
+        link.rev = j.getLong("rev");
+        link.deletedAt = optLong(j, "deleted_at");
+        return link;
+    }
+
+    private static JSONObject logJson(NotebookLogEntity log) throws JSONException {
+        return new JSONObject()
+                .put("id", log.id)
+                .put("notebook_id", orNull(log.notebookId))
+                .put("ink_hash", orNull(log.inkHash))
+                .put("ink_bytes", log.inkBytes)
+                .put("slice_height", log.sliceHeight)
+                .put("conflict_of", orNull(log.conflictOf))
+                .put("created_at", log.createdAt)
+                .put("updated_at", log.updatedAt)
+                .put("deleted_at", orNull(log.deletedAt));
+    }
+
+    private static NotebookLogEntity logFrom(JSONObject j) throws JSONException {
+        NotebookLogEntity log = new NotebookLogEntity();
+        log.id = j.getString("id");
+        log.notebookId = optString(j, "notebook_id");
+        log.inkHash = optString(j, "ink_hash");
+        log.inkBytes = j.optLong("ink_bytes", 0L);
+        log.sliceHeight = j.getInt("slice_height");
+        log.conflictOf = optString(j, "conflict_of");
+        log.createdAt = j.getLong("created_at");
+        log.updatedAt = j.getLong("updated_at");
+        log.rev = j.getLong("rev");
+        log.deletedAt = optLong(j, "deleted_at");
+        return log;
     }
 
     private static JSONObject boardJson(BoardEntity b) throws JSONException {

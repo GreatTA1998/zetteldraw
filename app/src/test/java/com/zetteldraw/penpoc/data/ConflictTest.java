@@ -46,7 +46,6 @@ public class ConflictTest {
         page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 10f);
         repo.saveInk(page);
-        repo.createScratchpadPage();
     }
 
     @After

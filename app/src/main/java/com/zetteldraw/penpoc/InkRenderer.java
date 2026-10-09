@@ -10,7 +10,10 @@ import com.onyx.android.sdk.api.device.epd.EpdController;
 import com.onyx.android.sdk.data.note.TouchPoint;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Variable-width freeze renderer: pressure when it varies, Excalidraw-like
@@ -42,33 +45,89 @@ public final class InkRenderer {
     }
 
     public static InkStroke strokeFrom(List<TouchPoint> points) {
-        ArrayList<TouchPoint> copy = copyPoints(points);
-        float[] widths = widthsFor(copy);
-        return new InkStroke(copy, widths);
+        return strokeFrom(UUID.randomUUID().toString(), points);
+    }
+
+    public static InkStroke strokeFrom(String id, List<TouchPoint> points) {
+        return strokeOwning(id, copyPoints(points));
+    }
+
+    /** {@code points} become the stroke's own: no other code may hold or change them. */
+    public static InkStroke strokeOwning(String id, ArrayList<TouchPoint> points) {
+        return new InkStroke(id, points, widthsFor(points));
+    }
+
+    /**
+     * A piece of a stroke that was already measured. Widths are kept, not
+     * recomputed, so a cut does not grow a new taper tip.
+     */
+    public static InkStroke strokeWithWidths(String id, ArrayList<TouchPoint> points, float[] widths) {
+        if (widths == null || widths.length != points.size()) {
+            return strokeOwning(id, points);
+        }
+        return new InkStroke(id, points, Arrays.copyOf(widths, widths.length));
     }
 
     static void draw(Canvas canvas, Paint paint, InkStroke stroke) {
-        if (stroke == null || stroke.points.isEmpty()) {
-            return;
-        }
-        List<TouchPoint> points = stroke.points;
-        float[] widths = stroke.widths;
-        if (points.size() == 1) {
-            TouchPoint p = points.get(0);
-            paint.setStrokeWidth(widths[0]);
-            canvas.drawPoint(p.x, p.y, paint);
-            return;
-        }
-        TouchPoint previous = points.get(0);
-        float previousWidth = widths[0];
-        for (int i = 1; i < points.size(); i++) {
-            TouchPoint point = points.get(i);
-            paint.setStrokeWidth((previousWidth + widths[i]) * 0.5f);
-            canvas.drawLine(previous.x, previous.y, point.x, point.y, paint);
-            previous = point;
-            previousWidth = widths[i];
+        if (stroke != null) {
+            drawAll(canvas, paint, Collections.singletonList(stroke));
         }
     }
+
+    /** Segment widths are drawn in steps of 1/{@value #WIDTH_STEPS} px, far below what e-ink shows. */
+    private static final int WIDTH_STEPS = 4;
+
+    /**
+     * Each segment is a round-capped line of its own width, as before; segments
+     * of equal (stepped) width go out in one {@code drawLines} call instead of
+     * one native call per segment, which made a full page take ~0.5 s.
+     */
+    static void drawAll(Canvas canvas, Paint paint, List<InkStroke> strokes) {
+        float[][] lines = new float[MAX_WIDTH_STEP + 1][];
+        int[] counts = new int[MAX_WIDTH_STEP + 1];
+        for (InkStroke stroke : strokes) {
+            List<TouchPoint> points = stroke.points;
+            float[] widths = stroke.widths;
+            if (points.isEmpty()) {
+                continue;
+            }
+            if (points.size() == 1) {
+                TouchPoint p = points.get(0);
+                paint.setStrokeWidth(widths[0]);
+                canvas.drawPoint(p.x, p.y, paint);
+                continue;
+            }
+            TouchPoint previous = points.get(0);
+            float previousWidth = widths[0];
+            for (int i = 1; i < points.size(); i++) {
+                TouchPoint point = points.get(i);
+                int step = Math.min(MAX_WIDTH_STEP,
+                        Math.max(1, Math.round((previousWidth + widths[i]) * 0.5f * WIDTH_STEPS)));
+                float[] buf = lines[step];
+                if (buf == null) {
+                    buf = lines[step] = new float[256];
+                } else if (counts[step] + 4 > buf.length) {
+                    buf = lines[step] = Arrays.copyOf(buf, buf.length * 2);
+                }
+                int n = counts[step];
+                buf[n] = previous.x;
+                buf[n + 1] = previous.y;
+                buf[n + 2] = point.x;
+                buf[n + 3] = point.y;
+                counts[step] = n + 4;
+                previous = point;
+                previousWidth = widths[i];
+            }
+        }
+        for (int step = 1; step <= MAX_WIDTH_STEP; step++) {
+            if (counts[step] > 0) {
+                paint.setStrokeWidth(step / (float) WIDTH_STEPS);
+                canvas.drawLines(lines[step], 0, counts[step], paint);
+            }
+        }
+    }
+
+    private static final int MAX_WIDTH_STEP = 64 * WIDTH_STEPS;
 
     static boolean hits(InkStroke stroke, List<TouchPoint> eraserPath) {
         if (stroke == null || eraserPath == null || eraserPath.isEmpty()) {
@@ -95,12 +154,18 @@ public final class InkRenderer {
             return bounds;
         }
         TouchPoint first = points.get(0);
-        bounds.set(first.x, first.y, first.x, first.y);
+        float left = first.x;
+        float top = first.y;
+        float right = first.x;
+        float bottom = first.y;
         for (int i = 1; i < points.size(); i++) {
             TouchPoint p = points.get(i);
-            bounds.union(p.x, p.y);
+            left = Math.min(left, p.x);
+            top = Math.min(top, p.y);
+            right = Math.max(right, p.x);
+            bottom = Math.max(bottom, p.y);
         }
-        bounds.inset(-pad, -pad);
+        bounds.set(left - pad, top - pad, right + pad, bottom + pad);
         return bounds;
     }
 
@@ -124,16 +189,33 @@ public final class InkRenderer {
             return widths;
         }
         boolean usePressure = pressureVaries(points);
+        float cap = usePressure ? pressureCap(points) : 1f;
         float[] taper = taperEnvelope(points);
         for (int i = 0; i < n; i++) {
             float pressureScale = 1f;
             if (usePressure) {
-                float p01 = pressure01(points.get(i).pressure, points);
+                float p01 = pressure01(points.get(i).pressure, cap);
                 pressureScale = PRESSURE_MIN_SCALE + (PRESSURE_MAX_SCALE - PRESSURE_MIN_SCALE) * p01;
             }
             widths[i] = BASE_WIDTH_PX * pressureScale * taper[i];
         }
         return widths;
+    }
+
+    /** Device maximum, read once: it is a system call on the Boox, and widths are computed for every decoded point. */
+    private static volatile float deviceMaxPressure = Float.NaN;
+
+    private static float deviceMaxPressure() {
+        float max = deviceMaxPressure;
+        if (Float.isNaN(max)) {
+            try {
+                max = EpdController.getMaxTouchPressure();
+            } catch (RuntimeException | LinkageError e) {
+                max = 0f;
+            }
+            deviceMaxPressure = max;
+        }
+        return max;
     }
 
     private static boolean pressureVaries(List<TouchPoint> points) {
@@ -154,22 +236,21 @@ public final class InkRenderer {
         return (max - min) > Math.max(0.02f, max * PRESSURE_VARIATION_RATIO);
     }
 
-    private static float pressure01(float pressure, List<TouchPoint> points) {
+    private static float pressureCap(List<TouchPoint> points) {
         float observedMax = 0f;
         for (TouchPoint point : points) {
             if (point.pressure > observedMax) {
                 observedMax = point.pressure;
             }
         }
-        float cap;
         if (observedMax <= 1.05f) {
-            cap = 1f;
-        } else {
-            cap = EpdController.getMaxTouchPressure();
-            if (cap <= 1f) {
-                cap = Math.max(observedMax, 1f);
-            }
+            return 1f;
         }
+        float cap = deviceMaxPressure();
+        return cap <= 1f ? Math.max(observedMax, 1f) : cap;
+    }
+
+    private static float pressure01(float pressure, float cap) {
         float n = pressure / cap;
         if (n < 0f) {
             return 0f;
@@ -194,7 +275,7 @@ public final class InkRenderer {
             TouchPoint b = points.get(i);
             float dx = b.x - a.x;
             float dy = b.y - a.y;
-            dist[i] = dist[i - 1] + (float) Math.hypot(dx, dy);
+            dist[i] = dist[i - 1] + (float) Math.sqrt(dx * dx + dy * dy);
         }
         float length = dist[n - 1];
         if (length < 1f) {
@@ -264,12 +345,15 @@ public final class InkRenderer {
     }
 
     public static final class InkStroke {
+        /** Stable across moves and sync; only a duplicate gets a new one. */
+        public final String id;
         public final ArrayList<TouchPoint> points;
         final float[] widths;
-        final RectF bounds;
-        final float maxWidth;
+        public final RectF bounds;
+        public final float maxWidth;
 
-        InkStroke(ArrayList<TouchPoint> points, float[] widths) {
+        InkStroke(String id, ArrayList<TouchPoint> points, float[] widths) {
+            this.id = id;
             this.points = points;
             this.widths = widths;
             float max = InkRenderer.BASE_WIDTH_PX;
@@ -280,6 +364,20 @@ public final class InkRenderer {
             }
             this.maxWidth = max;
             this.bounds = boundsOf(points, max * 0.5f + 2f);
+        }
+
+        /** Same id and widths, every point shifted. */
+        public InkStroke translated(float dx, float dy) {
+            ArrayList<TouchPoint> moved = copyPoints(points);
+            for (TouchPoint point : moved) {
+                point.x += dx;
+                point.y += dy;
+            }
+            return new InkStroke(id, moved, widths);
+        }
+
+        public float[] widthCopy() {
+            return Arrays.copyOf(widths, widths.length);
         }
     }
 }

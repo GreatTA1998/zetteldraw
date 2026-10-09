@@ -12,6 +12,10 @@ import androidx.room.Entity;
 public class OutboxEntry {
     public static final String NOTEBOOK = "notebook";
     public static final String BOARD = "board";
+    /** The notebook's ink log. One row per notebook, not per page. */
+    public static final String LOG = "log";
+    /** A link between two pages. Metadata only: it copies no ink. */
+    public static final String LINK = "link";
     public static final String UPSERT = "upsert";
     public static final String DELETE = "delete";
 

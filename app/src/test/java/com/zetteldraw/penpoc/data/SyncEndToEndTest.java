@@ -69,7 +69,6 @@ public class SyncEndToEndTest {
         TestInk.draw(page, 42f);
         a.tick();
         a.repo.saveInk(page);
-        a.repo.createScratchpadPage();
         String title = "e2e " + UUID.randomUUID().toString().substring(0, 8);
         BoardRepository.NotebookInfo notebook = a.repo.createNotebook(title);
         a.tick();
@@ -81,7 +80,7 @@ public class SyncEndToEndTest {
         sync(b);
         assertEquals(title, titleOn(b, notebook.id));
         List<Board> onB = b.repo.notebookPages(notebook.id);
-        assertEquals(1, onB.size());
+        assertEquals("the page plus the notebook's trailing blank", 2, onB.size());
         assertEquals(page.id, onB.get(0).id);
         TestInk.assertSameInk(page.strokes, onB.get(0).strokes);
 
@@ -127,6 +126,16 @@ public class SyncEndToEndTest {
             assertTrue(d.name + " keeps A's losing ink as a conflict copy", kept);
             assertEquals(0, d.repo.outboxSize());
         }
+
+        // A deletes the page; B gets the tombstone and still ends its Scratchpad with a blank.
+        a.tick();
+        a.repo.deletePage(page.id);
+        sync(a);
+        sync(b);
+        assertNotNull(b.db.dao().board(page.id).deletedAt);
+        assertNull(find(b.repo.scratchpadPages(), page.id));
+        List<Board> left = b.repo.scratchpadPages();
+        assertTrue(left.get(left.size() - 1).isBlank());
     }
 
     private void sync(Device d) throws Exception {

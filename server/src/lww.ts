@@ -10,6 +10,8 @@ export interface NotebookRow {
   id: string;
   title: string;
   position: string;
+  /** Null is top-level. Absent on an incoming push means "leave the stored parent". */
+  parent_id: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -30,6 +32,29 @@ export interface BoardRow {
   rev: number;
 }
 
+export interface LogRow {
+  id: string;
+  notebook_id: string | null;
+  ink_hash: string | null;
+  ink_bytes: number;
+  slice_height: number;
+  conflict_of: string | null;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+  rev: number;
+}
+
+export interface LinkRow {
+  id: string;
+  source_id: string;
+  target_id: string;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+  rev: number;
+}
+
 export type Incoming<T> = Omit<T, "rev"> & { base_rev: number };
 
 export type Status = "applied" | "conflict_won" | "conflict_lost";
@@ -40,8 +65,8 @@ export interface Decision<T> {
   write: Omit<T, "rev"> | null;
   /** Keep the stored row but give it a fresh rev so every device pulls it again. */
   restamp: boolean;
-  /** Conflict copy to insert with a fresh rev. */
-  copy: Omit<BoardRow, "rev"> | null;
+  /** Conflict copy to insert with a fresh rev. A log copy is the other log, whole. */
+  copy: Omit<T, "rev"> | null;
 }
 
 function stripBase<T>(incoming: Incoming<T>): Omit<T, "rev"> {
@@ -69,6 +94,7 @@ function sameNotebook(a: Omit<NotebookRow, "rev">, b: Omit<NotebookRow, "rev">):
   return (
     a.title === b.title &&
     a.position === b.position &&
+    a.parent_id === b.parent_id &&
     a.deleted_at === b.deleted_at &&
     a.updated_at === b.updated_at
   );
@@ -108,11 +134,91 @@ export function resolveBoard(
     : { status: "conflict_lost", write: null, restamp: true, copy };
 }
 
+function sameLog(a: Omit<LogRow, "rev">, b: Omit<LogRow, "rev">): boolean {
+  return (
+    a.notebook_id === b.notebook_id &&
+    a.ink_hash === b.ink_hash &&
+    a.ink_bytes === b.ink_bytes &&
+    a.slice_height === b.slice_height &&
+    a.conflict_of === b.conflict_of &&
+    a.deleted_at === b.deleted_at &&
+    a.updated_at === b.updated_at
+  );
+}
+
+function needsLogCopy(loser: Omit<LogRow, "rev">, winner: Omit<LogRow, "rev">): boolean {
+  if (loser.ink_hash === null || loser.deleted_at !== null) {
+    return false;
+  }
+  return winner.deleted_at !== null || loser.ink_hash !== winner.ink_hash;
+}
+
+/**
+ * Last-write-wins for a whole notebook log. The loser is shelved entire.
+ * Nothing here splits a stroke.
+ */
+export function resolveLog(
+  existing: LogRow | null,
+  incoming: Incoming<LogRow>,
+  newId: () => string,
+): Decision<LogRow> {
+  const row = stripBase(incoming);
+  if (existing === null || incoming.base_rev === existing.rev) {
+    return { status: "applied", write: row, restamp: false, copy: null };
+  }
+  if (sameLog(existing, row)) {
+    return { status: "applied", write: null, restamp: false, copy: null };
+  }
+  const incomingWins = row.updated_at > existing.updated_at;
+  const winner = incomingWins ? row : existing;
+  const loser = incomingWins ? existing : row;
+  const copy = needsLogCopy(loser, winner)
+    ? { ...withoutLogRev(loser), id: newId(), conflict_of: existing.id, deleted_at: null }
+    : null;
+  return incomingWins
+    ? { status: "conflict_won", write: row, restamp: false, copy }
+    : { status: "conflict_lost", write: null, restamp: true, copy };
+}
+
+function withoutLogRev(row: Omit<LogRow, "rev">): Omit<LogRow, "rev"> {
+  const { rev: _rev, ...rest } = row as LogRow;
+  return rest;
+}
+
+function sameLink(a: Omit<LinkRow, "rev">, b: Omit<LinkRow, "rev">): boolean {
+  return (
+    a.source_id === b.source_id &&
+    a.target_id === b.target_id &&
+    a.deleted_at === b.deleted_at &&
+    a.updated_at === b.updated_at
+  );
+}
+
+/** Last-write-wins for a page link. A link copies no ink, so there is no conflict copy. */
+export function resolveLink(existing: LinkRow | null, incoming: Incoming<LinkRow>): Decision<LinkRow> {
+  const row = stripBase(incoming);
+  if (existing === null || incoming.base_rev === existing.rev) {
+    return { status: "applied", write: row, restamp: false, copy: null };
+  }
+  if (sameLink(existing, row)) {
+    return { status: "applied", write: null, restamp: false, copy: null };
+  }
+  return row.updated_at > existing.updated_at
+    ? { status: "conflict_won", write: row, restamp: false, copy: null }
+    : { status: "conflict_lost", write: null, restamp: true, copy: null };
+}
+
+export type NotebookPush = Omit<Incoming<NotebookRow>, "parent_id"> & { parent_id?: string | null };
+
 export function resolveNotebook(
   existing: NotebookRow | null,
-  incoming: Incoming<NotebookRow>,
+  incoming: NotebookPush,
 ): Decision<NotebookRow> {
-  const row = stripBase(incoming);
+  const row = stripBase(incoming) as Omit<NotebookRow, "rev"> & { parent_id?: string | null };
+  // A flat client that does not send parent_id must not clear the tree.
+  if (row.parent_id === undefined) {
+    row.parent_id = existing?.parent_id ?? null;
+  }
   if (existing === null || incoming.base_rev === existing.rev) {
     return { status: "applied", write: row, restamp: false, copy: null };
   }
