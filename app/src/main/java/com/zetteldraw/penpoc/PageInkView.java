@@ -190,6 +190,20 @@ final class PageInkView extends FrameLayout {
         requestViewport(new InkViewport(new InkViewport.Layout(next, pageHeights, gap), scrollY));
     }
 
+    /**
+     * A longer page list that does not move any page already shown (a trailing
+     * blank was appended). Keeps the pen live and skips the full-frame flash
+     * that {@link #setPages} uses when geometry remaps.
+     */
+    void extendPages(List<Board> next, int[] pageHeights, int gap) {
+        InkViewport view = new InkViewport(new InkViewport.Layout(next, pageHeights, gap), target().scrollY);
+        if (shown.isEmpty() || !shown.mapsLike(view)) {
+            setPages(next, pageHeights, gap, view.scrollY);
+            return;
+        }
+        requestViewport(view);
+    }
+
     /** Page ids rendered into bitmaps since the last {@link #setPages}. */
     List<String> paintedPageIds() {
         return new ArrayList<>(paintedPageIds);
@@ -222,7 +236,11 @@ final class PageInkView extends FrameLayout {
             applyPosted = true;
             return;
         }
-        if (!next.mapsLike(shown)) {
+        // mapsLike asks whether every page in the receiver still converts the
+        // same way in the argument. An appended blank makes next longer, so
+        // next.mapsLike(shown) is false even though shown.mapsLike(next) is
+        // true — that must not take the pen down.
+        if (!shown.isEmpty() && !shown.mapsLike(next)) {
             syncRaw();
             if (!applyPosted) {
                 // Applied once the worker has really switched the pen off, so it lands behind every
@@ -264,7 +282,7 @@ final class PageInkView extends FrameLayout {
         if (renderToken != null && renderingLayout == next.layout) {
             return;
         }
-        if (next.layout != shown.layout && !next.mapsLike(shown)) {
+        if (next.layout != shown.layout && !shown.isEmpty() && !shown.mapsLike(next)) {
             List<RenderJob> jobs = missingBitmaps(next);
             if (!jobs.isEmpty()) {
                 Object token = new Object();
@@ -365,6 +383,9 @@ final class PageInkView extends FrameLayout {
 
     private void install(InkViewport next) {
         boolean newLayout = next.layout != shown.layout;
+        // Existing pages still sit where they did (e.g. a trailing blank was
+        // appended). Keep the picture and the pen; a full frame would flash.
+        boolean keepPicture = !shown.isEmpty() && shown.mapsLike(next);
         shown = next;
         if (newLayout) {
             Iterator<Map.Entry<String, Bitmap>> it = bitmaps.entrySet().iterator();
@@ -383,12 +404,16 @@ final class PageInkView extends FrameLayout {
             history.retainPages(ids);
             historyChanged();
         }
+        if (keepPicture) {
+            syncRaw();
+            return;
+        }
         redrawAll();
     }
 
     /** True while a requested viewport would convert pen points differently from the shown one. */
     private boolean geometryPending() {
-        return requested != null && !requested.mapsLike(shown);
+        return requested != null && !shown.isEmpty() && !shown.mapsLike(requested);
     }
 
     void invalidatePage(String pageId) {
