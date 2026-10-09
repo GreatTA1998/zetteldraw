@@ -93,7 +93,6 @@ dependencies {
     implementation("com.onyx.android.sdk:onyxsdk-pen:1.5.5")
     implementation("com.onyx.android.sdk:onyxsdk-device:1.3.6")
     implementation("org.lsposed.hiddenapibypass:hiddenapibypass:6.1")
-    implementation("androidx.viewpager2:viewpager2:1.1.0")
     implementation("androidx.room:room-runtime:2.6.1")
     annotationProcessor("androidx.room:room-compiler:2.6.1")
     implementation("androidx.work:work-runtime:2.9.1")

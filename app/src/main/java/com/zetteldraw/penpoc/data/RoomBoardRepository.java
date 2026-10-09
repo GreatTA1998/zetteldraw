@@ -699,14 +699,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    @Override
-    public void setRemoteChangeListener(Runnable listener) {
-        remoteListeners.clear();
-        if (listener != null) {
-            remoteListeners.add(listener);
-        }
-    }
-
     // endregion
 
     // region SyncStore

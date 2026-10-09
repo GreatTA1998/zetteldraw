@@ -50,14 +50,15 @@ public class InkViewportTest {
     @Test
     public void appendingAPageKeepsEveryStrokeMapping() {
         InkViewport before = new InkViewport(layout(a, b), 300);
-        assertTrue(before.mapsLike(before.withLayout(layout(a, b, c))));
+        assertTrue(before.mapsLike(new InkViewport(layout(a, b, c), before.scrollY)));
         assertTrue(before.mapsLike(before.withScroll(300)));
         assertFalse("scrolling remaps", before.mapsLike(before.withScroll(301)));
-        assertFalse("another list remaps", before.mapsLike(before.withLayout(layout(c))));
-        assertFalse("a page moved remaps", before.mapsLike(before.withLayout(layout(b, a))));
+        assertFalse("another list remaps", before.mapsLike(new InkViewport(layout(c), before.scrollY)));
+        assertFalse("a page moved remaps", before.mapsLike(new InkViewport(layout(b, a), before.scrollY)));
         int[] taller = {1000, 1400};
         assertFalse("a page resized remaps",
-                before.mapsLike(before.withLayout(new InkViewport.Layout(Arrays.asList(a, b), taller, 24))));
+                before.mapsLike(new InkViewport(new InkViewport.Layout(Arrays.asList(a, b), taller, 24),
+                        before.scrollY)));
     }
 
     @Test

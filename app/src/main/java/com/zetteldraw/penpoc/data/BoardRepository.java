@@ -100,9 +100,6 @@ public interface BoardRepository {
      */
     boolean placeNotebook(String notebookId, String parentId);
 
-    /** Replaces every remote-change listener with this one (null clears them). Tests and single-screen tools. */
-    void setRemoteChangeListener(Runnable listener);
-
     /**
      * Runs on the UI thread after sync pulled changes in, once per sync pass.
      * Each screen adds its own and removes only its own, so one screen
