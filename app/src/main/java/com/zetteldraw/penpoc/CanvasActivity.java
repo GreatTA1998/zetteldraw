@@ -989,18 +989,31 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Scroll offset of the last slice that already has ink. Page height times
-     * that index: no walk of the pages, and no second read of the log.
+     * Scroll offset of the last slice that already has ink. Each slice keeps
+     * its own height, so a tall page from before v10 and a short page after it
+     * do not share one stride. An index past the last stored slice, or a blank
+     * the padded bottom once named, is not a page to land on.
      */
     private int lastInkOffset(List<Board> pages) {
         if (pages.isEmpty() || pages.get(0).paper == null) {
             return 0;
         }
         int index = pages.get(0).paper.lastInkedSlice();
-        if (index <= 0) {
+        if (index < 0) {
             return 0;
         }
-        return heightOf(pages.get(0)) * index;
+        if (index >= pages.size()) {
+            index = pages.size() - 1;
+        }
+        while (index > 0 && pages.get(index).isBlank()) {
+            index--;
+        }
+        int scroll = 0;
+        int gap = layoutGap(pages);
+        for (int i = 0; i < index; i++) {
+            scroll += heightOf(pages.get(i)) + gap;
+        }
+        return scroll;
     }
 
     /** One line under the notebook bars. Confirm is absent while the page in front is the source. */
@@ -1033,6 +1046,9 @@ public final class CanvasActivity extends Activity {
     }
 
     private void startLinking(PageSlot slot) {
+        if (unsavedBlank(slot.page)) {
+            return;
+        }
         linkSourceId = slot.page.id;
         linkSourceRef = refOnScreen(slot);
         linkingBar.setVisibility(View.VISIBLE);
@@ -1050,7 +1066,8 @@ public final class CanvasActivity extends Activity {
 
     private void confirmLinking() {
         PageSlot front = frontSlot();
-        if (linkSourceId == null || front == null || front.page.id.equals(linkSourceId)) {
+        if (linkSourceId == null || front == null || front.page.id.equals(linkSourceId)
+                || unsavedBlank(front.page)) {
             refreshLinkingBar();
             return;
         }
@@ -1105,7 +1122,7 @@ public final class CanvasActivity extends Activity {
             return;
         }
         PageSlot front = frontSlot();
-        if (front == null || front.page.id.equals(linkSourceId)) {
+        if (front == null || front.page.id.equals(linkSourceId) || unsavedBlank(front.page)) {
             linkingText.setText(getString(R.string.linking_from, linkSourceRef));
             linkConfirm.setVisibility(View.GONE);
         } else {
@@ -1151,23 +1168,44 @@ public final class CanvasActivity extends Activity {
         return name + " " + (place.index + 1) + "/" + place.count;
     }
 
-    /** Opens that page the way tapping its notebook and scrolling there would. */
+    /**
+     * Opens that page the way tapping its notebook and scrolling there would.
+     * The place and the height sum are read off the main thread: a notebook
+     * that is not already open replays its log, and the pen cannot wait.
+     */
     private void openLinkedPage(String pageId) {
-        BoardRepository.PagePlace place = repository.placeOf(pageId);
-        if (place == null) {
-            return;
-        }
-        List<Board> pages = repository.pages(place.notebookId);
-        int gap = layoutGap(pages);
-        int scroll = 0;
-        for (int i = 0; i < place.index && i < pages.size(); i++) {
-            scroll += heightOf(pages.get(i)) + gap;
-        }
-        if (place.notebookId == null) {
-            openScratchpad(scroll);
-        } else {
-            openNotebook(place.notebookId, scroll);
-        }
+        UiExecutors.loader.execute(() -> {
+            BoardRepository.PagePlace place;
+            int scroll;
+            try {
+                place = repository.placeOf(pageId);
+                if (place == null) {
+                    return;
+                }
+                scroll = 0;
+                if (place.index > 0) {
+                    List<Board> pages = repository.pages(place.notebookId);
+                    int gap = layoutGap(pages);
+                    for (int i = 0; i < place.index && i < pages.size(); i++) {
+                        scroll += heightOf(pages.get(i)) + gap;
+                    }
+                }
+            } catch (RuntimeException e) {
+                Log.e(TAG, "page link did not open", e);
+                return;
+            }
+            int target = scroll;
+            main.post(() -> {
+                if (isDestroyed()) {
+                    return;
+                }
+                if (place.notebookId == null) {
+                    openScratchpad(target);
+                } else {
+                    openNotebook(place.notebookId, target);
+                }
+            });
+        });
     }
 
     private List<Board> pagesIn(String id) {
@@ -1302,6 +1340,11 @@ public final class CanvasActivity extends Activity {
     /** The blank page that ends every list: it has nothing to wipe, move or delete. */
     private boolean isTrailingBlank(PageSlot slot) {
         return !slots.isEmpty() && slots.get(slots.size() - 1) == slot && slot.page.isBlank();
+    }
+
+    /** Its id is not a slice until the first stroke. A link would name a page that is not stored. */
+    private static boolean unsavedBlank(Board page) {
+        return page != null && page.paper != null && page.sliceIndex >= page.paper.sliceCount();
     }
 
     private void moveTo(PageSlot slot, String targetNotebookId) {
@@ -1476,12 +1519,26 @@ public final class CanvasActivity extends Activity {
     }
 
     private void confirmDelete(String id, View anchor) {
-        int pages = 0;
-        for (Board page : repository.pages(id)) {
-            if (!page.isBlank()) {
-                pages++;
+        // Counting ink replays a notebook that is not already open. Do that off
+        // the main thread, then ask on the thread that owns the window.
+        UiExecutors.loader.execute(() -> {
+            int pages;
+            try {
+                pages = inked(repository.pages(id));
+            } catch (RuntimeException e) {
+                Log.e(TAG, "notebook delete did not count pages", e);
+                return;
             }
-        }
+            main.post(() -> {
+                if (isDestroyed() || anchor.getWindowToken() == null) {
+                    return;
+                }
+                showDeleteConfirm(id, anchor, pages);
+            });
+        });
+    }
+
+    private void showDeleteConfirm(String id, View anchor, int pages) {
         LinearLayout box = panel();
         box.addView(panelText(getString(R.string.delete_notebook_title, titleOf(id)), 15));
         box.addView(panelText(pages == 0
@@ -1935,6 +1992,11 @@ public final class CanvasActivity extends Activity {
             if (moveButton.isEnabled() != enabled) {
                 moveButton.setEnabled(enabled);
                 moveButton.setAlpha(enabled ? 1f : 0.35f);
+            }
+            boolean link = !unsavedBlank(page);
+            if (linkButton.isEnabled() != link) {
+                linkButton.setEnabled(link);
+                linkButton.setAlpha(link ? 1f : 0.35f);
             }
             moreButton.setVisibility(isTrailingBlank(this) ? View.INVISIBLE : View.VISIBLE);
         }

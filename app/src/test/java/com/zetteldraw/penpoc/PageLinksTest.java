@@ -160,13 +160,14 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
-        repo.createNotebook("tobook");
+        BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "frombook");
         openNotebook(root, "tobook");
         ink(repo, from.id, 10f);
+        ink(repo, to.id, 10f);
         openNotebook(root, "frombook");
 
         clickOnPage(root, "1/2", "Link");

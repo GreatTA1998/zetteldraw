@@ -257,6 +257,29 @@ public final class NotebookPaper {
         return index < 0 ? null : strokes.get(index);
     }
 
+    /**
+     * True when a point of some stroke lies on this slice. The pad around a
+     * stroke's bounds is for drawing and hit-testing; it is not ink.
+     */
+    public boolean containsInk(int slice) {
+        if (slice < 0 || slice >= heights.size()) {
+            return false;
+        }
+        float top = origin(slice);
+        float bottom = top + heights.get(slice);
+        for (InkRenderer.InkStroke stroke : strokes) {
+            if (stroke.bounds == null || stroke.bounds.bottom < top || stroke.bounds.top >= bottom) {
+                continue;
+            }
+            for (TouchPoint point : stroke.points) {
+                if (point.y >= top && point.y < bottom) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** Strokes whose bounds meet this slice. The same object, not a copy. */
     public List<InkRenderer.InkStroke> touching(int slice) {
         ArrayList<InkRenderer.InkStroke> hit = new ArrayList<>();
@@ -273,12 +296,23 @@ public final class NotebookPaper {
         return hit;
     }
 
-    /** A stroke that ends on a slice boundary belongs to the slice above that line. */
+    /**
+     * The slice that holds the lowest point. A point on a mark belongs to the
+     * slice that starts there, the same rule as {@link #sliceIndexAt}. The pad
+     * around the bounds is not a point, so it does not mark the next slice.
+     */
     private void noteStroke(InkRenderer.InkStroke stroke) {
-        if (stroke == null || stroke.bounds == null) {
+        if (stroke == null || stroke.points == null || stroke.points.isEmpty() || heights.isEmpty()) {
             return;
         }
-        int index = sliceIndexAt(Math.max(0f, stroke.bounds.bottom - 0.001f));
+        float y = maxY(stroke);
+        if (y < 0f) {
+            return;
+        }
+        int index = sliceIndexAt(y);
+        if (index >= heights.size()) {
+            index = heights.size() - 1;
+        }
         if (index > lastInked) {
             lastInked = index;
         }

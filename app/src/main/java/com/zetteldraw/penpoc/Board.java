@@ -37,7 +37,7 @@ public final class Board {
             if (sliceIndex >= paper.sliceCount()) {
                 return true;
             }
-            return paper.touching(sliceIndex).isEmpty();
+            return !paper.containsInk(sliceIndex);
         }
         return strokes.isEmpty();
     }
