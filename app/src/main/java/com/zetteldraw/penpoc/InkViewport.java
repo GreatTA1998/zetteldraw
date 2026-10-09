@@ -63,10 +63,6 @@ final class InkViewport {
         return Math.max(0, y) == scrollY ? this : new InkViewport(layout, y);
     }
 
-    InkViewport withLayout(Layout next) {
-        return next == layout ? this : new InkViewport(next, scrollY);
-    }
-
     boolean isEmpty() {
         return layout.pages.isEmpty();
     }

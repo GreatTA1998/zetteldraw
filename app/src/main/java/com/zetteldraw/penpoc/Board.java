@@ -41,15 +41,4 @@ public final class Board {
         }
         return strokes.isEmpty();
     }
-
-    Board copy() {
-        Board copy = new Board(id, createdAt);
-        copy.strokes.addAll(strokes);
-        copy.paper = paper;
-        copy.sliceIndex = sliceIndex;
-        copy.paperOrigin = paperOrigin;
-        copy.slicePx = slicePx;
-        copy.sheetId = sheetId;
-        return copy;
-    }
 }

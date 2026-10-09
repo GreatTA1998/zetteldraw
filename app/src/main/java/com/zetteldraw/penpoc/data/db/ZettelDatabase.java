@@ -87,10 +87,4 @@ public abstract class ZettelDatabase extends RoomDatabase {
                 })
                 .build();
     }
-
-    public static ZettelDatabase inMemory(Context context) {
-        return Room.inMemoryDatabaseBuilder(context, ZettelDatabase.class)
-                .allowMainThreadQueries()
-                .build();
-    }
 }
