@@ -446,10 +446,12 @@ public class CanvasActivitySmokeTest {
         move.getPaint().getTextBounds(word, 0, word.length(), glyphs);
         int textWidth = Math.max(glyphs.width(), (int) Math.ceil(move.getPaint().measureText(word)));
         int textHeight = Math.max(glyphs.height(), move.getLineHeight());
-        assertTrue("Move hole is the word plus a few pixels, wide " + hole.width() + " vs text " + textWidth,
-                hole.width() <= textWidth + 8);
-        assertTrue("Move hole is the word plus a few pixels, tall " + hole.height() + " vs text " + textHeight,
-                hole.height() <= textHeight + 8);
+        assertTrue("Move hole hugs the word width " + hole.width() + " vs text " + textWidth,
+                hole.width() <= textWidth + 16);
+        // Same chrome-row height as ⋮ (48dp stylus target), not the glyph alone.
+        int row = (int) Math.ceil(48f * move.getResources().getDisplayMetrics().density) + 8;
+        assertTrue("Move hole matches the chrome row " + hole.height() + " vs " + row,
+                hole.height() <= row && hole.height() >= textHeight);
 
         TextView number = pageLabelViews(root).get(0);
         float sp = number.getTextSize() / number.getResources().getDisplayMetrics().scaledDensity;

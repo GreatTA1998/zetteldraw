@@ -155,8 +155,21 @@ public class PageLinksTest {
         assertTrue("⋮ is a menu, not an ellipsis", "⋮".contentEquals(more.getText()));
         assertEquals("Link and Move share the bottom inset",
                 linkLoc[1] + link.getHeight(), moveLoc[1] + move.getHeight());
+        int[] moreLoc = new int[2];
+        more.getLocationOnScreen(moreLoc);
+        assertEquals("Move and ⋮ share the chrome-row bottom",
+                moveLoc[1] + move.getHeight(), moreLoc[1] + more.getHeight());
+        assertEquals("Link, Move, and ⋮ share one row height", link.getHeight(), more.getHeight());
+        assertEquals("Link, Move, and ⋮ share one row height", move.getHeight(), more.getHeight());
         assertTrue("references stack above Link",
                 refLoc[1] + ref.getHeight() <= linkLoc[1] + 2);
+        // ← and → are the first glyph; both must match ⋮'s 18sp weight.
+        android.text.Spanned spanned = (android.text.Spanned) ref.getText();
+        android.text.style.AbsoluteSizeSpan[] sizes =
+                spanned.getSpans(0, 1, android.text.style.AbsoluteSizeSpan.class);
+        assertEquals(1, sizes.length);
+        assertEquals(18, sizes[0].getSize());
+        assertTrue(sizes[0].getDip());
 
         controller.pause().stop().destroy();
     }

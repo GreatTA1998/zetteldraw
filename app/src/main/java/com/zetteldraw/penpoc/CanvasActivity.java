@@ -20,7 +20,11 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.util.Log;
 import android.text.InputType;
+import android.text.SpannableString;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.style.AbsoluteSizeSpan;
+import android.text.style.StyleSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -1964,13 +1968,17 @@ public final class CanvasActivity extends Activity {
 
             linkButton = tinyButton(getString(R.string.link), 14);
             moveButton = tinyButton(getString(R.string.move), 14);
-            // The hole the pen skips is this view. Keep it to the word plus a couple of pixels.
-            tighten(linkButton);
-            tighten(moveButton);
+            // Word-wide, same row height and vertical center as ⋮ (stylus-sized).
+            chromeWord(linkButton);
+            chromeWord(moveButton);
             moreButton = tinyButton(getString(R.string.notebook_options), 18);
             moreButton.setMinimumHeight(dp(48));
             moreButton.setMinimumWidth(dp(48));
-            moreButton.setPadding(dp(10), 0, dp(10), dp(4));
+            moreButton.setMinHeight(dp(48));
+            moreButton.setMinWidth(dp(48));
+            moreButton.setPadding(dp(10), 0, dp(10), 0);
+            moreButton.setIncludeFontPadding(false);
+            moreButton.setGravity(Gravity.CENTER);
             moreButton.setContentDescription(getString(R.string.page_options));
             linkButton.setOnClickListener(v -> startLinking(this));
             moveButton.setOnClickListener(v -> showMoveMenu(this));
@@ -1979,7 +1987,7 @@ public final class CanvasActivity extends Activity {
             int mark = page.paper != null ? dp(2) : pageGap;
             int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(10);
 
-            // Left: references stack up above Link, same bottom inset as Move.
+            // Left: references stack up above Link; Link shares ⋮'s bottom inset.
             LinearLayout left = new LinearLayout(context);
             left.setOrientation(LinearLayout.VERTICAL);
             left.setGravity(Gravity.START);
@@ -1996,11 +2004,10 @@ public final class CanvasActivity extends Activity {
             leftLp.bottomMargin = chromeBottom;
             addView(left, leftLp);
 
-            // Right: Move and ⋮, bottoms aligned so Move matches Link's inset.
+            // Right: Move and ⋮ share one chrome row, centered on the same inset.
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
-            actions.setGravity(Gravity.BOTTOM);
-            // Default baseline alignment lifts Move relative to the taller ⋮.
+            actions.setGravity(Gravity.CENTER_VERTICAL);
             actions.setBaselineAligned(false);
             actions.addView(moveButton, wrap());
             LinearLayout.LayoutParams moreLp = wrap();
@@ -2060,25 +2067,36 @@ public final class CanvasActivity extends Activity {
                 return;
             }
             TextView line = new TextView(getContext());
-            line.setText(getString(outgoing ? R.string.link_outgoing : R.string.link_incoming, ref));
+            String label = getString(outgoing ? R.string.link_outgoing : R.string.link_incoming, ref);
+            // ← and → at ⋮'s size so both directions match its weight; the page name stays 14sp.
+            SpannableString text = new SpannableString(label);
+            text.setSpan(new AbsoluteSizeSpan(18, true), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            text.setSpan(new StyleSpan(Typeface.BOLD), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            line.setText(text);
             line.setTextColor(Color.BLACK);
             line.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-            line.setPadding(2, 2, 2, 2);
+            line.setPadding(dp(2), dp(4), dp(2), dp(4));
             line.setIncludeFontPadding(false);
+            line.setGravity(Gravity.CENTER_VERTICAL);
+            line.setMinHeight(dp(32));
             line.setOnClickListener(v -> openLinkedPage(otherId));
             lines.addView(line, wrap());
             linkLines.add(line);
         }
     }
 
-    /** Link and Move are only as big as the word. */
-    private static void tighten(Button button) {
+    /**
+     * Link and Move stay as wide as the word, but match the ⋮ row height so the
+     * three share one vertical center above the dashed edge.
+     */
+    private void chromeWord(Button button) {
         button.setMinimumWidth(0);
-        button.setMinimumHeight(0);
         button.setMinWidth(0);
-        button.setMinHeight(0);
-        button.setPadding(2, 2, 2, 2);
+        button.setMinimumHeight(dp(48));
+        button.setMinHeight(dp(48));
+        button.setPadding(dp(4), 0, dp(4), 0);
         button.setIncludeFontPadding(false);
+        button.setGravity(Gravity.CENTER);
     }
 
     private static final class DashedRule extends View {
