@@ -1,6 +1,7 @@
 package com.zetteldraw.penpoc;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
@@ -92,9 +93,16 @@ public class PageLinksTest {
             assertEquals("press " + press + " walked a notebook", reads, RoomBoardRepository.notebookReads.get());
             assertEquals("press " + press + " replayed an ink log", replays, RoomBoardRepository.logReplays.get());
             assertEquals("press " + press + " reflowed the notebook", reflows, CanvasActivity.pageReflows.get());
-            assertTrue("press " + press + " did not open the linking line", area.getHeight() < areaBefore);
+            // Bottom strip does not shrink the drawing area or reflow pages.
+            assertEquals("press " + press + " must not shrink the drawing area", areaBefore, area.getHeight());
             assertSame("press " + press + " rebuilt the page list", slot, control.getParent());
-            assertNotNull(find(root, "Linking from dense 40/41"));
+            TextView banner = find(root, "Linking from dense 40/41");
+            assertNotNull(banner);
+            View strip = (View) banner.getParent().getParent(); // row -> mode stack
+            assertFalse("snackbar must not sit under the notebook column",
+                    isDescendant(strip, (View) area.getParent()));
+            // Mode bar is a sibling of the main column on the content root.
+            assertSame(strip.getParent(), ((View) area.getParent()).getParent());
             assertNull(find(root, "Confirm"));
             click(root, "Cancel");
             idle();
@@ -102,7 +110,7 @@ public class PageLinksTest {
             assertEquals("cancel " + press + " walked a notebook", reads, RoomBoardRepository.notebookReads.get());
             assertEquals("cancel " + press + " replayed an ink log", replays, RoomBoardRepository.logReplays.get());
             assertEquals("cancel " + press + " reflowed the notebook", reflows, CanvasActivity.pageReflows.get());
-            assertEquals("cancel " + press + " left the linking line's space", areaBefore, area.getHeight());
+            assertEquals("cancel " + press + " left the drawing area", areaBefore, area.getHeight());
             assertSame("cancel " + press + " rebuilt the page list", slot, control.getParent());
         }
         assertTrue("the slowest Link press took " + worst + " ms", worst < 200);
@@ -134,32 +142,40 @@ public class PageLinksTest {
         assertNotNull(page);
         View slot = (View) page.getParent();
         TextView link = textIn(slot, "Link");
+        TextView reorder = textIn(slot, "Reorder");
         TextView move = textIn(slot, "Move");
         TextView more = textIn(slot, "⋮");
         TextView ref = find(root, "→ tobook 1/2");
         assertNotNull(link);
+        assertNotNull(reorder);
         assertNotNull(move);
         assertNotNull(more);
         assertNotNull(ref);
         int[] linkLoc = new int[2];
+        int[] reorderLoc = new int[2];
         int[] moveLoc = new int[2];
         int[] refLoc = new int[2];
         int[] slotLoc = new int[2];
         link.getLocationOnScreen(linkLoc);
+        reorder.getLocationOnScreen(reorderLoc);
         move.getLocationOnScreen(moveLoc);
         ref.getLocationOnScreen(refLoc);
         slot.getLocationOnScreen(slotLoc);
         int mid = slotLoc[0] + slot.getWidth() / 2;
         assertTrue("Link sits on the left", linkLoc[0] < mid);
+        assertTrue("Reorder sits on the right with Move", reorderLoc[0] > mid);
         assertTrue("Move sits on the right", moveLoc[0] > mid);
         assertTrue("⋮ is a menu, not an ellipsis", "⋮".contentEquals(more.getText()));
         assertEquals("Link and Move share the bottom inset",
                 linkLoc[1] + link.getHeight(), moveLoc[1] + move.getHeight());
+        assertEquals("Reorder and Move share the chrome-row bottom",
+                reorderLoc[1] + reorder.getHeight(), moveLoc[1] + move.getHeight());
         int[] moreLoc = new int[2];
         more.getLocationOnScreen(moreLoc);
         assertEquals("Move and ⋮ share the chrome-row bottom",
                 moveLoc[1] + move.getHeight(), moreLoc[1] + more.getHeight());
         assertEquals("Link, Move, and ⋮ share one row height", link.getHeight(), more.getHeight());
+        assertEquals("Reorder matches Move row height", reorder.getHeight(), move.getHeight());
         assertEquals("Link, Move, and ⋮ share one row height", move.getHeight(), more.getHeight());
         assertTrue("references stack above Link",
                 refLoc[1] + ref.getHeight() <= linkLoc[1] + 2);
@@ -520,5 +536,16 @@ public class PageLinksTest {
             current = current.getParent() instanceof View ? (View) current.getParent() : null;
         }
         return top;
+    }
+
+    private static boolean isDescendant(View child, View ancestor) {
+        View current = child;
+        while (current != null) {
+            if (current == ancestor) {
+                return true;
+            }
+            current = current.getParent() instanceof View ? (View) current.getParent() : null;
+        }
+        return false;
     }
 }

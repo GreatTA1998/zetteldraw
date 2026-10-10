@@ -47,6 +47,13 @@ public interface BoardRepository {
     /** Append the page as the newest page of the notebook. */
     void movePageToNotebook(String boardId, String notebookId);
 
+    /**
+     * Same-notebook only: place {@code boardId} immediately after
+     * {@code afterBoardId}. No-op when the pages are missing, blank, the same,
+     * or in different notebooks. Dense pages stay atomic (one log rewrite).
+     */
+    void reorderPageAfter(String boardId, String afterBoardId);
+
     /** Clear one page's ink. */
     void wipePage(String boardId);
 

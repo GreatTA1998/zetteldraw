@@ -453,6 +453,93 @@ public final class NotebookPaper {
     }
 
     /**
+     * Place {@code source} immediately after {@code after} on this paper.
+     * One log rewrite (header + current strokes); rolls the paper back if
+     * that rewrite throws. No-op when the indices are the same or out of
+     * range. Crossing strokes are torn the same way as Move.
+     *
+     * <p>v31 does not put this on the undo stack: the history model is
+     * stroke edits, not slice order.
+     */
+    public void reorderAfter(int source, int after) {
+        if (source < 0 || after < 0 || source >= heights.size() || after >= heights.size()
+                || source == after) {
+            return;
+        }
+        byte[] logBefore = Arrays.copyOf(log, log.length);
+        ArrayList<Integer> heightsBefore = new ArrayList<>(heights);
+        ArrayList<String> idsBefore = new ArrayList<>(sliceIds);
+        ArrayList<InkRenderer.InkStroke> strokesBefore = new ArrayList<>(strokes);
+        int lastInkedBefore = lastInked;
+        try {
+            float oldOrigin = origin(source);
+            int height = heights.get(source);
+            String id = sliceIds.get(source);
+            Tear cut = cut(source, false);
+            closeGap(source);
+            int afterAdj = source < after ? after - 1 : after;
+            int insertAt = afterAdj + 1;
+            openGap(insertAt, height, id);
+            float shift = origin(insertAt) - oldOrigin;
+            for (InkRenderer.InkStroke piece : cut.taken) {
+                InkRenderer.InkStroke moved = shiftY(piece, shift);
+                strokes.add(moved);
+                noteStroke(moved);
+            }
+            rewriteLogFromStrokes();
+            trimTail();
+            refreshLastInked();
+        } catch (Throwable failed) {
+            log = logBefore;
+            heights.clear();
+            heights.addAll(heightsBefore);
+            sliceIds.clear();
+            sliceIds.addAll(idsBefore);
+            strokes.clear();
+            strokes.addAll(strokesBefore);
+            lastInked = lastInkedBefore;
+            if (failed instanceof RuntimeException) {
+                throw (RuntimeException) failed;
+            }
+            throw new IllegalStateException(failed);
+        }
+    }
+
+    /** Rebuild the log as header plus one APPEND per current stroke. */
+    private void rewriteLogFromStrokes() {
+        ByteArrayOutputStream raw = new ByteArrayOutputStream();
+        try {
+            raw.write(headerBytes());
+            for (InkRenderer.InkStroke stroke : strokes) {
+                raw.write(record(OP_APPEND, strokePayload(stroke)));
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+        log = raw.toByteArray();
+    }
+
+    /** Insert an empty slice at {@code index} and shift ink at/below it down. */
+    private void openGap(int index, int height, String id) {
+        float top = origin(index);
+        for (int i = 0; i < strokes.size(); i++) {
+            InkRenderer.InkStroke stroke = strokes.get(i);
+            boolean atOrBelow = false;
+            for (TouchPoint point : stroke.points) {
+                if (point.y >= top - 0.01f) {
+                    atOrBelow = true;
+                    break;
+                }
+            }
+            if (atOrBelow) {
+                strokes.set(i, shiftY(stroke, height));
+            }
+        }
+        heights.add(index, height);
+        sliceIds.add(index, id);
+    }
+
+    /**
      * The inside of the slice, already shifted so it lands as one piece at
      * the bottom of {@code destination}. The source then closes the gap.
      *

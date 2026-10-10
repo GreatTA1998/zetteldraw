@@ -439,6 +439,36 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     @Override
+    public void reorderPageAfter(String boardId, String afterBoardId) {
+        if (boardId == null || afterBoardId == null || boardId.equals(afterBoardId)) {
+            return;
+        }
+        Board moving;
+        Board after;
+        synchronized (lock) {
+            moving = cache.get(boardId);
+            after = cache.get(afterBoardId);
+            if (moving == null || after == null || moving.paper == null || after.paper == null
+                    || moving.paper != after.paper
+                    || !java.util.Objects.equals(moving.sheetId, after.sheetId)
+                    || moving.sliceIndex < 0 || after.sliceIndex < 0
+                    || moving.sliceIndex >= moving.paper.sliceCount()
+                    || after.sliceIndex >= after.paper.sliceCount()
+                    || moving.isBlank() || after.isBlank()) {
+                return;
+            }
+            String sheetId = moving.sheetId;
+            try {
+                moving.paper.reorderAfter(moving.sliceIndex, after.sliceIndex);
+            } catch (RuntimeException e) {
+                Log.e(TAG, "reorder page failed; left notebook unchanged", e);
+                return;
+            }
+            writer.execute(() -> rewriteSheet(sheetId));
+        }
+    }
+
+    @Override
     public void movePageToNotebook(String boardId, String notebookId) {
         Board moving;
         synchronized (lock) {
@@ -1990,6 +2020,58 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             pages.add(blank);
         }
         return pages;
+    }
+
+    /**
+     * Writer thread. Replaces the whole on-disk log (reorder rewrites the
+     * prefix). Resets {@code flushed} so a later append starts from the new end.
+     */
+    private void rewriteSheet(String sheetId) {
+        if (sheetId == null) {
+            return;
+        }
+        byte[] all;
+        synchronized (lock) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null || !open.ready) {
+                return;
+            }
+            all = open.paper.bytes();
+        }
+        try {
+            ink.writeLog(sheetId, all);
+        } catch (IOException e) {
+            Log.e(TAG, "ink log rewrite failed " + sheetId, e);
+            return;
+        }
+        String hash = InkFileStore.sha256(all);
+        synchronized (lock) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null) {
+                return;
+            }
+            open.flushed = all.length;
+            NotebookLogEntity row = dao.notebookLog(sheetId);
+            if (row == null) {
+                row = new NotebookLogEntity();
+                row.id = sheetId;
+                row.notebookId = open.notebookId;
+                row.createdAt = clock.getAsLong();
+            }
+            row.inkHash = hash;
+            row.inkBytes = all.length;
+            row.sliceHeight = open.paper.sliceHeight;
+            row.updatedAt = Math.max(row.updatedAt, clock.getAsLong());
+            row.deletedAt = null;
+            row.conflictOf = null;
+            NotebookLogEntity stored = row;
+            db.runInTransaction(() -> {
+                dao.upsertNotebookLog(stored);
+                queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
+            });
+            mirrorLog(sheetId, all);
+            localEdits.merge(sheetId, 1L, Long::sum);
+        }
     }
 
     /** Writer thread. Appends the new tail of the log; it does not rewrite the prefix. */
