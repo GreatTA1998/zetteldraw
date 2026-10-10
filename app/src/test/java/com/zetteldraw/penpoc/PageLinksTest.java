@@ -96,7 +96,7 @@ public class PageLinksTest {
             // Bottom strip does not shrink the drawing area or reflow pages.
             assertEquals("press " + press + " must not shrink the drawing area", areaBefore, area.getHeight());
             assertSame("press " + press + " rebuilt the page list", slot, control.getParent());
-            TextView banner = find(root, "Linking from dense 40/41");
+            TextView banner = find(root, "Linking from dense 40");
             assertNotNull(banner);
             View strip = (View) banner.getParent().getParent(); // row -> mode stack
             assertFalse("snackbar must not sit under the notebook column",
@@ -142,40 +142,33 @@ public class PageLinksTest {
         assertNotNull(page);
         View slot = (View) page.getParent();
         TextView link = textIn(slot, "Link");
-        TextView reorder = textIn(slot, "Reorder");
         TextView move = textIn(slot, "Move");
         TextView more = textIn(slot, "⋮");
         TextView ref = find(root, "→ tobook 1/2");
         assertNotNull(link);
-        assertNotNull(reorder);
+        assertNull("Reorder control is removed; Move covers both", textIn(slot, "Reorder"));
         assertNotNull(move);
         assertNotNull(more);
         assertNotNull(ref);
         int[] linkLoc = new int[2];
-        int[] reorderLoc = new int[2];
         int[] moveLoc = new int[2];
         int[] refLoc = new int[2];
         int[] slotLoc = new int[2];
         link.getLocationOnScreen(linkLoc);
-        reorder.getLocationOnScreen(reorderLoc);
         move.getLocationOnScreen(moveLoc);
         ref.getLocationOnScreen(refLoc);
         slot.getLocationOnScreen(slotLoc);
         int mid = slotLoc[0] + slot.getWidth() / 2;
         assertTrue("Link sits on the left", linkLoc[0] < mid);
-        assertTrue("Reorder sits on the right with Move", reorderLoc[0] > mid);
         assertTrue("Move sits on the right", moveLoc[0] > mid);
         assertTrue("⋮ is a menu, not an ellipsis", "⋮".contentEquals(more.getText()));
         assertEquals("Link and Move share the bottom inset",
                 linkLoc[1] + link.getHeight(), moveLoc[1] + move.getHeight());
-        assertEquals("Reorder and Move share the chrome-row bottom",
-                reorderLoc[1] + reorder.getHeight(), moveLoc[1] + move.getHeight());
         int[] moreLoc = new int[2];
         more.getLocationOnScreen(moreLoc);
         assertEquals("Move and ⋮ share the chrome-row bottom",
                 moveLoc[1] + move.getHeight(), moreLoc[1] + more.getHeight());
         assertEquals("Link, Move, and ⋮ share one row height", link.getHeight(), more.getHeight());
-        assertEquals("Reorder matches Move row height", reorder.getHeight(), move.getHeight());
         assertEquals("Link, Move, and ⋮ share one row height", move.getHeight(), more.getHeight());
         assertTrue("references stack above Link",
                 refLoc[1] + ref.getHeight() <= linkLoc[1] + 2);
@@ -207,7 +200,7 @@ public class PageLinksTest {
 
         clickOnPage(root, "1/2", "Link");
         assertNotNull(find(root, "Link"));
-        assertNotNull(find(root, "Linking from frombook 1/2"));
+        assertNotNull(find(root, "Linking from frombook 1"));
         assertNull("confirm stays hidden on the source page", find(root, "Confirm"));
 
         PageInkView ink = findInk(root);
@@ -215,7 +208,7 @@ public class PageLinksTest {
         assertNotNull("the linking line is a hole in the pen reader", cover(ink, linkingBar(root), ink.penExcludes()));
 
         openNotebook(root, "tobook");
-        assertNotNull(find(root, "Link from frombook 1/2 to tobook 1/2"));
+        assertNotNull(find(root, "Link from frombook 1 to tobook 1"));
         assertNotNull(find(root, "Confirm"));
         click(root, "Confirm");
 
@@ -254,7 +247,7 @@ public class PageLinksTest {
         openNotebook(root, "tobook");
         assertNotNull(find(root, "Confirm"));
         openNotebook(root, "frombook");
-        assertNotNull(find(root, "Linking from frombook 1/2"));
+        assertNotNull(find(root, "Linking from frombook 1"));
         assertNull("back on the source, confirm is gone", find(root, "Confirm"));
 
         controller.pause().stop().destroy();
@@ -279,7 +272,7 @@ public class PageLinksTest {
         assertNotNull(find(root, "Confirm"));
         click(root, "Cancel");
 
-        assertNull(find(root, "Linking from frombook 1/2"));
+        assertNull(find(root, "Linking from frombook 1"));
         assertNull(find(root, "Confirm"));
         assertTrue(repo.linksTouching(repo.pages(from.id).get(0).id).isEmpty());
         assertTrue(repo.linksTouching(repo.pages(to.id).get(0).id).isEmpty());
@@ -305,7 +298,7 @@ public class PageLinksTest {
         openNotebook(root, "frombook");
         clickOnPage(root, "1/2", "Link");
         openNotebook(root, "tobook");
-        assertNotNull(find(root, "Link from frombook 1/2 to tobook 2/3"));
+        assertNotNull(find(root, "Link from frombook 1 to tobook 2"));
         click(root, "Confirm");
 
         String above = repo.pages(to.id).get(0).id;
@@ -381,13 +374,13 @@ public class PageLinksTest {
         clickOnPage(root, "1/2", "Link");
         click(root, "shelf");
         openNotebook(root, "chapter");
-        assertNotNull(find(root, "Link from frombook 1/2 to chapter 3/4"));
+        assertNotNull(find(root, "Link from frombook 1 to chapter 3"));
         View scroller = pageScroller(root);
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
-        assertNotNull(find(root, "Link from frombook 1/2 to chapter 1/4"));
-        assertNull(find(root, "Link from frombook 1/2 to chapter 3/4"));
+        assertNotNull(find(root, "Link from frombook 1 to chapter 1"));
+        assertNull(find(root, "Link from frombook 1 to chapter 3"));
         click(root, "Confirm");
 
         openNotebook(root, "frombook");
@@ -418,7 +411,7 @@ public class PageLinksTest {
     }
 
     private static View linkingBar(View root) {
-        TextView text = find(root, "Linking from frombook 1/2");
+        TextView text = find(root, "Linking from frombook 1");
         assertNotNull(text);
         return (View) text.getParent();
     }

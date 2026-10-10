@@ -100,6 +100,56 @@ public class PageReorderTest {
     }
 
     @Test
+    public void placePageAfterMovesAcrossNotebooksAndKeepsId() {
+        String other = repo.createNotebook("other").id;
+        repo.ensureSheet(other, PAGE, PAGE, 0L);
+        Board first = inkNearBottom(other, "stay");
+        Board second = inkNearBottom(other, "anchor");
+        Board source = inkNearBottom(notebook, "moved");
+
+        repo.placePageAfter(source.id, first.id);
+
+        List<Board> src = repo.pages(notebook);
+        assertEquals(1, src.size());
+        assertTrue(src.get(0).isBlank());
+        List<Board> dest = repo.pages(other);
+        assertEquals(4, dest.size());
+        assertEquals(first.id, dest.get(0).id);
+        assertEquals(source.id, dest.get(1).id);
+        assertEquals(second.id, dest.get(2).id);
+        assertTrue(dest.get(3).isBlank());
+        assertNotNull(dest.get(1).paper.stroke("moved"));
+        assertNotNull(dest.get(0).paper.stroke("stay"));
+    }
+
+    @Test
+    public void densePlacePageAfterKeepsEveryStroke() throws Exception {
+        String other = repo.createNotebook("dense-dest").id;
+        repo.ensureSheet(other, PAGE, PAGE, 0L);
+        Board anchor = inkNearBottom(other, "anchor");
+        Board blank = repo.pages(notebook).get(0);
+        String adopted = blank.id;
+        for (int i = 0; i < DENSE_STROKES; i++) {
+            blank.paper.appendStroke(denseStroke("s" + i, 20f + (i % 50), 30f + (i % 20) * 35f),
+                    i == 0 ? adopted : null);
+        }
+        repo.saveInk(blank);
+        Board dense = repo.pages(notebook).get(0);
+        assertEquals(DENSE_STROKES, dense.paper.touching(0).size());
+
+        long started = System.nanoTime();
+        repo.placePageAfter(dense.id, anchor.id);
+        long ms = (System.nanoTime() - started) / 1_000_000L;
+        assertTrue("dense place-after should finish without a stall (" + ms + " ms)", ms < 5_000);
+
+        List<Board> dest = repo.pages(other);
+        assertEquals(dense.id, dest.get(1).id);
+        assertEquals(DENSE_STROKES, dest.get(1).paper.touching(1).size());
+        NotebookPaper replayed = NotebookPaper.replay(dest.get(1).paper.bytes());
+        assertTrue(replayed.containsInk(1));
+    }
+
+    @Test
     public void reorderOntoSelfIsNoOp() {
         Board only = inkNearBottom(notebook, "solo");
         repo.reorderPageAfter(only.id, only.id);

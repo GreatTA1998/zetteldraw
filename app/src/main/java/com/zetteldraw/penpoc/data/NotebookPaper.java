@@ -573,6 +573,74 @@ public final class NotebookPaper {
     }
 
     /**
+     * Tear {@code slice} out of this paper and insert it on
+     * {@code destination} immediately after {@code afterSlice}.
+     * {@code afterSlice == -1} inserts at the top (empty destination).
+     * Keeps the source slice id so the page identity survives the move.
+     *
+     * <p>Atomic for dense pages: destination is rewritten in one pass; on
+     * failure both papers are left unchanged.
+     */
+    public Tear tearMoveAfter(int slice, NotebookPaper destination, int afterSlice) {
+        if (destination == null) {
+            throw new IllegalArgumentException("destination");
+        }
+        if (destination == this) {
+            throw new IllegalArgumentException("same paper");
+        }
+        if (slice < 0 || slice >= heights.size()) {
+            return new Tear();
+        }
+        if (afterSlice < -1 || afterSlice >= destination.heights.size()) {
+            return new Tear();
+        }
+        byte[] destLogBefore = Arrays.copyOf(destination.log, destination.log.length);
+        ArrayList<Integer> destHeightsBefore = new ArrayList<>(destination.heights);
+        ArrayList<String> destIdsBefore = new ArrayList<>(destination.sliceIds);
+        ArrayList<InkRenderer.InkStroke> destStrokesBefore = new ArrayList<>(destination.strokes);
+        int destLastInkedBefore = destination.lastInked;
+
+        String id = sliceIds.get(slice);
+        int height = heights.get(slice);
+        float oldOrigin = origin(slice);
+        Tear cut = cut(slice, false);
+        try {
+            int insertAt = afterSlice + 1;
+            destination.openGap(insertAt, height, id);
+            float shift = destination.origin(insertAt) - oldOrigin;
+            for (InkRenderer.InkStroke piece : cut.taken) {
+                InkRenderer.InkStroke moved = shiftY(piece, shift);
+                destination.strokes.add(moved);
+                destination.noteStroke(moved);
+            }
+            destination.rewriteLogFromStrokes();
+            destination.trimTail();
+            destination.refreshLastInked();
+        } catch (Throwable failed) {
+            destination.log = destLogBefore;
+            destination.heights.clear();
+            destination.heights.addAll(destHeightsBefore);
+            destination.sliceIds.clear();
+            destination.sliceIds.addAll(destIdsBefore);
+            destination.strokes.clear();
+            destination.strokes.addAll(destStrokesBefore);
+            destination.lastInked = destLastInkedBefore;
+            // Prefer both notebooks intact over dropping a dense page mid-move.
+            strokes.addAll(cut.taken);
+            refreshLastInked();
+            if (failed instanceof RuntimeException) {
+                throw (RuntimeException) failed;
+            }
+            throw new IllegalStateException(failed);
+        }
+        closeGap(slice);
+        rememberTear(slice, TEAR_DELETE, cut);
+        trimTail();
+        refreshLastInked();
+        return cut;
+    }
+
+    /**
      * One batch for a Move: shift every piece onto this paper and grow the log
      * once. Per-stroke {@link #appendStroke} copies the whole log each time and
      * OOMs or stalls on a dense page after the source was already torn.

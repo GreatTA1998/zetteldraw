@@ -94,18 +94,21 @@ public class NestedNotebooksTest {
     }
 
     @Test
-    public void moveMenuIndentsChildrenAndExcludeRectsCoverEveryBar() {
+    public void moveSnackbarIntoChildNotebookAndExcludeRectsCoverEveryBar() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        repo.createNotebook("chapter", shelf.id);
-        Board first = repo.scratchpadPages().get(0);
-        first.strokes.add(TestStrokes.stroke(20f, 20f));
-        repo.saveInk(first);
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         CanvasActivity activity = controller.get();
         View root = activity.getWindow().getDecorView();
+        idle();
+        Board first = repo.scratchpadPages().get(0);
+        first.paper.appendStroke(TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
+        repo.saveInk(first);
+        String sourceId = repo.scratchpadPages().get(0).id;
+        clickDesc(root, "Scratchpad");
         idle();
         click(root, "shelf");
         idle();
@@ -120,19 +123,18 @@ public class NestedNotebooksTest {
         assertNotNull("the child bar is a hole in the pen reader", cover(ink, childBars.get(0), holes));
 
         clickDesc(root, "Scratchpad");
-        click(root, "Move");
-        TextView shelfItem = last(root, "shelf");
-        TextView chapterItem = last(root, "chapter");
-        assertTrue("chapter is indented under shelf", chapterItem.getPaddingLeft() > shelfItem.getPaddingLeft());
-        chapterItem.performClick();
         idle();
-        String chapterId = null;
-        for (BoardRepository.NotebookInfo each : repo.notebooks()) {
-            if ("chapter".equals(each.title)) {
-                chapterId = each.id;
-            }
-        }
-        Board moved = repo.pages(chapterId).get(0);
+        click(root, "Move");
+        assertNotNull(find(root, "Moving Scratchpad 1"));
+        click(root, "shelf");
+        idle();
+        click(root, "chapter");
+        idle();
+        assertNotNull(find(root, "Place Scratchpad 1 in chapter"));
+        click(root, "Confirm");
+        idle();
+        Board moved = repo.pages(chapter.id).get(0);
+        assertEquals(sourceId, moved.id);
         assertFalse(moved.isBlank());
         boolean found = false;
         for (com.zetteldraw.penpoc.InkRenderer.InkStroke stroke : moved.paper.strokes()) {

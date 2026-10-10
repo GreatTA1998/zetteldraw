@@ -469,6 +469,91 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     @Override
+    public void placePageAfter(String boardId, String afterBoardId) {
+        if (boardId == null || afterBoardId == null || boardId.equals(afterBoardId)) {
+            return;
+        }
+        Board moving;
+        Board after;
+        synchronized (lock) {
+            moving = cache.get(boardId);
+            after = cache.get(afterBoardId);
+        }
+        if (moving == null || after == null || moving.paper == null || after.paper == null
+                || moving.isBlank()
+                || moving.sliceIndex < 0
+                || moving.sliceIndex >= moving.paper.sliceCount()) {
+            return;
+        }
+        if (moving.paper == after.paper
+                && java.util.Objects.equals(moving.sheetId, after.sheetId)) {
+            synchronized (lock) {
+                if (after.isBlank() || after.sliceIndex < 0
+                        || after.sliceIndex >= after.paper.sliceCount()) {
+                    int last = after.paper.sliceCount() - 1;
+                    if (last < 0 || moving.sliceIndex == last) {
+                        return;
+                    }
+                    try {
+                        moving.paper.reorderAfter(moving.sliceIndex, last);
+                    } catch (RuntimeException e) {
+                        Log.e(TAG, "place page at end failed; left notebook unchanged", e);
+                        return;
+                    }
+                } else {
+                    try {
+                        moving.paper.reorderAfter(moving.sliceIndex, after.sliceIndex);
+                    } catch (RuntimeException e) {
+                        Log.e(TAG, "place page reorder failed; left notebook unchanged", e);
+                        return;
+                    }
+                }
+                String sheetId = moving.sheetId;
+                writer.execute(() -> rewriteSheet(sheetId));
+            }
+            return;
+        }
+        String destNotebookId = notebookIdOfSheet(after.sheetId);
+        if (knownPageHeight > 0) {
+            ensureSheet(destNotebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
+        }
+        synchronized (lock) {
+            OpenSheet dest = sheets.get(NotebookPaper.sheetId(destNotebookId));
+            if (dest == null || !dest.ready || moving.sliceIndex < 0
+                    || moving.sliceIndex >= moving.paper.sliceCount()) {
+                return;
+            }
+            int afterSlice;
+            if (after.isBlank() || after.sliceIndex < 0
+                    || after.sliceIndex >= after.paper.sliceCount()
+                    || after.paper != dest.paper) {
+                afterSlice = dest.paper.sliceCount() - 1;
+            } else {
+                afterSlice = after.sliceIndex;
+            }
+            String sourceSheetId = moving.sheetId;
+            String destSheetId = NotebookPaper.sheetId(destNotebookId);
+            try {
+                moving.paper.tearMoveAfter(moving.sliceIndex, dest.paper, afterSlice);
+            } catch (RuntimeException e) {
+                Log.e(TAG, "place page move failed; left both notebooks unchanged", e);
+                return;
+            }
+            // Destination was fully rewritten; source only appended a tear.
+            writer.execute(() -> rewriteSheet(destSheetId));
+            writer.execute(() -> flushSheet(sourceSheetId));
+        }
+    }
+
+    /** Notebook id for a sheet id ({@code null} = Scratchpad). */
+    private String notebookIdOfSheet(String sheetId) {
+        if (sheetId == null || NotebookPaper.SCRATCHPAD_ID.equals(sheetId)) {
+            return null;
+        }
+        return sheetId;
+    }
+
+    @Override
     public void movePageToNotebook(String boardId, String notebookId) {
         Board moving;
         synchronized (lock) {

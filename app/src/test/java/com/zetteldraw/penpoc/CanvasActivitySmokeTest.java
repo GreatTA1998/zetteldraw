@@ -302,31 +302,58 @@ public class CanvasActivitySmokeTest {
     public void moveFilesPagesIntoExistingAndNewNotebooks() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
-        Board first = repo.scratchpadPages().get(0);
-        first.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, 20f));
-        repo.saveInk(first);
-        Board second = repo.scratchpadPages().get(1);
-        second.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, 40f));
-        repo.saveInk(second);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
 
+        Board first = repo.scratchpadPages().get(0);
+        first.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
+        repo.saveInk(first);
+        clickDesc(root, "Scratchpad");
+        idle();
+        Board second = repo.scratchpadPages().get(1);
+        second.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, second.paperOrigin + 40f), second.id);
+        repo.saveInk(second);
+        clickDesc(root, "Scratchpad");
+        idle();
+
         assertEquals(java.util.Arrays.asList("1/3", "2/3", "3/3"), pageLabels(root));
+        String movedFirst = repo.scratchpadPages().get(0).id;
         clickFirstEnabled(root, "Move");
-        clickLast(root, "journal");
+        assertNotNull(find(root, "Moving Scratchpad 1"));
+        click(root, "journal");
+        idle();
+        assertNotNull(find(root, "Place Scratchpad 1 in journal"));
+        click(root, "Confirm");
+        idle();
         assertEquals(2, repo.notebookPages(Notebook.JOURNAL.uuid).size());
+        assertEquals(movedFirst, repo.notebookPages(Notebook.JOURNAL.uuid).get(0).id);
         assertEquals("moving a page away updates the count", java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
 
-        clickFirstEnabled(root, "Move");
-        click(root, "+ New notebook");
+        click(root, "+");
         EditText name = findEdit(root);
         name.setText("fresh");
         click(root, "Create");
-        BoardRepository.NotebookInfo fresh = repo.notebooks().get(4);
-        assertEquals("fresh", fresh.title);
+        idle();
+        BoardRepository.NotebookInfo fresh = null;
+        for (BoardRepository.NotebookInfo each : repo.notebooks()) {
+            if ("fresh".equals(each.title)) {
+                fresh = each;
+            }
+        }
+        assertNotNull(fresh);
+        clickDesc(root, "Scratchpad");
+        idle();
+        String movedSecond = repo.scratchpadPages().get(0).id;
+        clickFirstEnabled(root, "Move");
+        click(root, "fresh");
+        idle();
+        assertNotNull(find(root, "Place Scratchpad 1 in fresh"));
+        click(root, "Confirm");
+        idle();
         assertEquals(2, repo.notebookPages(fresh.id).size());
+        assertEquals(movedSecond, repo.notebookPages(fresh.id).get(0).id);
         assertEquals(1, repo.scratchpadPages().size());
         assertTrue(repo.scratchpadPages().get(0).isBlank());
 

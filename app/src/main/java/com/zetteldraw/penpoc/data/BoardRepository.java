@@ -54,6 +54,16 @@ public interface BoardRepository {
      */
     void reorderPageAfter(String boardId, String afterBoardId);
 
+    /**
+     * Place {@code boardId} immediately after {@code afterBoardId}.
+     * Same notebook reorders; other notebook (or Scratchpad) tears the page
+     * across and inserts it after the target. When {@code afterBoardId} is a
+     * trailing blank, the page is placed at the end of that list. Dense pages
+     * stay atomic. No-op when the source is missing, blank, or the same as
+     * the target.
+     */
+    void placePageAfter(String boardId, String afterBoardId);
+
     /** Clear one page's ink. */
     void wipePage(String boardId);
 

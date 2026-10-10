@@ -30,11 +30,11 @@ import org.robolectric.shadows.ShadowLooper;
 import java.time.Duration;
 import java.util.List;
 
-/** Reorder mode: bottom snackbar, confirm after another same-notebook page, cancel no-ops. */
+/** Move mode: bottom snackbar, same-notebook reorder and cross-notebook place-after. */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class, qualifiers = "w600dp-h1000dp",
         shadows = IdleSurfaceViewShadow.class)
-public class PageReorderUiTest {
+public class PageMoveUiTest {
     @Before
     public void freshRepository() {
         ZettelData.resetForTest();
@@ -42,7 +42,7 @@ public class PageReorderUiTest {
     }
 
     @Test
-    public void reorderAfterPageTwoOfFourYieldsOneThreeTwoFour() {
+    public void moveAfterPageTwoOfFourYieldsOneThreeTwoFour() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -68,15 +68,15 @@ public class PageReorderUiTest {
         scroller.scrollTo(0, height);
         idle();
         relayout(root);
-        clickOnPage(root, "2/5", "Reorder");
-        assertNotNull(find(root, "Reordering book 2/5"));
+        clickOnPage(root, "2/5", "Move");
+        assertNotNull(find(root, "Moving book 2"));
         assertNull("confirm stays hidden on the source page", find(root, "Confirm"));
 
         // Scroll to page 3.
         scroller.scrollTo(0, 2 * height);
         idle();
         relayout(root);
-        assertNotNull(find(root, "Place book 2/5 after book 3/5"));
+        assertNotNull(find(root, "Place book 2 after book 3"));
         assertNotNull(find(root, "Confirm"));
         click(root, "Confirm");
         idleForPaint();
@@ -88,7 +88,7 @@ public class PageReorderUiTest {
         assertEquals(id2, after.get(2).id);
         assertEquals(id4, after.get(3).id);
         assertTrue(after.get(4).isBlank());
-        assertNull(find(root, "Reordering book 2/5"));
+        assertNull(find(root, "Moving book 2"));
         assertNull(find(root, "Confirm"));
 
         controller.pause().stop().destroy();
@@ -114,11 +114,11 @@ public class PageReorderUiTest {
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
-        clickOnPage(root, "1/3", "Reorder");
-        assertNotNull(find(root, "Reordering book 1/3"));
+        clickOnPage(root, "1/3", "Move");
+        assertNotNull(find(root, "Moving book 1"));
         assertNull(find(root, "Confirm"));
         click(root, "Cancel");
-        assertNull(find(root, "Reordering book 1/3"));
+        assertNull(find(root, "Moving book 1"));
         assertEquals(first, repo.pages(book.id).get(0).id);
         assertEquals(second, repo.pages(book.id).get(1).id);
 
@@ -126,7 +126,7 @@ public class PageReorderUiTest {
     }
 
     @Test
-    public void crossNotebookConfirmIsRefused() {
+    public void crossNotebookPlaceAfterMovesThePage() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -140,12 +140,23 @@ public class PageReorderUiTest {
         ink(repo, other.id, 10f);
         openNotebook(root, "book");
         String source = repo.pages(book.id).get(0).id;
+        String anchor = repo.pages(other.id).get(0).id;
 
-        clickOnPage(root, "1/2", "Reorder");
+        clickOnPage(root, "1/2", "Move");
+        assertNotNull(find(root, "Moving book 1"));
         openNotebook(root, "other");
-        assertNotNull(find(root, "Open the same notebook to place"));
-        assertNull(find(root, "Confirm"));
-        assertEquals(source, repo.pages(book.id).get(0).id);
+        assertNotNull(find(root, "Place book 1 after other 1"));
+        assertNotNull(find(root, "Confirm"));
+        click(root, "Confirm");
+        idleForPaint();
+
+        assertEquals(1, repo.pages(book.id).size());
+        assertTrue(repo.pages(book.id).get(0).isBlank());
+        List<Board> dest = repo.pages(other.id);
+        assertEquals(3, dest.size());
+        assertEquals(anchor, dest.get(0).id);
+        assertEquals(source, dest.get(1).id);
+        assertTrue(dest.get(2).isBlank());
 
         controller.pause().stop().destroy();
     }
@@ -168,10 +179,10 @@ public class PageReorderUiTest {
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
-        clickOnPage(root, "1/2", "Reorder");
+        clickOnPage(root, "1/2", "Move");
         relayout(root);
         assertEquals("bottom strip must not shrink the drawing area", areaBefore, area.getHeight());
-        TextView banner = find(root, "Reordering book 1/2");
+        TextView banner = find(root, "Moving book 1");
         assertNotNull(banner);
         View strip = (View) banner.getParent().getParent();
         assertFalse(isDescendant(strip, (View) area.getParent()));
