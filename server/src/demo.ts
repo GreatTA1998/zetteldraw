@@ -246,6 +246,7 @@ export function demoLibrary(): DemoLibrary {
         id: notebookId,
         title: spec.title,
         position: notebookPos,
+        parent_id: null,
         created_at: BASE_TIME + n * DAY,
         updated_at: BASE_TIME + n * DAY,
         deleted_at: null,
