@@ -153,6 +153,7 @@ public final class CanvasActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         LaunchLog.mark("screen created" + (savedInstanceState != null ? " (restored)" : ""));
+        UiClick.warm(this);
         InkRenderer.applyBaseWidthMm(getResources().getDisplayMetrics());
         repository = ZettelData.repository(this);
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
@@ -345,8 +346,8 @@ public final class CanvasActivity extends Activity {
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
         scratchpadTab = iconButton(R.drawable.ic_scratchpad, R.string.scratchpad);
-        scratchpadTab.setOnClickListener(v -> openScratchpad());
-        scratchpadTab.setOnLongClickListener(v -> {
+        onTap(scratchpadTab, v -> openScratchpad());
+        onLongTap(scratchpadTab, v -> {
             showLaunchLog();
             return true;
         });
@@ -366,7 +367,7 @@ public final class CanvasActivity extends Activity {
         addButton = tinyButton(getString(R.string.add_notebook), 22);
         addButton.setContentDescription(getString(R.string.new_notebook));
         addButton.setPadding(dp(8), 0, dp(8), dp(2));
-        addButton.setOnClickListener(v -> showNameForm(null, null, addButton));
+        onTap(addButton, v -> showNameForm(null, null, addButton));
         rebuildNotebookTabs(null);
         return bar;
     }
@@ -396,21 +397,21 @@ public final class CanvasActivity extends Activity {
         penButton = iconButton(R.drawable.ic_tool_pen, R.string.pen);
         eraserButton = iconButton(R.drawable.ic_tool_eraser, R.string.eraser);
         lassoButton = iconButton(R.drawable.ic_tool_lasso, R.string.lasso);
-        undoButton.setOnClickListener(v -> {
+        onTap(undoButton, v -> {
             if (!inkView.undo()) {
                 showHint(getString(R.string.undo_nothing), true);
             }
         });
-        redoButton.setOnClickListener(v -> {
+        onTap(redoButton, v -> {
             if (!inkView.redo()) {
                 showHint(getString(R.string.redo_nothing), true);
             }
         });
-        penButton.setOnClickListener(v -> setTool(PageInkView.Tool.PEN));
-        eraserButton.setOnClickListener(v -> setTool(PageInkView.Tool.ERASER));
-        lassoButton.setOnClickListener(v -> setTool(PageInkView.Tool.LASSO));
+        onTap(penButton, v -> setTool(PageInkView.Tool.PEN));
+        onTap(eraserButton, v -> setTool(PageInkView.Tool.ERASER));
+        onTap(lassoButton, v -> setTool(PageInkView.Tool.LASSO));
         settingsButton = iconButton(R.drawable.ic_settings, R.string.settings);
-        settingsButton.setOnClickListener(v -> showSettings());
+        onTap(settingsButton, v -> showSettings());
         toolbar.addView(undoButton, iconLp(6));
         toolbar.addView(redoButton, iconLp(4));
         toolbar.addView(rule(), barDividerLp());
@@ -555,7 +556,7 @@ public final class CanvasActivity extends Activity {
                 plus.setContentDescription(getString(R.string.new_notebook));
                 plus.setPadding(dp(8), 0, dp(8), dp(2));
                 String createUnder = parentId;
-                plus.setOnClickListener(v -> showNameForm(null, null, plus, createUnder));
+                onTap(plus, v -> showNameForm(null, null, plus, createUnder));
                 fillStrip(strip, kids, plus, depth + 1);
                 scroll.addView(strip, new FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
@@ -1135,9 +1136,9 @@ public final class CanvasActivity extends Activity {
         modeConfirm = tinyButton(getString(R.string.confirm), 15);
         styleButton(modeConfirm, true);
         modeConfirm.setVisibility(View.GONE);
-        modeConfirm.setOnClickListener(v -> confirmMode());
+        onTap(modeConfirm, v -> confirmMode());
         Button cancel = tinyButton(getString(R.string.cancel), 15);
-        cancel.setOnClickListener(v -> cancelMode());
+        onTap(cancel, v -> cancelMode());
         LinearLayout.LayoutParams confirmLp = wrap();
         confirmLp.leftMargin = dp(8);
         row.addView(modeConfirm, confirmLp);
@@ -1495,11 +1496,11 @@ public final class CanvasActivity extends Activity {
         actions.setGravity(Gravity.END);
         Button cancel = tinyButton(getString(R.string.cancel), 15);
         cancel.setMinimumHeight(dp(48));
-        cancel.setOnClickListener(v -> dismissOverlay());
+        onTap(cancel, v -> dismissOverlay());
         Button confirm = tinyButton(getString(delete ? R.string.delete : R.string.wipe), 15);
         confirm.setMinimumHeight(dp(48));
         styleButton(confirm, true);
-        confirm.setOnClickListener(v -> {
+        onTap(confirm, v -> {
             dismissOverlay();
             if (delete) {
                 deletePage(slot);
@@ -1681,10 +1682,10 @@ public final class CanvasActivity extends Activity {
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         Button cancel = tinyButton(getString(R.string.cancel), 15);
-        cancel.setOnClickListener(v -> dismissOverlay());
+        onTap(cancel, v -> dismissOverlay());
         Button ok = tinyButton(getString(id == null ? R.string.create : R.string.save), 15);
         styleButton(ok, true);
-        ok.setOnClickListener(v -> submit.run());
+        onTap(ok, v -> submit.run());
         actions.addView(cancel, wrap());
         LinearLayout.LayoutParams okLp = wrap();
         okLp.leftMargin = dp(8);
@@ -1723,10 +1724,10 @@ public final class CanvasActivity extends Activity {
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         Button cancel = tinyButton(getString(R.string.cancel), 15);
-        cancel.setOnClickListener(v -> dismissOverlay());
+        onTap(cancel, v -> dismissOverlay());
         Button delete = tinyButton(getString(R.string.delete), 15);
         styleButton(delete, true);
-        delete.setOnClickListener(v -> {
+        onTap(delete, v -> {
             dismissOverlay();
             repository.deleteNotebook(id);
             scrollByCollection.remove(id);
@@ -1784,7 +1785,7 @@ public final class CanvasActivity extends Activity {
         if (!config.hasGoogleAccount()) {
             Button signIn = tinyButton(getString(R.string.settings_sign_in_google), 15);
             styleButton(signIn, true);
-            signIn.setOnClickListener(v -> {
+            onTap(signIn, v -> {
                 statusLine.setVisibility(View.VISIBLE);
                 statusLine.setText(R.string.settings_signing_in);
                 signIn.setEnabled(false);
@@ -1824,7 +1825,7 @@ public final class CanvasActivity extends Activity {
                             : getString(R.string.settings_enable_sync),
                     15);
             styleButton(toggle, true);
-            toggle.setOnClickListener(v -> {
+            onTap(toggle, v -> {
                 SyncConfig.setSyncOn(this, !config.syncOn);
                 if (!config.syncOn) {
                     SyncScheduler.syncNow(this);
@@ -1838,7 +1839,7 @@ public final class CanvasActivity extends Activity {
             box.addView(toggle, toggleLp);
 
             Button signOut = tinyButton(getString(R.string.settings_sign_out), 15);
-            signOut.setOnClickListener(v -> {
+            onTap(signOut, v -> {
                 SyncConfig.signOut(this);
                 dismissOverlay();
                 showHint(getString(R.string.settings_not_signed_in), true);
@@ -1848,14 +1849,14 @@ public final class CanvasActivity extends Activity {
         }
 
         Button privacy = tinyButton(getString(R.string.settings_privacy), 15);
-        privacy.setOnClickListener(v -> openUrl("https://zetteldraw.com/privacy"));
+        onTap(privacy, v -> openUrl("https://zetteldraw.com/privacy"));
         LinearLayout.LayoutParams linkLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         linkLp.topMargin = dp(8);
         box.addView(privacy, linkLp);
 
         Button web = tinyButton(getString(R.string.settings_web), 15);
-        web.setOnClickListener(v -> openUrl("https://zetteldraw.com"));
+        onTap(web, v -> openUrl("https://zetteldraw.com"));
         box.addView(web, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
 
@@ -1865,7 +1866,7 @@ public final class CanvasActivity extends Activity {
 
         Button close = tinyButton(getString(R.string.close), 15);
         styleButton(close, true);
-        close.setOnClickListener(v -> dismissOverlay());
+        onTap(close, v -> dismissOverlay());
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         actions.addView(close, wrap());
@@ -1901,7 +1902,7 @@ public final class CanvasActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.round(root.getHeight() * 0.7f)));
         Button close = tinyButton(getString(R.string.close), 15);
         styleButton(close, true);
-        close.setOnClickListener(v -> dismissOverlay());
+        onTap(close, v -> dismissOverlay());
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         actions.addView(close, wrap());
@@ -1951,7 +1952,7 @@ public final class CanvasActivity extends Activity {
         item.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         item.setSingleLine(true);
         item.setEllipsize(TextUtils.TruncateAt.END);
-        item.setOnClickListener(v -> {
+        onTap(item, v -> {
             dismissOverlay();
             if (action != null) {
                 action.run();
@@ -1995,7 +1996,7 @@ public final class CanvasActivity extends Activity {
         dismissOverlay();
         FrameLayout scrim = new FrameLayout(this);
         scrim.setClickable(true);
-        scrim.setOnClickListener(v -> dismissOverlay());
+        onTap(scrim, v -> dismissOverlay());
         scrim.addView(content, lp);
         overlay = scrim;
         inkView.hold(PageInkView.Hold.OVERLAY);
@@ -2105,8 +2106,8 @@ public final class CanvasActivity extends Activity {
             label = new Button(context, null, android.R.attr.borderlessButtonStyle);
             styleTabLabel(label, info.title);
             label.setMaxWidth(dp(220));
-            label.setOnClickListener(v -> openNotebook(id));
-            label.setOnLongClickListener(v -> {
+            onTap(label, v -> openNotebook(id));
+            onLongTap(label, v -> {
                 openNotebook(id);
                 showNotebookMenu(id);
                 return true;
@@ -2262,10 +2263,10 @@ public final class CanvasActivity extends Activity {
             moreButton.setIncludeFontPadding(false);
             moreButton.setGravity(Gravity.CENTER);
             moreButton.setContentDescription(getString(R.string.page_options));
-            linkButton.setOnClickListener(v -> startLinking(this));
-            reorderButton.setOnClickListener(v -> startReorder(this));
-            moveButton.setOnClickListener(v -> showMoveMenu(this));
-            moreButton.setOnClickListener(v -> showPageMenu(this));
+            onTap(linkButton, v -> startLinking(this));
+            onTap(reorderButton, v -> startReorder(this));
+            onTap(moveButton, v -> showMoveMenu(this));
+            onTap(moreButton, v -> showPageMenu(this));
 
             int mark = page.paper != null ? dp(2) : pageGap;
             int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(10);
@@ -2369,7 +2370,7 @@ public final class CanvasActivity extends Activity {
             line.setIncludeFontPadding(false);
             line.setGravity(Gravity.CENTER_VERTICAL);
             line.setMinHeight(dp(32));
-            line.setOnClickListener(v -> openLinkedPage(otherId));
+            onTap(line, v -> openLinkedPage(otherId));
             lines.addView(line, wrap());
             linkLines.add(line);
         }
@@ -2443,6 +2444,23 @@ public final class CanvasActivity extends Activity {
         return new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT);
+    }
+
+    /** Soft click + action. Disables the View's own sound so we never double-tick. */
+    private void onTap(View view, View.OnClickListener listener) {
+        view.setSoundEffectsEnabled(false);
+        view.setOnClickListener(v -> {
+            UiClick.play(v.getContext());
+            listener.onClick(v);
+        });
+    }
+
+    private void onLongTap(View view, View.OnLongClickListener listener) {
+        view.setSoundEffectsEnabled(false);
+        view.setOnLongClickListener(v -> {
+            UiClick.play(v.getContext());
+            return listener.onLongClick(v);
+        });
     }
 
     private Button tinyButton(String label, int textSp) {
