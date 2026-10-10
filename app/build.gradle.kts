@@ -10,8 +10,8 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 33
-        versionCode = 37
-        versionName = "3.16"
+        versionCode = 38
+        versionName = "3.17"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             abiFilters += if (project.hasProperty("zetteldraw.emulator")) "x86_64" else "arm64-v8a"
