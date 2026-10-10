@@ -452,9 +452,17 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 OpenSheet dest = sheets.get(NotebookPaper.sheetId(notebookId));
                 if (dest != null && dest.ready && moving.sliceIndex >= 0
                         && moving.sliceIndex < moving.paper.sliceCount()) {
-                    moving.paper.tearMove(moving.sliceIndex, dest.paper);
+                    try {
+                        moving.paper.tearMove(moving.sliceIndex, dest.paper);
+                    } catch (RuntimeException e) {
+                        // tearMove puts the ink back on the source when the
+                        // destination append fails; do not flush a half-move.
+                        Log.e(TAG, "move page failed; left both notebooks unchanged", e);
+                        return;
+                    }
                     // The slice id does not survive the move, so a link to it would name a missing page.
                     tombstoneLinksTouchingLocked(boardId);
+                    // Destination first: a crash after this still keeps the ink.
                     writer.execute(() -> flushSheet(NotebookPaper.sheetId(notebookId)));
                     writer.execute(() -> flushSheet(moving.sheetId));
                 }

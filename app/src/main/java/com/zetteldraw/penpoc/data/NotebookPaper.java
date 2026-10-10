@@ -257,6 +257,29 @@ public final class NotebookPaper {
         return index < 0 ? null : strokes.get(index);
     }
 
+    /**
+     * True when a point of some stroke lies on this slice. The pad around a
+     * stroke's bounds is for drawing and hit-testing; it is not ink.
+     */
+    public boolean containsInk(int slice) {
+        if (slice < 0 || slice >= heights.size()) {
+            return false;
+        }
+        float top = origin(slice);
+        float bottom = top + heights.get(slice);
+        for (InkRenderer.InkStroke stroke : strokes) {
+            if (stroke.bounds == null || stroke.bounds.bottom < top || stroke.bounds.top >= bottom) {
+                continue;
+            }
+            for (TouchPoint point : stroke.points) {
+                if (point.y >= top && point.y < bottom) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** Strokes whose bounds meet this slice. The same object, not a copy. */
     public List<InkRenderer.InkStroke> touching(int slice) {
         ArrayList<InkRenderer.InkStroke> hit = new ArrayList<>();
@@ -273,12 +296,23 @@ public final class NotebookPaper {
         return hit;
     }
 
-    /** A stroke that ends on a slice boundary belongs to the slice above that line. */
+    /**
+     * The slice that holds the lowest point. A point on a mark belongs to the
+     * slice that starts there, the same rule as {@link #sliceIndexAt}. The pad
+     * around the bounds is not a point, so it does not mark the next slice.
+     */
     private void noteStroke(InkRenderer.InkStroke stroke) {
-        if (stroke == null || stroke.bounds == null) {
+        if (stroke == null || stroke.points == null || stroke.points.isEmpty() || heights.isEmpty()) {
             return;
         }
-        int index = sliceIndexAt(Math.max(0f, stroke.bounds.bottom - 0.001f));
+        float y = maxY(stroke);
+        if (y < 0f) {
+            return;
+        }
+        int index = sliceIndexAt(y);
+        if (index >= heights.size()) {
+            index = heights.size() - 1;
+        }
         if (index > lastInked) {
             lastInked = index;
         }
@@ -421,6 +455,11 @@ public final class NotebookPaper {
     /**
      * The inside of the slice, already shifted so it lands as one piece at
      * the bottom of {@code destination}. The source then closes the gap.
+     *
+     * <p>Atomic for dense pages: the destination receives every taken stroke
+     * in one log append before the source gap closes. If that append throws
+     * (OOM on a huge drawing), the taken strokes are put back on the source
+     * and neither notebook changes.
      */
     public Tear tearMove(int slice, NotebookPaper destination) {
         if (destination == null) {
@@ -428,14 +467,82 @@ public final class NotebookPaper {
         }
         Tear cut = cut(slice, false);
         float shift = destination.origin(destination.sliceCount()) - origin(slice);
-        for (InkRenderer.InkStroke piece : cut.taken) {
-            destination.appendStroke(shiftY(piece, shift));
+        try {
+            destination.appendMoved(cut.taken, shift);
+        } catch (Throwable failed) {
+            // Prefer both notebooks intact over dropping a dense page mid-move.
+            strokes.addAll(cut.taken);
+            refreshLastInked();
+            if (failed instanceof RuntimeException) {
+                throw (RuntimeException) failed;
+            }
+            throw new IllegalStateException(failed);
         }
         closeGap(slice);
         rememberTear(slice, TEAR_DELETE, cut);
         trimTail();
         refreshLastInked();
         return cut;
+    }
+
+    /**
+     * One batch for a Move: shift every piece onto this paper and grow the log
+     * once. Per-stroke {@link #appendStroke} copies the whole log each time and
+     * OOMs or stalls on a dense page after the source was already torn.
+     * On failure this paper is rolled back to the way it was before the call.
+     */
+    void appendMoved(List<InkRenderer.InkStroke> pieces, float shiftY) {
+        if (pieces == null || pieces.isEmpty()) {
+            return;
+        }
+        int heightBefore = heights.size();
+        int logBefore = log.length;
+        int strokeBefore = strokes.size();
+        int lastInkedBefore = lastInked;
+        try {
+            ArrayList<InkRenderer.InkStroke> shifted = new ArrayList<>(pieces.size());
+            float bottom = 0f;
+            for (InkRenderer.InkStroke piece : pieces) {
+                InkRenderer.InkStroke moved = shiftY(piece, shiftY);
+                shifted.add(moved);
+                bottom = Math.max(bottom, maxY(moved));
+            }
+            while (bottom >= origin(heights.size())) {
+                extend(UUID.randomUUID().toString(), sliceHeight);
+            }
+            int bytes = 0;
+            ArrayList<byte[]> records = new ArrayList<>(shifted.size());
+            for (InkRenderer.InkStroke stroke : shifted) {
+                byte[] one = record(OP_APPEND, strokePayload(stroke));
+                records.add(one);
+                bytes += one.length;
+            }
+            byte[] suffix = new byte[bytes];
+            int at = 0;
+            for (byte[] one : records) {
+                System.arraycopy(one, 0, suffix, at, one.length);
+                at += one.length;
+            }
+            append(suffix);
+            for (InkRenderer.InkStroke stroke : shifted) {
+                strokes.add(stroke);
+                noteStroke(stroke);
+            }
+        } catch (Throwable failed) {
+            while (heights.size() > heightBefore) {
+                heights.remove(heights.size() - 1);
+                sliceIds.remove(sliceIds.size() - 1);
+            }
+            log = Arrays.copyOf(log, logBefore);
+            while (strokes.size() > strokeBefore) {
+                strokes.remove(strokes.size() - 1);
+            }
+            lastInked = lastInkedBefore;
+            if (failed instanceof RuntimeException) {
+                throw (RuntimeException) failed;
+            }
+            throw new IllegalStateException(failed);
+        }
     }
 
     private Tear tear(int slice, int kind) {

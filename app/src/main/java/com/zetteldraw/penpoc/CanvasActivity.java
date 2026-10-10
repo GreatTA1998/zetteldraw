@@ -1057,18 +1057,31 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Scroll offset of the last slice that already has ink. Page height times
-     * that index: no walk of the pages, and no second read of the log.
+     * Scroll offset of the last slice that already has ink. Each slice keeps
+     * its own height, so a tall page from before v10 and a short page after it
+     * do not share one stride. An index past the last stored slice, or a blank
+     * the padded bottom once named, is not a page to land on.
      */
     private int lastInkOffset(List<Board> pages) {
         if (pages.isEmpty() || pages.get(0).paper == null) {
             return 0;
         }
         int index = pages.get(0).paper.lastInkedSlice();
-        if (index <= 0) {
+        if (index < 0) {
             return 0;
         }
-        return heightOf(pages.get(0)) * index;
+        if (index >= pages.size()) {
+            index = pages.size() - 1;
+        }
+        while (index > 0 && pages.get(index).isBlank()) {
+            index--;
+        }
+        int scroll = 0;
+        int gap = layoutGap(pages);
+        for (int i = 0; i < index; i++) {
+            scroll += heightOf(pages.get(i)) + gap;
+        }
+        return scroll;
     }
 
     /** One line under the notebook bars. Confirm is absent while the page in front is the source. */

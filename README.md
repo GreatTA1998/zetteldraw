@@ -152,7 +152,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Sideload without adb: copy the APK to internal storage and open it in **Storage**. Allow install from that source if prompted.
 
-4. Open **Zetteldraw**. You land on the last blank Scratchpad page. Draw with the stylus; finger-scroll through pages. **Move** on a page, then a notebook name, files it. **Eraser** deletes strokes; a page's **⋯** wipes or deletes it.
+4. Open **Zetteldraw**. You land on the last blank Scratchpad page. Draw with the stylus; finger-scroll through pages. **Move** on a page, then a notebook name, files it as that notebook's newest inked page (before its trailing blank). A dense page Moves in one step: either both notebooks update, or neither does — ink is not dropped mid-move. **Eraser** deletes strokes; a page's **⋯** wipes or deletes it.
 
 If the screen stays white and nothing appears under the pen:
 
