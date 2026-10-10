@@ -20,7 +20,7 @@
     <string name="linking_from">Linking from %1$s</string>
     <string name="link_from_to">Link from %1$s to %2$s</string>
     <string name="moving">Moving %1$s</string>
-    <string name="place_after">Place %1$s after %2$s</string>
+    <string name="place_before">Place %1$s before %2$s</string>
     <string name="place_in">Place %1$s in %2$s</string>
     <string name="confirm">Confirm</string>
     <string name="link_outgoing">→ %1$s</string>

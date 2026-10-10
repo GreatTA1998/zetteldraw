@@ -1225,22 +1225,22 @@ public final class CanvasActivity extends Activity {
     }
 
     private void confirmMoving() {
-        PageSlot front = frontSlot();
-        if (moveSourceId == null || front == null || front.page.id.equals(moveSourceId)) {
+        PageSlot target = moveTargetSlot();
+        if (moveSourceId == null || target == null || target.page.id.equals(moveSourceId)) {
             refreshModeBar();
             return;
         }
-        if (!front.page.isBlank() && sameNotebookForMove(front) && isAlreadyAfterFront(front)) {
+        if (!target.page.isBlank() && sameNotebookForMove(target) && isAlreadyBeforeTarget(target)) {
             refreshModeBar();
             return;
         }
-        if (front.page.isBlank() && sameNotebookForMove(front) && isSourceLastInked()) {
+        if (target.page.isBlank() && sameNotebookForMove(target) && isSourceLastInked()) {
             refreshModeBar();
             return;
         }
         String sourceId = moveSourceId;
         String destNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
-        repository.saveInk(front.page);
+        repository.saveInk(target.page);
         Board source = pageOnScreen(sourceId);
         if (source == null) {
             for (Board page : repository.pages(moveSourceNotebookId)) {
@@ -1253,7 +1253,7 @@ public final class CanvasActivity extends Activity {
         if (source != null) {
             repository.saveInk(source);
         }
-        repository.placePageAfter(sourceId, front.page.id);
+        repository.placePageBefore(sourceId, target.page.id);
         cancelMoving();
         openAfterMove(sourceId, destNotebookId);
     }
@@ -1289,15 +1289,15 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    private boolean sameNotebookForMove(PageSlot front) {
-        String frontNotebook = SCRATCHPAD.equals(collectionId) ? null : collectionId;
-        return java.util.Objects.equals(frontNotebook, moveSourceNotebookId);
+    private boolean sameNotebookForMove(PageSlot target) {
+        String targetNotebook = SCRATCHPAD.equals(collectionId) ? null : collectionId;
+        return java.util.Objects.equals(targetNotebook, moveSourceNotebookId);
     }
 
-    /** True when source already sits immediately after {@code front} in this list. */
-    private boolean isAlreadyAfterFront(PageSlot front) {
-        int frontIndex = slots.indexOf(front);
-        if (frontIndex < 0) {
+    /** True when source already sits immediately before {@code target} in this list. */
+    private boolean isAlreadyBeforeTarget(PageSlot target) {
+        int targetIndex = slots.indexOf(target);
+        if (targetIndex < 0) {
             return false;
         }
         int sourceIndex = -1;
@@ -1307,7 +1307,7 @@ public final class CanvasActivity extends Activity {
                 break;
             }
         }
-        return sourceIndex == frontIndex + 1;
+        return sourceIndex == targetIndex - 1;
     }
 
     /** True when source is the last inked page of the open list (already at the end). */
@@ -1328,10 +1328,27 @@ public final class CanvasActivity extends Activity {
 
     /**
      * The page at the top of the viewport. Scroll offset divided by the page
-     * height: the slots above it are not visited.
+     * height: the slots above it are not visited. Used by Link.
      */
     private PageSlot frontSlot() {
         int index = indexAt(scroller.getScrollY());
+        if (index < 0) {
+            return null;
+        }
+        return slots.get(index);
+    }
+
+    /**
+     * Move target: the page that owns the vertical center of the drawing
+     * viewport, even when only partially visible.
+     */
+    private PageSlot moveTargetSlot() {
+        int viewport = scroller.getHeight();
+        if (viewport <= 0 && drawingArea != null) {
+            viewport = drawingArea.getHeight();
+        }
+        int mid = scroller.getScrollY() + Math.max(viewport, 1) / 2;
+        int index = indexAt(mid);
         if (index < 0) {
             return null;
         }
@@ -1382,23 +1399,23 @@ public final class CanvasActivity extends Activity {
             return;
         }
         if (moveSourceId != null && moveSourceRef != null) {
-            PageSlot front = frontSlot();
-            if (front == null || front.page.id.equals(moveSourceId)) {
+            PageSlot target = moveTargetSlot();
+            if (target == null || target.page.id.equals(moveSourceId)) {
                 modeText.setText(getString(R.string.moving, moveSourceRef));
                 modeConfirm.setVisibility(View.GONE);
-            } else if (!front.page.isBlank() && sameNotebookForMove(front)
-                    && isAlreadyAfterFront(front)) {
+            } else if (!target.page.isBlank() && sameNotebookForMove(target)
+                    && isAlreadyBeforeTarget(target)) {
                 modeText.setText(getString(R.string.moving, moveSourceRef));
                 modeConfirm.setVisibility(View.GONE);
-            } else if (front.page.isBlank() && sameNotebookForMove(front)
+            } else if (target.page.isBlank() && sameNotebookForMove(target)
                     && isSourceLastInked()) {
                 modeText.setText(getString(R.string.moving, moveSourceRef));
                 modeConfirm.setVisibility(View.GONE);
-            } else if (front.page.isBlank()) {
+            } else if (target.page.isBlank()) {
                 modeText.setText(getString(R.string.place_in, moveSourceRef, nameOnScreen()));
                 modeConfirm.setVisibility(View.VISIBLE);
             } else {
-                modeText.setText(getString(R.string.place_after, moveSourceRef, refOnScreen(front)));
+                modeText.setText(getString(R.string.place_before, moveSourceRef, refOnScreen(target)));
                 modeConfirm.setVisibility(View.VISIBLE);
             }
         }

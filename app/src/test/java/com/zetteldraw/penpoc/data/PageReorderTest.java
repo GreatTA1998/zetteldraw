@@ -100,30 +100,45 @@ public class PageReorderTest {
     }
 
     @Test
-    public void placePageAfterMovesAcrossNotebooksAndKeepsId() {
+    public void placePageBeforeMovesAcrossNotebooksAndKeepsId() {
         String other = repo.createNotebook("other").id;
         repo.ensureSheet(other, PAGE, PAGE, 0L);
         Board first = inkNearBottom(other, "stay");
         Board second = inkNearBottom(other, "anchor");
         Board source = inkNearBottom(notebook, "moved");
 
-        repo.placePageAfter(source.id, first.id);
+        repo.placePageBefore(source.id, first.id);
 
         List<Board> src = repo.pages(notebook);
         assertEquals(1, src.size());
         assertTrue(src.get(0).isBlank());
         List<Board> dest = repo.pages(other);
         assertEquals(4, dest.size());
-        assertEquals(first.id, dest.get(0).id);
-        assertEquals(source.id, dest.get(1).id);
+        assertEquals(source.id, dest.get(0).id);
+        assertEquals(first.id, dest.get(1).id);
         assertEquals(second.id, dest.get(2).id);
         assertTrue(dest.get(3).isBlank());
-        assertNotNull(dest.get(1).paper.stroke("moved"));
-        assertNotNull(dest.get(0).paper.stroke("stay"));
+        assertNotNull(dest.get(0).paper.stroke("moved"));
+        assertNotNull(dest.get(1).paper.stroke("stay"));
     }
 
     @Test
-    public void densePlacePageAfterKeepsEveryStroke() throws Exception {
+    public void placePageBeforePageOneBecomesNewFirst() {
+        Board p1 = inkNearBottom(notebook, "a");
+        Board p2 = inkNearBottom(notebook, "b");
+        Board p3 = inkNearBottom(notebook, "c");
+
+        repo.placePageBefore(p3.id, p1.id);
+
+        List<Board> after = repo.pages(notebook);
+        assertEquals(p3.id, after.get(0).id);
+        assertEquals(p1.id, after.get(1).id);
+        assertEquals(p2.id, after.get(2).id);
+        assertTrue(after.get(3).isBlank());
+    }
+
+    @Test
+    public void densePlacePageBeforeKeepsEveryStroke() throws Exception {
         String other = repo.createNotebook("dense-dest").id;
         repo.ensureSheet(other, PAGE, PAGE, 0L);
         Board anchor = inkNearBottom(other, "anchor");
@@ -138,15 +153,15 @@ public class PageReorderTest {
         assertEquals(DENSE_STROKES, dense.paper.touching(0).size());
 
         long started = System.nanoTime();
-        repo.placePageAfter(dense.id, anchor.id);
+        repo.placePageBefore(dense.id, anchor.id);
         long ms = (System.nanoTime() - started) / 1_000_000L;
-        assertTrue("dense place-after should finish without a stall (" + ms + " ms)", ms < 5_000);
+        assertTrue("dense place-before should finish without a stall (" + ms + " ms)", ms < 5_000);
 
         List<Board> dest = repo.pages(other);
-        assertEquals(dense.id, dest.get(1).id);
-        assertEquals(DENSE_STROKES, dest.get(1).paper.touching(1).size());
-        NotebookPaper replayed = NotebookPaper.replay(dest.get(1).paper.bytes());
-        assertTrue(replayed.containsInk(1));
+        assertEquals(dense.id, dest.get(0).id);
+        assertEquals(DENSE_STROKES, dest.get(0).paper.touching(0).size());
+        NotebookPaper replayed = NotebookPaper.replay(dest.get(0).paper.bytes());
+        assertTrue(replayed.containsInk(0));
     }
 
     @Test

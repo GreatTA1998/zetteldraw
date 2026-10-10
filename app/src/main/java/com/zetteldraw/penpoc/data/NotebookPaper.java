@@ -466,6 +466,26 @@ public final class NotebookPaper {
                 || source == after) {
             return;
         }
+        int afterAdj = source < after ? after - 1 : after;
+        reorderTo(source, afterAdj + 1);
+    }
+
+    /**
+     * Place {@code source} immediately before {@code before} on this paper.
+     * {@code before == 0} makes the page the new first slice. No-op when the
+     * indices are the same or out of range.
+     */
+    public void reorderBefore(int source, int before) {
+        if (source < 0 || before < 0 || source >= heights.size() || before >= heights.size()
+                || source == before) {
+            return;
+        }
+        int beforeAdj = source < before ? before - 1 : before;
+        reorderTo(source, beforeAdj);
+    }
+
+    /** Cut {@code source} and insert it at {@code insertAt} on this paper. */
+    private void reorderTo(int source, int insertAt) {
         byte[] logBefore = Arrays.copyOf(log, log.length);
         ArrayList<Integer> heightsBefore = new ArrayList<>(heights);
         ArrayList<String> idsBefore = new ArrayList<>(sliceIds);
@@ -477,8 +497,12 @@ public final class NotebookPaper {
             String id = sliceIds.get(source);
             Tear cut = cut(source, false);
             closeGap(source);
-            int afterAdj = source < after ? after - 1 : after;
-            int insertAt = afterAdj + 1;
+            if (insertAt < 0) {
+                insertAt = 0;
+            }
+            if (insertAt > heights.size()) {
+                insertAt = heights.size();
+            }
             openGap(insertAt, height, id);
             float shift = origin(insertAt) - oldOrigin;
             for (InkRenderer.InkStroke piece : cut.taken) {
@@ -582,6 +606,30 @@ public final class NotebookPaper {
      * failure both papers are left unchanged.
      */
     public Tear tearMoveAfter(int slice, NotebookPaper destination, int afterSlice) {
+        return tearMoveInsert(slice, destination, afterSlice + 1);
+    }
+
+    /**
+     * Tear {@code slice} out of this paper and insert it on
+     * {@code destination} immediately before {@code beforeSlice}.
+     * {@code beforeSlice == 0} makes it the new first page.
+     * Keeps the source slice id so the page identity survives the move.
+     */
+    public Tear tearMoveBefore(int slice, NotebookPaper destination, int beforeSlice) {
+        if (destination == null) {
+            throw new IllegalArgumentException("destination");
+        }
+        if (beforeSlice < 0 || beforeSlice > destination.heights.size()) {
+            return new Tear();
+        }
+        return tearMoveInsert(slice, destination, beforeSlice);
+    }
+
+    /**
+     * Tear {@code slice} and insert it at {@code insertAt} on {@code destination}.
+     * {@code insertAt == destination.sliceCount()} appends as newest.
+     */
+    private Tear tearMoveInsert(int slice, NotebookPaper destination, int insertAt) {
         if (destination == null) {
             throw new IllegalArgumentException("destination");
         }
@@ -591,7 +639,7 @@ public final class NotebookPaper {
         if (slice < 0 || slice >= heights.size()) {
             return new Tear();
         }
-        if (afterSlice < -1 || afterSlice >= destination.heights.size()) {
+        if (insertAt < 0 || insertAt > destination.heights.size()) {
             return new Tear();
         }
         byte[] destLogBefore = Arrays.copyOf(destination.log, destination.log.length);
@@ -605,7 +653,6 @@ public final class NotebookPaper {
         float oldOrigin = origin(slice);
         Tear cut = cut(slice, false);
         try {
-            int insertAt = afterSlice + 1;
             destination.openGap(insertAt, height, id);
             float shift = destination.origin(insertAt) - oldOrigin;
             for (InkRenderer.InkStroke piece : cut.taken) {

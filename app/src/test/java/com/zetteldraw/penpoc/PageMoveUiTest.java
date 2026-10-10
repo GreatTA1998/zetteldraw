@@ -42,7 +42,7 @@ public class PageMoveUiTest {
     }
 
     @Test
-    public void moveAfterPageTwoOfFourYieldsOneThreeTwoFour() {
+    public void movePageThreeBeforePageTwoYieldsOneThreeTwoFour() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -64,19 +64,19 @@ public class PageMoveUiTest {
         String id4 = before.get(3).id;
 
         View scroller = pageScroller(root);
-        // Open lands on last inked; scroll to page 2 so Confirm stays hidden on source.
-        scroller.scrollTo(0, height);
-        idle();
-        relayout(root);
-        clickOnPage(root, "2/5", "Move");
-        assertNotNull(find(root, "Moving book 2"));
-        assertNull("confirm stays hidden on the source page", find(root, "Confirm"));
-
-        // Scroll to page 3.
+        // Open lands on last inked; scroll to page 3 so Confirm stays hidden on source.
         scroller.scrollTo(0, 2 * height);
         idle();
         relayout(root);
-        assertNotNull(find(root, "Place book 2 after book 3"));
+        clickOnPage(root, "3/5", "Move");
+        assertNotNull(find(root, "Moving book 3"));
+        assertNull("confirm stays hidden on the source page", find(root, "Confirm"));
+
+        // Center page 2 (viewport midline owns that page).
+        scroller.scrollTo(0, height);
+        idle();
+        relayout(root);
+        assertNotNull(find(root, "Place book 3 before book 2"));
         assertNotNull(find(root, "Confirm"));
         click(root, "Confirm");
         idleForPaint();
@@ -88,7 +88,7 @@ public class PageMoveUiTest {
         assertEquals(id2, after.get(2).id);
         assertEquals(id4, after.get(3).id);
         assertTrue(after.get(4).isBlank());
-        assertNull(find(root, "Moving book 2"));
+        assertNull(find(root, "Moving book 3"));
         assertNull(find(root, "Confirm"));
 
         controller.pause().stop().destroy();
@@ -126,7 +126,7 @@ public class PageMoveUiTest {
     }
 
     @Test
-    public void crossNotebookPlaceAfterMovesThePage() {
+    public void crossNotebookPlaceBeforeMovesThePage() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -145,7 +145,7 @@ public class PageMoveUiTest {
         clickOnPage(root, "1/2", "Move");
         assertNotNull(find(root, "Moving book 1"));
         openNotebook(root, "other");
-        assertNotNull(find(root, "Place book 1 after other 1"));
+        assertNotNull(find(root, "Place book 1 before other 1"));
         assertNotNull(find(root, "Confirm"));
         click(root, "Confirm");
         idleForPaint();
@@ -154,8 +154,8 @@ public class PageMoveUiTest {
         assertTrue(repo.pages(book.id).get(0).isBlank());
         List<Board> dest = repo.pages(other.id);
         assertEquals(3, dest.size());
-        assertEquals(anchor, dest.get(0).id);
-        assertEquals(source, dest.get(1).id);
+        assertEquals(source, dest.get(0).id);
+        assertEquals(anchor, dest.get(1).id);
         assertTrue(dest.get(2).isBlank());
 
         controller.pause().stop().destroy();

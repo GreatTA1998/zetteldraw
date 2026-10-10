@@ -469,28 +469,29 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     @Override
-    public void placePageAfter(String boardId, String afterBoardId) {
-        if (boardId == null || afterBoardId == null || boardId.equals(afterBoardId)) {
+    public void placePageBefore(String boardId, String beforeBoardId) {
+        if (boardId == null || beforeBoardId == null || boardId.equals(beforeBoardId)) {
             return;
         }
         Board moving;
-        Board after;
+        Board before;
         synchronized (lock) {
             moving = cache.get(boardId);
-            after = cache.get(afterBoardId);
+            before = cache.get(beforeBoardId);
         }
-        if (moving == null || after == null || moving.paper == null || after.paper == null
+        if (moving == null || before == null || moving.paper == null || before.paper == null
                 || moving.isBlank()
                 || moving.sliceIndex < 0
                 || moving.sliceIndex >= moving.paper.sliceCount()) {
             return;
         }
-        if (moving.paper == after.paper
-                && java.util.Objects.equals(moving.sheetId, after.sheetId)) {
+        if (moving.paper == before.paper
+                && java.util.Objects.equals(moving.sheetId, before.sheetId)) {
             synchronized (lock) {
-                if (after.isBlank() || after.sliceIndex < 0
-                        || after.sliceIndex >= after.paper.sliceCount()) {
-                    int last = after.paper.sliceCount() - 1;
+                if (before.isBlank() || before.sliceIndex < 0
+                        || before.sliceIndex >= before.paper.sliceCount()) {
+                    // Trailing blank: append at end (after the last inked slice).
+                    int last = before.paper.sliceCount() - 1;
                     if (last < 0 || moving.sliceIndex == last) {
                         return;
                     }
@@ -502,7 +503,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     }
                 } else {
                     try {
-                        moving.paper.reorderAfter(moving.sliceIndex, after.sliceIndex);
+                        moving.paper.reorderBefore(moving.sliceIndex, before.sliceIndex);
                     } catch (RuntimeException e) {
                         Log.e(TAG, "place page reorder failed; left notebook unchanged", e);
                         return;
@@ -513,7 +514,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             return;
         }
-        String destNotebookId = notebookIdOfSheet(after.sheetId);
+        String destNotebookId = notebookIdOfSheet(before.sheetId);
         if (knownPageHeight > 0) {
             ensureSheet(destNotebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
         }
@@ -523,18 +524,18 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     || moving.sliceIndex >= moving.paper.sliceCount()) {
                 return;
             }
-            int afterSlice;
-            if (after.isBlank() || after.sliceIndex < 0
-                    || after.sliceIndex >= after.paper.sliceCount()
-                    || after.paper != dest.paper) {
-                afterSlice = dest.paper.sliceCount() - 1;
-            } else {
-                afterSlice = after.sliceIndex;
-            }
             String sourceSheetId = moving.sheetId;
             String destSheetId = NotebookPaper.sheetId(destNotebookId);
             try {
-                moving.paper.tearMoveAfter(moving.sliceIndex, dest.paper, afterSlice);
+                if (before.isBlank() || before.sliceIndex < 0
+                        || before.sliceIndex >= before.paper.sliceCount()
+                        || before.paper != dest.paper) {
+                    // Trailing blank / empty list: append as newest.
+                    int afterSlice = dest.paper.sliceCount() - 1;
+                    moving.paper.tearMoveAfter(moving.sliceIndex, dest.paper, afterSlice);
+                } else {
+                    moving.paper.tearMoveBefore(moving.sliceIndex, dest.paper, before.sliceIndex);
+                }
             } catch (RuntimeException e) {
                 Log.e(TAG, "place page move failed; left both notebooks unchanged", e);
                 return;
