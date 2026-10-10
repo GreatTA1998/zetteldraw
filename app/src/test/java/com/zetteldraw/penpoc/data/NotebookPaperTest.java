@@ -216,4 +216,34 @@ public class NotebookPaperTest {
         assertNull(paper.stroke("cross"));
         assertEquals("other", paper.stroke("other").id);
     }
+
+    @Test
+    public void denseLassoTranslateStaysFastAndKeepsLastInked() {
+        NotebookPaper paper = NotebookPaper.empty(1420);
+        ArrayList<String> move = new ArrayList<>();
+        for (int i = 0; i < 800; i++) {
+            float y0 = 20f + (i % 40) * 30f;
+            InkRenderer.InkStroke stroke = line("s" + i, 8f + (i % 10), y0, y0 + 40f);
+            paper.appendStroke(stroke);
+            if (i < 120) {
+                move.add(stroke.id);
+            }
+        }
+        // Far pages: more strokes so refreshLastInked would be costly if it walked points.
+        for (int i = 0; i < 400; i++) {
+            float y0 = 5000f + i * 4f;
+            paper.appendStroke(line("far" + i, 4f, y0, y0 + 20f));
+        }
+        int lastBefore = paper.lastInkedSlice();
+
+        long t0 = System.nanoTime();
+        paper.translate(move, 12f, 18f);
+        long ms = (System.nanoTime() - t0) / 1_000_000L;
+
+        assertTrue("dense translate took " + ms + "ms", ms < 80);
+        assertEquals(20f + 18f, paper.stroke("s0").points.get(0).y, 0.01f);
+        assertEquals(lastBefore, paper.lastInkedSlice());
+        assertEquals(8f + 12f, paper.stroke("s0").points.get(0).x, 0.01f);
+        assertEquals(20f, paper.stroke("s200").points.get(0).y, 0.01f);
+    }
 }

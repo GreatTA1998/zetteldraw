@@ -24,8 +24,8 @@ Top to bottom:
 **Lasso** (select and move ink on the notebook paper):
 
 - Tap **Lasso**, then circle ink. The firmware draws the outline dashed, with no lag. A stroke is selected when at least half its points are inside; a dot when its point is inside. Hit-testing thins the outline for speed and only rebuilds the page slices that are on screen, so a dense page does not freeze after lift.
-- The selection gets a dashed box, and raw drawing pauses. Drag the box with the pen or a finger. During the drag only a moved bitmap is repainted, in fast monochrome mode. On one-sheet notebooks the box can cross the dashed mark; the drag is one shift.
-- On release the strokes' points are rewritten (stroke ids kept), the area gets one clean partial refresh, the notebook log is saved through the repository like a pen-up, and the tool switches back to **Pen**. Raw drawing resumes after 500 ms, and the side-button eraser is set up again.
+- The selection gets a dashed box, and raw drawing pauses. Drag the box with the pen or a finger. During the drag only a moved bitmap is repainted, in fast monochrome mode (the page bases from select are reused; the dense page is not re-rendered each frame). On one-sheet notebooks the box can cross the dashed mark; the drag is one shift.
+- On release the strokes move first, then one refresh shows them at the destination (no flash back to the origin). Only slices that met the move are invalidated. The notebook log appends one translate record, the tool switches back to **Pen**, and raw drawing resumes after 500 ms.
 - Tap outside the box to cancel. **Undo** puts a lasso move back; **Redo** moves it again.
 
 Live ink uses `TouchHelper.create` → `openRawDrawing` → `setRawDrawingEnabled(true)` on one `SurfaceView` under the page stack, with hardware render on. Live stroke style is **`TouchHelper.STROKE_STYLE_FOUNTAIN`**, base width **0.50mm** (Notes default) via `TypedValue.COMPLEX_UNIT_MM`. TouchHelper has no public setter for Notes pressure 30% or stroke stabilization 60%, so those stay firmware-default.

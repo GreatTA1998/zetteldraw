@@ -963,14 +963,15 @@ public final class NotebookPaper {
         return pieces;
     }
 
+    /**
+     * Lowest ink y. Uses the cached bounds (pad stripped) so a lasso translate
+     * does not walk every point of every stroke when refreshing {@link #lastInked}.
+     */
     private static float maxY(InkRenderer.InkStroke stroke) {
-        float y = Float.NEGATIVE_INFINITY;
-        for (TouchPoint point : stroke.points) {
-            if (point.y > y) {
-                y = point.y;
-            }
+        if (stroke == null || stroke.bounds == null) {
+            return Float.NEGATIVE_INFINITY;
         }
-        return y;
+        return stroke.bounds.bottom - (stroke.maxWidth * 0.5f + 2f);
     }
 
     private static Piece finish(ArrayList<TouchPoint> points, ArrayList<Float> widths, boolean inside) {

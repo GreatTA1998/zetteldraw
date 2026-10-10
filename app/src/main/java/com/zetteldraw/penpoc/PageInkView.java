@@ -712,10 +712,10 @@ final class PageInkView extends FrameLayout {
             float top = view.pageTop(index);
             if (paperSelection) {
                 Selection sel = selection;
+                // Never fall back to bitmapFor while the selection is up: that
+                // re-renders the dense page on the UI thread every drag frame and
+                // draws the selected strokes twice (base + sprite).
                 Bitmap base = sel.sliceBases == null ? null : sel.sliceBases.get(view.page(index).id);
-                if (base == null) {
-                    base = bitmapFor(view.page(index), view.layout.heights[index]);
-                }
                 if (base != null) {
                     layers.add(base);
                     lefts.add(0f);
@@ -1435,21 +1435,19 @@ final class PageInkView extends FrameLayout {
         float dy = s.dy;
         NotebookPaper paper = s.page.paper;
         Set<String> ids = s.ids;
-        scheduleResume();
-        endSelection();
-        requestFrame(false, dirty, UpdateMode.GC);
         if (paper == null || (dx == 0f && dy == 0f)) {
+            scheduleResume();
+            endSelection();
+            requestFrame(false, dirty, UpdateMode.GC);
             if (listener != null) {
                 listener.onLassoCancelled();
             }
             return;
         }
-        float bottom = 0f;
-        for (InkRenderer.InkStroke stroke : paper.strokes()) {
-            if (ids.contains(stroke.id)) {
-                bottom = Math.max(bottom, stroke.bounds.bottom + dy);
-            }
-        }
+        // Translate while the sprite is still up, then paint once with the new
+        // points. The old order (drop selection → paint → translate) flashed the
+        // ink back to its origin and left a long stall before the real destination.
+        float bottom = s.bounds.bottom + dy;
         String adopt = null;
         if (bottom >= paper.origin(paper.sliceCount()) && !shown.isEmpty()) {
             Board tail = shown.page(shown.layout.size() - 1);
@@ -1458,7 +1456,12 @@ final class PageInkView extends FrameLayout {
             }
         }
         paper.translate(ids, dx, dy, adopt);
-        invalidatePaper(shown, paper);
+        RectF touchedPaper = new RectF(s.bounds);
+        touchedPaper.union(s.bounds.left + dx, s.bounds.top + dy, s.bounds.right + dx, s.bounds.bottom + dy);
+        invalidatePaperRegion(paper, touchedPaper);
+        scheduleResume();
+        endSelection();
+        requestFrame(false, dirty, UpdateMode.GC);
         history.record(InkHistory.Edit.of(InkHistory.Part.paperShifted(s.page, ids, dx, dy)));
         historyChanged();
         notifyChanged(s.page);
@@ -1484,6 +1487,27 @@ final class PageInkView extends FrameLayout {
         for (int i = 0; i < view.layout.size(); i++) {
             Board each = view.page(i);
             if (each.paper == paper) {
+                invalidatePage(each.id);
+            }
+        }
+    }
+
+    /**
+     * Drop cached bitmaps only for slices that meet {@code paperBounds}. A lasso
+     * move used to clear every page in the notebook, forcing a full-sheet rebuild.
+     */
+    private void invalidatePaperRegion(NotebookPaper paper, RectF paperBounds) {
+        if (paper == null || paperBounds == null) {
+            return;
+        }
+        for (int i = 0; i < shown.layout.size(); i++) {
+            Board each = shown.page(i);
+            if (each.paper != paper) {
+                continue;
+            }
+            float top = each.paperOrigin;
+            float bottom = top + shown.layout.heights[i];
+            if (paperBounds.bottom >= top && paperBounds.top < bottom) {
                 invalidatePage(each.id);
             }
         }
