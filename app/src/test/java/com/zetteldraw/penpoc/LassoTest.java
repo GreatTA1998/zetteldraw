@@ -101,6 +101,56 @@ public class LassoTest {
         assertTrue(Lasso.select(Collections.emptyList(), square()).isEmpty());
     }
 
+    /** Dense stylus circle: many samples, same closed shape as {@link #square()}. */
+    private static List<TouchPoint> denseCircle(float cx, float cy, float r, int samples) {
+        ArrayList<TouchPoint> polygon = new ArrayList<>(samples);
+        for (int i = 0; i < samples; i++) {
+            double a = i * 2.0 * Math.PI / samples;
+            polygon.add(point(cx + (float) (r * Math.cos(a)), cy + (float) (r * Math.sin(a))));
+        }
+        return polygon;
+    }
+
+    @Test
+    public void simplifyCapsVerticesAndKeepsContainment() {
+        List<TouchPoint> dense = denseCircle(200f, 200f, 120f, 1800);
+        List<TouchPoint> thin = Lasso.simplify(dense);
+        assertTrue(thin.size() <= Lasso.MAX_HIT_VERTICES);
+        assertTrue(thin.size() >= 3);
+        assertTrue(Lasso.contains(thin, 200f, 200f));
+        assertFalse(Lasso.contains(thin, 200f, 40f));
+    }
+
+    @Test
+    public void densePageSelectStaysFastAndCorrect() {
+        // One dense page of short strokes under a raw-rate lasso outline.
+        ArrayList<InkRenderer.InkStroke> page = new ArrayList<>(900);
+        InkRenderer.InkStroke centerDot = line(200f, 200f, 1);
+        page.add(centerDot);
+        for (int row = 0; row < 30; row++) {
+            for (int col = 0; col < 30; col++) {
+                page.add(line(40f + col * 36f, 40f + row * 42f, 8));
+            }
+        }
+        // Far pages in the same notebook log must not change the answer or the cost class.
+        for (int i = 0; i < 400; i++) {
+            page.add(line(50f + (i % 20) * 10f, 5000f + i * 3f, 12));
+        }
+        List<TouchPoint> outline = denseCircle(200f, 200f, 110f, 1600);
+
+        long t0 = System.nanoTime();
+        List<InkRenderer.InkStroke> picked = Lasso.select(page, outline);
+        long ms = (System.nanoTime() - t0) / 1_000_000L;
+
+        assertTrue("dense lasso select took " + ms + "ms", ms < 80);
+        assertTrue("center of the circle must be selected", picked.contains(centerDot));
+        assertTrue("should catch a cluster of nearby strokes", picked.size() >= 20);
+        for (InkRenderer.InkStroke stroke : picked) {
+            assertTrue("far-page stroke must not be selected: y=" + stroke.points.get(0).y,
+                    stroke.bounds.bottom < 400f);
+        }
+    }
+
     @Test
     public void clampKeepsSelectionOnThePage() {
         RectF bounds = new RectF(100f, 200f, 300f, 400f);

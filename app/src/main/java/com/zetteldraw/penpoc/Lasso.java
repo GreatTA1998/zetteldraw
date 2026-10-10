@@ -19,6 +19,14 @@ import java.util.Set;
 final class Lasso {
     /** Share of a stroke's points that must fall inside the lasso. */
     static final float MAJORITY = 0.5f;
+    /**
+     * Cap on polygon vertices used for hit-testing. A raw stylus circle is
+     * often 500–2000 samples; ray-casting every stroke point against that is
+     * quadratic and freezes the UI on a dense page. The shape is unchanged.
+     */
+    static final int MAX_HIT_VERTICES = 64;
+    /** Drop successive outline samples closer than this (device px). */
+    private static final float MIN_VERTEX_SPACING_SQ = 4f * 4f;
 
     private Lasso() {
     }
@@ -29,33 +37,139 @@ final class Lasso {
         if (strokes == null || polygon == null || polygon.size() < 3) {
             return selected;
         }
-        RectF area = InkRenderer.boundsOf(polygon, 0f);
+        float[] poly = flatten(simplify(polygon));
+        if (poly.length < 6) {
+            return selected;
+        }
+        RectF area = boundsOf(poly);
         for (InkRenderer.InkStroke stroke : strokes) {
             if (!RectF.intersects(area, stroke.bounds)) {
                 continue;
             }
-            int inside = 0;
-            for (TouchPoint point : stroke.points) {
-                if (area.contains(point.x, point.y) && contains(polygon, point.x, point.y)) {
-                    inside++;
-                }
-            }
-            if (inside > 0 && inside >= stroke.points.size() * MAJORITY) {
+            if (majorityInside(stroke, area, poly)) {
                 selected.add(stroke);
             }
         }
         return selected;
     }
 
+    /**
+     * True when at least {@link #MAJORITY} of the stroke's points lie inside
+     * {@code poly}. Stops early once the answer cannot change.
+     */
+    private static boolean majorityInside(InkRenderer.InkStroke stroke, RectF area, float[] poly) {
+        int n = stroke.points.size();
+        if (n == 0) {
+            return false;
+        }
+        float need = n * MAJORITY;
+        int inside = 0;
+        int remaining = n;
+        for (TouchPoint point : stroke.points) {
+            remaining--;
+            if (area.contains(point.x, point.y) && contains(poly, point.x, point.y)) {
+                inside++;
+                if (inside >= need) {
+                    return true;
+                }
+            } else if (inside + remaining < need) {
+                return false;
+            }
+        }
+        return inside > 0 && inside >= need;
+    }
+
+    /**
+     * Thins a hand-drawn outline for hit-testing. Keeps the closed shape;
+     * drops near-duplicate samples, then strides down to {@link #MAX_HIT_VERTICES}.
+     */
+    static List<TouchPoint> simplify(List<TouchPoint> polygon) {
+        if (polygon == null || polygon.size() < 3) {
+            return polygon == null ? List.of() : new ArrayList<>(polygon);
+        }
+        ArrayList<TouchPoint> spaced = new ArrayList<>(Math.min(polygon.size(), MAX_HIT_VERTICES + 1));
+        TouchPoint first = polygon.get(0);
+        spaced.add(first);
+        TouchPoint lastKept = first;
+        for (int i = 1; i < polygon.size(); i++) {
+            TouchPoint point = polygon.get(i);
+            float dx = point.x - lastKept.x;
+            float dy = point.y - lastKept.y;
+            if (dx * dx + dy * dy >= MIN_VERTEX_SPACING_SQ) {
+                spaced.add(point);
+                lastKept = point;
+            }
+        }
+        TouchPoint end = polygon.get(polygon.size() - 1);
+        if (spaced.get(spaced.size() - 1) != end) {
+            float dx = end.x - lastKept.x;
+            float dy = end.y - lastKept.y;
+            if (dx * dx + dy * dy >= 1f || spaced.size() < 3) {
+                spaced.add(end);
+            }
+        }
+        if (spaced.size() < 3) {
+            return new ArrayList<>(polygon.subList(0, Math.min(3, polygon.size())));
+        }
+        if (spaced.size() <= MAX_HIT_VERTICES) {
+            return spaced;
+        }
+        ArrayList<TouchPoint> thinned = new ArrayList<>(MAX_HIT_VERTICES);
+        int last = spaced.size() - 1;
+        thinned.add(spaced.get(0));
+        for (int i = 1; i < MAX_HIT_VERTICES - 1; i++) {
+            int index = i * last / (MAX_HIT_VERTICES - 1);
+            thinned.add(spaced.get(index));
+        }
+        thinned.add(spaced.get(last));
+        return thinned;
+    }
+
+    /** Flat [x0,y0,x1,y1,…] for the ray cast. */
+    private static float[] flatten(List<TouchPoint> polygon) {
+        float[] xy = new float[polygon.size() * 2];
+        for (int i = 0; i < polygon.size(); i++) {
+            TouchPoint point = polygon.get(i);
+            xy[i * 2] = point.x;
+            xy[i * 2 + 1] = point.y;
+        }
+        return xy;
+    }
+
+    private static RectF boundsOf(float[] poly) {
+        float left = poly[0];
+        float top = poly[1];
+        float right = poly[0];
+        float bottom = poly[1];
+        for (int i = 2; i < poly.length; i += 2) {
+            float x = poly[i];
+            float y = poly[i + 1];
+            left = Math.min(left, x);
+            top = Math.min(top, y);
+            right = Math.max(right, x);
+            bottom = Math.max(bottom, y);
+        }
+        return new RectF(left, top, right, bottom);
+    }
+
     /** Even-odd ray cast; the polygon is closed implicitly. */
     static boolean contains(List<TouchPoint> polygon, float x, float y) {
+        if (polygon == null || polygon.size() < 3) {
+            return false;
+        }
+        return contains(flatten(polygon), x, y);
+    }
+
+    static boolean contains(float[] poly, float x, float y) {
         boolean inside = false;
-        int n = polygon.size();
+        int n = poly.length / 2;
         for (int i = 0, j = n - 1; i < n; j = i++) {
-            TouchPoint a = polygon.get(i);
-            TouchPoint b = polygon.get(j);
-            if ((a.y > y) != (b.y > y)
-                    && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x) {
+            float ax = poly[i * 2];
+            float ay = poly[i * 2 + 1];
+            float bx = poly[j * 2];
+            float by = poly[j * 2 + 1];
+            if ((ay > y) != (by > y)
+                    && x < (bx - ax) * (y - ay) / (by - ay) + ax) {
                 inside = !inside;
             }
         }

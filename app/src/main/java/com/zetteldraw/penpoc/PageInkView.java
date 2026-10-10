@@ -1409,8 +1409,13 @@ final class PageInkView extends FrameLayout {
         Canvas spriteCanvas = new Canvas(sprite);
         spriteCanvas.translate(-spriteRect.left, -spriteRect.top);
         InkRenderer.drawAll(spriteCanvas, paint, picked);
+        // Only the slices on screen. Rebuilding every page in the notebook was
+        // the lasso freeze on dense one-sheet stacks (v20+): scroll is held while
+        // a selection is up, so off-screen bases are never drawn.
         HashMap<String, Bitmap> bases = new HashMap<>();
-        for (int i = 0; i < shown.layout.size(); i++) {
+        int first = shown.firstVisible();
+        int last = shown.lastVisible(surfaceView.getHeight());
+        for (int i = first; i <= last; i++) {
             Board slice = shown.page(i);
             bases.put(slice.id, renderSlice(slice, width, shown.layout.heights[i], ids));
         }
