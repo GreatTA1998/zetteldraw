@@ -61,7 +61,7 @@ public final class SyncClient {
             conn.setRequestMethod(method);
             conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
             conn.setReadTimeout(READ_TIMEOUT_MS);
-            conn.setRequestProperty("Authorization", "Bearer " + config.deviceToken);
+            conn.setRequestProperty("Authorization", "Bearer " + config.bearerToken());
             conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
             conn.setRequestProperty("Accept", "application/json");
             if (body != null) {

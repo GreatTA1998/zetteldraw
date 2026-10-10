@@ -1,33 +1,36 @@
 import type { NextRequest } from "next/server";
-import { deviceToken, serverUrl } from "@/lib/server-config";
+import { accessToken, serverUrl } from "@/lib/server-config";
 
 /**
- * Forwards /api/zd/<path> to the sync server's /web/<path> with the device token
- * from the sign-in cookie, so <img> tags and fetches work without exposing the
- * token or the server to the browser.
+ * Forwards GET /api/zd/<path> to the sync server's /web/<path> with the access
+ * token from the sign-in cookie. Write methods are refused — the companion is
+ * strictly read-only.
  */
 const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
 const PASS_HEADERS = ["content-type", "cache-control"];
 
-async function forward(request: NextRequest, ctx: RouteContext<"/api/zd/[...path]">) {
+type Ctx = { params: Promise<{ path: string[] }> };
+
+async function forward(request: NextRequest, ctx: Ctx) {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return Response.json(
+      { error: "read_only", message: "The web companion cannot change notebooks or pages." },
+      { status: 405 },
+    );
+  }
   const { path } = await ctx.params;
-  if (path.length === 0 || !path.every((s) => SAFE_SEGMENT.test(s) && s !== "." && s !== "..")) {
+  if (path.length === 0 || !path.every((s: string) => SAFE_SEGMENT.test(s) && s !== "." && s !== "..")) {
     return Response.json({ error: "not_found" }, { status: 404 });
   }
-  const token = await deviceToken();
+  const token = await accessToken();
   if (!token) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
-  const hasBody = request.method !== "GET" && request.method !== "HEAD";
   let upstream: Response;
   try {
     upstream = await fetch(`${serverUrl()}/web/${path.join("/")}`, {
       method: request.method,
-      headers: {
-        authorization: `Bearer ${token}`,
-        ...(hasBody ? { "content-type": "application/json" } : {}),
-      },
-      body: hasBody ? await request.text() : undefined,
+      headers: { authorization: `Bearer ${token}` },
       cache: "no-store",
     });
   } catch {
@@ -42,5 +45,18 @@ async function forward(request: NextRequest, ctx: RouteContext<"/api/zd/[...path
 }
 
 export const GET = forward;
-export const POST = forward;
-export const PATCH = forward;
+export const HEAD = forward;
+
+export function POST() {
+  return Response.json(
+    { error: "read_only", message: "The web companion cannot change notebooks or pages." },
+    { status: 405 },
+  );
+}
+
+export function PATCH() {
+  return Response.json(
+    { error: "read_only", message: "The web companion cannot change notebooks or pages." },
+    { status: 405 },
+  );
+}

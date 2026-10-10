@@ -53,6 +53,10 @@ services:
       S3_ACCESS_KEY: zetteldraw
       S3_SECRET_KEY: zetteldraw-secret
       DEVICE_TOKENS: ${DEVICE_TOKENS:-dev-device-token}
+      SESSION_SECRET: ${SESSION_SECRET:-local-dev-session-secret}
+      ALLOW_TEST_GOOGLE_TOKENS: ${ALLOW_TEST_GOOGLE_TOKENS:-true}
+      REJECT_DEVICE_TOKENS_AFTER_CLAIM: ${REJECT_DEVICE_TOKENS_AFTER_CLAIM:-false}
+      GOOGLE_CLIENT_IDS: ${GOOGLE_CLIENT_IDS:-}
       # Page size in device pixels assumed when rendering ink to PNG (Boox Go 7, portrait).
       PAGE_WIDTH: ${PAGE_WIDTH:-1264}
       PAGE_HEIGHT: ${PAGE_HEIGHT:-1680}

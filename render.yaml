@@ -22,6 +22,14 @@ services:
         value: zetteldraw-ink
       - key: DEVICE_TOKENS
         sync: false
+      - key: GOOGLE_CLIENT_IDS
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: REJECT_DEVICE_TOKENS_AFTER_CLAIM
+        value: "true"
+      - key: ALLOW_TEST_GOOGLE_TOKENS
+        value: "false"
       - key: DATABASE_URL
         sync: false
       - key: S3_ENDPOINT
@@ -34,8 +42,8 @@ services:
         sync: false
 
   # Web overview (Next.js) at zetteldraw.com. Talks to the sync server over its
-  # public URL; the browser only ever sees this service. ZD_DEVICE_TOKEN is used
-  # server-side for every proxied call, so the site is public with no sign-in.
+  # public URL; the browser only ever sees this service. Sign-in is Google;
+  # ZD_DEVICE_TOKEN is no longer used for the public library.
   - type: web
     name: zetteldraw-web
     runtime: node
@@ -54,5 +62,8 @@ services:
         value: "1"
       - key: ZD_SERVER_URL
         value: https://zetteldraw-sync.onrender.com
+      - key: NEXT_PUBLIC_GOOGLE_CLIENT_ID
+        sync: false
       - key: ZD_DEVICE_TOKEN
         sync: false
+

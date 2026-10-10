@@ -2,8 +2,10 @@ package com.zetteldraw.penpoc;
 
 import android.app.Activity;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.net.Uri;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
@@ -41,6 +43,9 @@ import android.widget.TextView;
 
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.ZettelData;
+import com.zetteldraw.penpoc.sync.GoogleAuth;
+import com.zetteldraw.penpoc.sync.SyncConfig;
+import com.zetteldraw.penpoc.sync.SyncScheduler;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -100,6 +105,7 @@ public final class CanvasActivity extends Activity {
     private ImageButton penButton;
     private ImageButton eraserButton;
     private ImageButton lassoButton;
+    private ImageButton settingsButton;
     private ImageButton undoButton;
     private ImageButton redoButton;
     private TextView toolHint;
@@ -403,12 +409,16 @@ public final class CanvasActivity extends Activity {
         penButton.setOnClickListener(v -> setTool(PageInkView.Tool.PEN));
         eraserButton.setOnClickListener(v -> setTool(PageInkView.Tool.ERASER));
         lassoButton.setOnClickListener(v -> setTool(PageInkView.Tool.LASSO));
+        settingsButton = iconButton(R.drawable.ic_settings, R.string.settings);
+        settingsButton.setOnClickListener(v -> showSettings());
         toolbar.addView(undoButton, iconLp(6));
         toolbar.addView(redoButton, iconLp(4));
         toolbar.addView(rule(), barDividerLp());
         toolbar.addView(penButton, iconLp(0));
         toolbar.addView(eraserButton, iconLp(6));
         toolbar.addView(lassoButton, iconLp(6));
+        toolbar.addView(rule(), barDividerLp());
+        toolbar.addView(settingsButton, iconLp(0));
         return toolbar;
     }
 
@@ -1743,6 +1753,136 @@ public final class CanvasActivity extends Activity {
         actionsLp.topMargin = dp(8);
         box.addView(actions, actionsLp);
         showOverlay(box, anchoredLp(anchor, box), root);
+    }
+
+    /** In-window Settings: Google Sign-In, sync toggle, privacy, version. */
+    private void showSettings() {
+        SyncConfig config = SyncConfig.load(this);
+        LinearLayout box = panel();
+        box.setMinimumWidth(dp(280));
+        box.addView(panelText(getString(R.string.settings), 16));
+
+        TextView account = panelText(
+                config.hasGoogleAccount()
+                        ? getString(R.string.settings_signed_in_as,
+                        config.googleEmail.isEmpty() ? config.googleSub : config.googleEmail)
+                        : getString(R.string.settings_not_signed_in),
+                13);
+        box.addView(account);
+
+        TextView syncStatus = panelText(
+                config.enabled()
+                        ? getString(R.string.settings_sync_on)
+                        : getString(R.string.settings_sync_off),
+                13);
+        box.addView(syncStatus);
+
+        TextView statusLine = panelText("", 13);
+        statusLine.setVisibility(View.GONE);
+        box.addView(statusLine);
+
+        if (!config.hasGoogleAccount()) {
+            Button signIn = tinyButton(getString(R.string.settings_sign_in_google), 15);
+            styleButton(signIn, true);
+            signIn.setOnClickListener(v -> {
+                statusLine.setVisibility(View.VISIBLE);
+                statusLine.setText(R.string.settings_signing_in);
+                signIn.setEnabled(false);
+                GoogleAuth.signIn(this, new GoogleAuth.Callback() {
+                    @Override
+                    public void onSuccess(String email, String claimStatus) {
+                        dismissOverlay();
+                        String msg;
+                        if ("claimed".equals(claimStatus) || "nothing_to_claim".equals(claimStatus)) {
+                            msg = getString(R.string.settings_claim_claimed);
+                        } else if ("already_yours".equals(claimStatus)) {
+                            msg = getString(R.string.settings_claim_yours);
+                        } else if ("already_taken".equals(claimStatus)) {
+                            msg = getString(R.string.settings_claim_taken);
+                        } else {
+                            msg = getString(R.string.settings_signed_in_as, email);
+                        }
+                        showHint(msg, true);
+                        SyncScheduler.syncNow(CanvasActivity.this);
+                    }
+
+                    @Override
+                    public void onError(String message) {
+                        statusLine.setText(message);
+                        signIn.setEnabled(true);
+                    }
+                });
+            });
+            LinearLayout.LayoutParams signLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            signLp.topMargin = dp(8);
+            box.addView(signIn, signLp);
+        } else {
+            Button toggle = tinyButton(
+                    config.syncOn
+                            ? getString(R.string.settings_sync_off).replace(" — notes stay on this device", "")
+                            : getString(R.string.settings_enable_sync),
+                    15);
+            styleButton(toggle, true);
+            toggle.setOnClickListener(v -> {
+                SyncConfig.setSyncOn(this, !config.syncOn);
+                if (!config.syncOn) {
+                    SyncScheduler.syncNow(this);
+                }
+                dismissOverlay();
+                showSettings();
+            });
+            LinearLayout.LayoutParams toggleLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            toggleLp.topMargin = dp(8);
+            box.addView(toggle, toggleLp);
+
+            Button signOut = tinyButton(getString(R.string.settings_sign_out), 15);
+            signOut.setOnClickListener(v -> {
+                SyncConfig.signOut(this);
+                dismissOverlay();
+                showHint(getString(R.string.settings_not_signed_in), true);
+            });
+            box.addView(signOut, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+
+        Button privacy = tinyButton(getString(R.string.settings_privacy), 15);
+        privacy.setOnClickListener(v -> openUrl("https://zetteldraw.com/privacy"));
+        LinearLayout.LayoutParams linkLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        linkLp.topMargin = dp(8);
+        box.addView(privacy, linkLp);
+
+        Button web = tinyButton(getString(R.string.settings_web), 15);
+        web.setOnClickListener(v -> openUrl("https://zetteldraw.com"));
+        box.addView(web, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        box.addView(panelText(
+                getString(R.string.settings_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
+                12));
+
+        Button close = tinyButton(getString(R.string.close), 15);
+        styleButton(close, true);
+        close.setOnClickListener(v -> dismissOverlay());
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        actions.addView(close, wrap());
+        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        actionsLp.topMargin = dp(8);
+        box.addView(actions, actionsLp);
+
+        showOverlay(box, anchoredLp(settingsButton, box), root);
+    }
+
+    private void openUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception ignored) {
+            showHint(url, true);
+        }
     }
 
     /** Long-press on the Scratchpad icon: this launch's timeline and the two before it, newest first. */

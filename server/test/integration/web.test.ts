@@ -179,91 +179,15 @@ describe("web reads", () => {
   });
 });
 
-describe("web edits", () => {
-  it("reorders within a notebook and the device pulls the new position", async () => {
-    const before = await pullAll(0);
-    const res = await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: notebookA, after_id: pages[2] });
-    expect(res.status).toBe(200);
-    expect(res.json.status).toBe("moved");
-    expect(await pageIds(notebookA)).toEqual([pages[1], pages[2], pages[0]]);
+describe("web is read-only", () => {
+  it("refuses rename and move", async () => {
+    const move = await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: notebookA, after_id: pages[2] });
+    expect(move.status).toBe(405);
+    expect(move.json.error).toBe("read_only");
+    expect(await pageIds(notebookA)).toEqual(pages.slice(0, 3));
 
-    const pulled = await pullAll(before.cursor);
-    const row = pulled.boards.find((b) => b.id === pages[0]);
-    expect(row).toMatchObject({ notebook_id: notebookA, position: res.json.page.position, rev: res.json.page.rev });
-    expect(row.position > "a2").toBe(true);
-    expect(row.updated_at).toBeGreaterThan(now);
-    expect(pulled.boards.filter((b) => b.id !== pages[0] && pages.includes(b.id))).toEqual([]);
-  });
-
-  it("moves to the start, and reports an unchanged drop", async () => {
-    const res = await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: notebookA, after_id: null });
-    expect(res.json.status).toBe("moved");
-    expect(await pageIds(notebookA)).toEqual([pages[0], pages[1], pages[2]]);
-    const again = await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: notebookA, after_id: null });
-    expect(again.json).toMatchObject({ status: "unchanged", page: { rev: res.json.page.rev } });
-  });
-
-  it("moves a page to another notebook and to the scratchpad", async () => {
-    const res = await call("POST", `/web/pages/${pages[1]}/move`, { notebook_id: notebookB, after_id: pages[3] });
-    expect(res.status).toBe(200);
-    expect(await pageIds(notebookA)).toEqual([pages[0], pages[2]]);
-    expect(await pageIds(notebookB)).toEqual([pages[3], pages[1]]);
-
-    const toEnd = await call("POST", `/web/pages/${pages[2]}/move`, { notebook_id: notebookB });
-    expect(toEnd.json.page.notebook_id).toBe(notebookB);
-    expect(await pageIds(notebookB)).toEqual([pages[3], pages[1], pages[2]]);
-
-    const scratch = await call("POST", `/web/pages/${pages[2]}/move`, { notebook_id: "scratchpad" });
-    expect(scratch.json.page.notebook_id).toBeNull();
-    expect((await pageIds("scratchpad")).at(-1)).toBe(pages[2]);
-  });
-
-  it("rejects bad moves", async () => {
-    expect((await call("POST", `/web/pages/${randomUUID()}/move`, { notebook_id: notebookA })).status).toBe(404);
-    expect((await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: randomUUID() })).status).toBe(404);
-    expect((await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: notebookA, after_id: pages[3] })).status).toBe(400);
-    expect((await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: 7 })).status).toBe(400);
-  });
-
-  it("renames a notebook as a synced change", async () => {
-    const before = await pullAll(0);
-    const res = await call("PATCH", `/web/notebooks/${notebookA}`, { title: "  Renamed on the web  " });
-    expect(res.status).toBe(200);
-    expect(res.json.notebook.title).toBe("Renamed on the web");
-    const pulled = await pullAll(before.cursor);
-    expect(pulled.notebooks.find((n) => n.id === notebookA)).toMatchObject({ title: "Renamed on the web" });
-
-    expect((await call("PATCH", `/web/notebooks/${notebookA}`, { title: "   " })).status).toBe(400);
-    expect((await call("PATCH", `/web/notebooks/scratchpad`, { title: "x" })).status).toBe(400);
-    expect((await call("PATCH", `/web/notebooks/${randomUUID()}`, { title: "x" })).status).toBe(404);
-  });
-
-  it("a stale device edit loses to the web edit under LWW", async () => {
-    const current = (await call("GET", `/web/notebooks/${notebookB}/pages`)).json.pages.find((p: any) => p.id === pages[3]);
-    const moved = await call("POST", `/web/pages/${pages[3]}/move`, { notebook_id: notebookB });
-    expect(moved.json.status).toBe("moved");
-    const stale = await call("POST", "/sync/push", {
-      schema_version: schema,
-      device_id: "web-test",
-      notebooks: [],
-      boards: [
-        {
-          id: pages[3],
-          notebook_id: notebookB,
-          position: "a0",
-          ink_hash: inks[3].hash,
-          ink_bytes: inks[3].bytes.length,
-          thumb_hash: null,
-          conflict_of: null,
-          created_at: now,
-          updated_at: now + 1,
-          deleted_at: null,
-          base_rev: current.rev,
-        },
-      ],
-      blobs: {},
-    });
-    expect(stale.json.results[0].status).toBe("conflict_lost");
-    expect((await pageIds(notebookB)).at(-1)).toBe(pages[3]);
+    const rename = await call("PATCH", `/web/notebooks/${notebookA}`, { title: "Renamed on the web" });
+    expect(rename.status).toBe(405);
+    expect(rename.json.error).toBe("read_only");
   });
 });

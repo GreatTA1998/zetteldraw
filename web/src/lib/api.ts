@@ -53,7 +53,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const message =
       res.status === 401
-        ? "Your device token was not accepted."
+        ? "Sign-in expired or was not accepted. Sign in again."
         : res.status === 502
           ? "The zetteldraw server is not responding."
           : (body?.message ?? `Request failed (${res.status}).`);
@@ -65,20 +65,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const fetcher = <T,>(path: string) => request<T>(path);
 
 export const api = {
-  session: () => request<{ authenticated: boolean; shared?: boolean }>("/api/session"),
+  session: () =>
+    request<{ authenticated: boolean; shared?: boolean; google?: boolean }>("/api/session"),
+  signInWithGoogle: (idToken: string) =>
+    request<{ authenticated: boolean }>("/api/session", {
+      method: "POST",
+      body: JSON.stringify({ id_token: idToken }),
+    }),
+  /** Legacy device-token sign-in (only when Google client id is unset). */
   signIn: (token: string) =>
     request<{ authenticated: boolean }>("/api/session", { method: "POST", body: JSON.stringify({ token }) }),
   signOut: () => request<{ authenticated: boolean }>("/api/session", { method: "DELETE" }),
   notebooksKey: "/api/zd/notebooks",
   pagesKey: (notebookId: string) => `/api/zd/notebooks/${notebookId}/pages`,
-  movePage: (pageId: string, notebookId: string, afterId?: string | null) =>
-    request<{ status: "moved" | "unchanged"; page: Page }>(`/api/zd/pages/${pageId}/move`, {
-      method: "POST",
-      body: JSON.stringify(afterId === undefined ? { notebook_id: notebookId } : { notebook_id: notebookId, after_id: afterId }),
-    }),
-  renameNotebook: (notebookId: string, title: string) =>
-    request<{ notebook: { id: string; title: string } }>(`/api/zd/notebooks/${notebookId}`, {
-      method: "PATCH",
-      body: JSON.stringify({ title }),
-    }),
 };

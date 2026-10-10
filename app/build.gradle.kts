@@ -10,15 +10,23 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 33
-        versionCode = 31
-        versionName = "3.10"
+        versionCode = 32
+        versionName = "3.11"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             abiFilters += if (project.hasProperty("zetteldraw.emulator")) "x86_64" else "arm64-v8a"
         }
-        // Sync stays off until a server URL is set (here via -Pzetteldraw.syncUrl, or at runtime in SyncConfig).
+        // Sync URL is baked for production sideloads; Google Sign-In supplies the bearer at runtime.
+        // Do not bake SYNC_TOKEN into Play/sideload releases once Google auth is live.
         buildConfigField("String", "SYNC_URL", "\"${project.findProperty("zetteldraw.syncUrl") ?: ""}\"")
         buildConfigField("String", "SYNC_TOKEN", "\"${project.findProperty("zetteldraw.syncToken") ?: ""}\"")
+        // Web OAuth client ID (serverClientId) for Google ID tokens. Android client id is registered
+        // in Google Cloud for the package/signing cert; the ID token audience is this web client.
+        buildConfigField(
+            "String",
+            "GOOGLE_WEB_CLIENT_ID",
+            "\"${project.findProperty("zetteldraw.googleWebClientId") ?: ""}\"",
+        )
         javaCompileOptions {
             annotationProcessorOptions {
                 arguments["room.schemaLocation"] = "$projectDir/schemas"
@@ -96,6 +104,9 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     annotationProcessor("androidx.room:room-compiler:2.6.1")
     implementation("androidx.work:work-runtime:2.9.1")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.13")

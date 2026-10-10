@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type pg from "pg";
+import { isUnowned, ownedByUser, rowOwner, stampOwnership, type OwnerTable } from "./accounts.js";
 import {
   resolveBoard,
   resolveLink,
@@ -44,7 +45,7 @@ const LOG_COLS = [
 ] as const;
 const LINK_COLS = ["id", "source_id", "target_id", "created_at", "updated_at", "deleted_at"] as const;
 
-export type ResultStatus = Status | "missing_blob";
+export type ResultStatus = Status | "missing_blob" | "forbidden";
 
 export interface PushResult {
   entity: "notebook" | "board" | "log" | "link";
@@ -63,6 +64,9 @@ export interface PullResponse {
   links: LinkRow[];
   blobs: Record<string, string>;
 }
+
+/** Who is syncing: a Google user namespace, or the legacy unowned (device-token) bucket. */
+export type SyncScope = { kind: "user"; userId: string } | { kind: "unowned" };
 
 export function sha256Hex(bytes: Buffer): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -107,6 +111,7 @@ async function applyDecision<T extends { id: string; rev: number }>(
   cols: readonly string[],
   existing: T | null,
   decision: Decision<T>,
+  scope: SyncScope,
 ): Promise<number> {
   let rev = existing?.rev ?? 0;
   if (decision.write) {
@@ -115,15 +120,56 @@ async function applyDecision<T extends { id: string; rev: number }>(
     rev = await restamp(client, table, existing.id);
   }
   if (decision.copy && table === "boards") {
+    const copy = decision.copy as { id: string };
     await upsert(client, "boards", BOARD_COLS, decision.copy as unknown as Record<string, unknown>);
+    await maybeStamp(client, "boards", copy.id, scope);
   }
   if (decision.copy && table === "notebook_logs") {
+    const copy = decision.copy as { id: string };
     await upsert(client, "notebook_logs", LOG_COLS, decision.copy as unknown as Record<string, unknown>);
+    await maybeStamp(client, "notebook_logs", copy.id, scope);
   }
   return rev;
 }
 
-export async function push(pool: pg.Pool, storage: InkStorage, body: PushBody): Promise<PushResult[]> {
+async function maybeStamp(
+  client: pg.PoolClient,
+  table: OwnerTable,
+  rowId: string,
+  scope: SyncScope,
+): Promise<void> {
+  if (scope.kind === "user") {
+    await stampOwnership(client, table, rowId, scope.userId);
+  }
+}
+
+async function assertWritable(
+  client: pg.PoolClient,
+  table: OwnerTable,
+  rowId: string,
+  scope: SyncScope,
+): Promise<boolean> {
+  const owner = await rowOwner(client, table, rowId);
+  if (scope.kind === "user") {
+    return owner === null || owner === scope.userId;
+  }
+  // Device-token / unowned scope: only touch rows that are still unowned.
+  return owner === null;
+}
+
+function visibilitySql(table: OwnerTable, alias: string, scope: SyncScope, userParam: number): string {
+  if (scope.kind === "user") {
+    return ownedByUser(table, alias, userParam);
+  }
+  return isUnowned(table, alias);
+}
+
+export async function push(
+  pool: pg.Pool,
+  storage: InkStorage,
+  body: PushBody,
+  scope: SyncScope = { kind: "unowned" },
+): Promise<PushResult[]> {
   for (const [hash, b64] of Object.entries(body.blobs)) {
     const bytes = Buffer.from(b64, "base64");
     if (sha256Hex(bytes) !== hash) {
@@ -155,11 +201,18 @@ export async function push(pool: pg.Pool, storage: InkStorage, body: PushBody): 
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock($1)", [PUSH_LOCK]);
     for (const incoming of body.notebooks) {
+      if (!(await assertWritable(client, "notebooks", incoming.id, scope))) {
+        results.push({ entity: "notebook", id: incoming.id, status: "forbidden", rev: 0 });
+        continue;
+      }
       const existing =
         (await client.query<NotebookRow>("SELECT * FROM notebooks WHERE id = $1 FOR UPDATE", [incoming.id]))
           .rows[0] ?? null;
       const decision = resolveNotebook(existing, incoming);
-      const rev = await applyDecision(client, "notebooks", NOTEBOOK_COLS, existing, decision);
+      const rev = await applyDecision(client, "notebooks", NOTEBOOK_COLS, existing, decision, scope);
+      if (decision.write || !existing) {
+        await maybeStamp(client, "notebooks", incoming.id, scope);
+      }
       results.push({ entity: "notebook", id: incoming.id, status: decision.status, rev });
     }
     for (const incoming of body.boards) {
@@ -167,11 +220,18 @@ export async function push(pool: pg.Pool, storage: InkStorage, body: PushBody): 
         results.push({ entity: "board", id: incoming.id, status: "missing_blob", rev: 0 });
         continue;
       }
+      if (!(await assertWritable(client, "boards", incoming.id, scope))) {
+        results.push({ entity: "board", id: incoming.id, status: "forbidden", rev: 0 });
+        continue;
+      }
       const existing =
         (await client.query<BoardRow>("SELECT * FROM boards WHERE id = $1 FOR UPDATE", [incoming.id])).rows[0] ??
         null;
       const decision = resolveBoard(existing, incoming, randomUUID);
-      const rev = await applyDecision(client, "boards", BOARD_COLS, existing, decision);
+      const rev = await applyDecision(client, "boards", BOARD_COLS, existing, decision, scope);
+      if (decision.write || !existing) {
+        await maybeStamp(client, "boards", incoming.id, scope);
+      }
       results.push({ entity: "board", id: incoming.id, status: decision.status, rev });
     }
     for (const incoming of body.logs) {
@@ -179,19 +239,33 @@ export async function push(pool: pg.Pool, storage: InkStorage, body: PushBody): 
         results.push({ entity: "log", id: incoming.id, status: "missing_blob", rev: 0 });
         continue;
       }
+      if (!(await assertWritable(client, "notebook_logs", incoming.id, scope))) {
+        results.push({ entity: "log", id: incoming.id, status: "forbidden", rev: 0 });
+        continue;
+      }
       const existing =
         (await client.query<LogRow>("SELECT * FROM notebook_logs WHERE id = $1 FOR UPDATE", [incoming.id]))
           .rows[0] ?? null;
       const decision = resolveLog(existing, incoming, randomUUID);
-      const rev = await applyDecision(client, "notebook_logs", LOG_COLS, existing, decision);
+      const rev = await applyDecision(client, "notebook_logs", LOG_COLS, existing, decision, scope);
+      if (decision.write || !existing) {
+        await maybeStamp(client, "notebook_logs", incoming.id, scope);
+      }
       results.push({ entity: "log", id: incoming.id, status: decision.status, rev });
     }
     for (const incoming of body.links) {
+      if (!(await assertWritable(client, "page_links", incoming.id, scope))) {
+        results.push({ entity: "link", id: incoming.id, status: "forbidden", rev: 0 });
+        continue;
+      }
       const existing =
         (await client.query<LinkRow>("SELECT * FROM page_links WHERE id = $1 FOR UPDATE", [incoming.id])).rows[0] ??
         null;
       const decision = resolveLink(existing, incoming);
-      const rev = await applyDecision(client, "page_links", LINK_COLS, existing, decision);
+      const rev = await applyDecision(client, "page_links", LINK_COLS, existing, decision, scope);
+      if (decision.write || !existing) {
+        await maybeStamp(client, "page_links", incoming.id, scope);
+      }
       results.push({ entity: "link", id: incoming.id, status: decision.status, rev });
     }
     await client.query("COMMIT");
@@ -210,18 +284,34 @@ export async function pull(
   schemaVersion: number,
   since: number,
   limit: number,
+  scope: SyncScope = { kind: "unowned" },
 ): Promise<PullResponse> {
+  const params: unknown[] = [since];
+  let userParam = 0;
+  if (scope.kind === "user") {
+    params.push(scope.userId);
+    userParam = params.length;
+  }
+  const nVis = visibilitySql("notebooks", "n", scope, userParam);
+  const bVis = visibilitySql("boards", "b", scope, userParam);
+  const lVis = visibilitySql("notebook_logs", "l", scope, userParam);
+  const kVis = visibilitySql("page_links", "k", scope, userParam);
+  params.push(limit + 1);
+  const limitParam = params.length;
+
   const changes = await pool.query<{ kind: "notebook" | "board" | "log" | "link"; id: string; rev: number }>(
-    `SELECT 'notebook' AS kind, id, rev FROM notebooks WHERE rev > $1
-     UNION ALL
-     SELECT 'board' AS kind, id, rev FROM boards WHERE rev > $1
-     UNION ALL
-     SELECT 'log' AS kind, id, rev FROM notebook_logs WHERE rev > $1
-     UNION ALL
-     SELECT 'link' AS kind, id, rev FROM page_links WHERE rev > $1
+    `SELECT kind, id, rev FROM (
+       SELECT 'notebook'::text AS kind, n.id, n.rev FROM notebooks n WHERE n.rev > $1 AND ${nVis}
+       UNION ALL
+       SELECT 'board', b.id, b.rev FROM boards b WHERE b.rev > $1 AND ${bVis}
+       UNION ALL
+       SELECT 'log', l.id, l.rev FROM notebook_logs l WHERE l.rev > $1 AND ${lVis}
+       UNION ALL
+       SELECT 'link', k.id, k.rev FROM page_links k WHERE k.rev > $1 AND ${kVis}
+     ) changes
      ORDER BY rev
-     LIMIT $2`,
-    [since, limit + 1],
+     LIMIT $${limitParam}`,
+    params,
   );
   const hasMore = changes.rows.length > limit;
   const page = changes.rows.slice(0, limit);

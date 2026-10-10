@@ -6,6 +6,7 @@
  *   docker compose run --rm sync node dist/scripts/seed.js
  */
 import { existsSync } from "node:fs";
+import { migrateAccounts } from "../accounts.js";
 import { loadConfig } from "../config.js";
 import { createPool, migrate } from "../db.js";
 import { demoLibrary } from "../demo.js";
@@ -20,6 +21,7 @@ if (existsSync(".env")) {
 const config = loadConfig();
 const pool = createPool(config.databaseUrl, config.databaseCaCert);
 const schemaVersion = await migrate(pool, config.migrationsDir);
+await migrateAccounts(pool, config.accountMigrationsDir);
 const storage = S3InkStorage.fromConfig(config.s3);
 await storage.ensureBucket();
 
@@ -42,7 +44,15 @@ for (const b of boards) {
   }
 }
 
-await push(pool, storage, { schema_version: schemaVersion, device_id: "demo-seed", notebooks, boards, blobs });
+await push(pool, storage, {
+  schema_version: schemaVersion,
+  device_id: "demo-seed",
+  notebooks,
+  boards,
+  logs: [],
+  links: [],
+  blobs,
+});
 
 const thumbs = new Thumbnailer(storage, config.page);
 let rendered = 0;

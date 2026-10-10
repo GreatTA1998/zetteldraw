@@ -1,4 +1,5 @@
 import { generateKeyBetween } from "fractional-indexing";
+import { BadRequest } from "./validate.js";
 
 /**
  * Fractional position keys, same algorithm and alphabet as the app's Positions.java
@@ -69,3 +70,40 @@ export function planMove(
   }
   return { kind: "write", position: positionBetween(prev?.position ?? null, next?.position ?? null) };
 }
+
+const SCRATCHPAD = "scratchpad";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface MoveRequest {
+  notebookId: string | null;
+  target: MoveTarget;
+}
+
+/** Parses a web-style move body. Kept for unit tests; web routes are read-only. */
+export function parseMoveBody(raw: unknown): MoveRequest {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new BadRequest("body must be an object");
+  }
+  const body = raw as Record<string, unknown>;
+  const nb = body.notebook_id;
+  let notebookId: string | null;
+  if (nb === null || nb === SCRATCHPAD) {
+    notebookId = null;
+  } else if (typeof nb === "string" && UUID.test(nb)) {
+    notebookId = nb.toLowerCase();
+  } else {
+    throw new BadRequest("notebook_id must be a notebook id, \"scratchpad\" or null");
+  }
+  let target: MoveTarget;
+  if (!("after_id" in body) || body.after_id === undefined) {
+    target = { kind: "end" };
+  } else if (body.after_id === null) {
+    target = { kind: "start" };
+  } else if (typeof body.after_id === "string" && UUID.test(body.after_id)) {
+    target = { kind: "after", id: body.after_id.toLowerCase() };
+  } else {
+    throw new BadRequest("after_id must be a page id, null (first) or omitted (last)");
+  }
+  return { notebookId, target };
+}
+

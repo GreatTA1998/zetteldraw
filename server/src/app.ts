@@ -1,34 +1,43 @@
-import { timingSafeEqual } from "node:crypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import Fastify from "fastify";
 import type pg from "pg";
+import {
+  claimUnownedLibrary,
+  getLibraryClaimer,
+  upsertUser,
+  type ClaimResult,
+} from "./accounts.js";
+import { AuthService, issueAccessToken, type AuthPrincipal } from "./auth.js";
 import type { InkStorage } from "./storage.js";
-import { pull, push } from "./sync.js";
+import { pull, push, type SyncScope } from "./sync.js";
 import type { Thumbnailer } from "./thumbs.js";
 import { BadRequest, parsePushBody } from "./validate.js";
-import { NotFound, registerWebRoutes } from "./web.js";
+import { Forbidden, NotFound, registerWebRoutes } from "./web.js";
 
 export const SCHEMA_HEADER = "x-zetteldraw-schema";
+
+declare module "fastify" {
+  interface FastifyRequest {
+    principal?: AuthPrincipal;
+  }
+}
 
 export interface AppDeps {
   pool: pg.Pool;
   storage: InkStorage;
   schemaVersion: number;
-  deviceTokens: string[];
+  auth: AuthService;
+  sessionSecret: string | undefined;
   /** Renders page images; enables the /web/* endpoints and thumbnails on push. */
   thumbs?: Thumbnailer;
   logger?: boolean;
 }
 
-function tokenMatches(presented: string, tokens: string[]): boolean {
-  const a = Buffer.from(presented);
-  let ok = false;
-  for (const token of tokens) {
-    const b = Buffer.from(token);
-    if (a.length === b.length && timingSafeEqual(a, b)) {
-      ok = true;
-    }
+function scopeOf(principal: AuthPrincipal | undefined): SyncScope {
+  if (principal?.kind === "google") {
+    return { kind: "user", userId: principal.user.id };
   }
-  return ok;
+  return { kind: "unowned" };
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {
@@ -36,18 +45,66 @@ export function buildApp(deps: AppDeps): FastifyInstance {
 
   app.get("/healthz", async () => ({ ok: true, schema_version: deps.schemaVersion }));
 
-  app.addHook("onRequest", async (req, reply) => {
-    const isSync = req.url.startsWith("/sync/");
-    if (!isSync && !req.url.startsWith("/web/")) {
-      return;
+  app.post<{ Body: { id_token?: unknown; claim?: unknown } }>("/auth/google", async (req, reply) => {
+    const idToken = typeof req.body?.id_token === "string" ? req.body.id_token.trim() : "";
+    if (!idToken) {
+      throw new BadRequest("id_token is required");
     }
-    const auth = req.headers.authorization ?? "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    if (!token || !tokenMatches(token, deps.deviceTokens)) {
+    const user = await deps.auth.verifyGoogleIdToken(idToken);
+    if (!user) {
+      return reply.code(401).send({ error: "unauthorized", message: "invalid Google ID token" });
+    }
+    await upsertUser(deps.pool, user);
+    const shouldClaim = req.body?.claim !== false;
+    let claim: ClaimResult | null = null;
+    if (shouldClaim) {
+      claim = await claimUnownedLibrary(deps.pool, user);
+    }
+    if (!deps.sessionSecret) {
+      return {
+        user: { id: user.id, email: user.email },
+        access_token: idToken,
+        expires_in: 3600,
+        token_type: "Bearer",
+        claim,
+      };
+    }
+    const issued = issueAccessToken(user, deps.sessionSecret);
+    return {
+      user: { id: user.id, email: user.email },
+      ...issued,
+      token_type: "Bearer",
+      claim,
+    };
+  });
+
+  app.post("/auth/claim", async (req, reply) => {
+    if (req.principal?.kind !== "google") {
       return reply.code(401).send({ error: "unauthorized" });
     }
-    // The web overview reads through its own endpoints and is not bound to a Room schema.
-    if (!isSync) {
+    const claim = await claimUnownedLibrary(deps.pool, req.principal.user);
+    return { claim, user: { id: req.principal.user.id, email: req.principal.user.email } };
+  });
+
+  app.addHook("onRequest", async (req, reply) => {
+    const url = req.url.split("?")[0] ?? req.url;
+    const needsAuth =
+      url.startsWith("/sync/") ||
+      url.startsWith("/web/") ||
+      url === "/auth/claim";
+    if (!needsAuth) {
+      return;
+    }
+    const claimedBy = await getLibraryClaimer(deps.pool);
+    const principal = await deps.auth.resolveBearer(req.headers.authorization, {
+      libraryClaimed: claimedBy !== null,
+    });
+    if (!principal) {
+      return reply.code(401).send({ error: "unauthorized" });
+    }
+    req.principal = principal;
+
+    if (!url.startsWith("/sync/")) {
       return;
     }
     const clientSchema = Number(req.headers[SCHEMA_HEADER]);
@@ -61,6 +118,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof NotFound) {
       return reply.code(404).send({ error: "not_found", message: err.message });
+    }
+    if (err instanceof Forbidden) {
+      return reply.code(403).send({ error: "forbidden", message: err.message });
     }
     if (err instanceof BadRequest) {
       return reply.code(400).send({ error: "bad_request", message: err.message });
@@ -78,7 +138,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (body.schema_version !== deps.schemaVersion) {
       throw new BadRequest(`schema_version ${body.schema_version} != ${deps.schemaVersion}`);
     }
-    const results = await push(deps.pool, deps.storage, body);
+    const scope = scopeOf(req.principal);
+    const results = await push(deps.pool, deps.storage, body, scope);
     if (deps.thumbs) {
       const stored = new Set(results.filter((r) => r.entity === "board" && r.status !== "missing_blob").map((r) => r.id));
       for (const board of body.boards) {
@@ -90,6 +151,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     req.log.info(
       {
         device: body.device_id,
+        user: req.principal?.kind === "google" ? req.principal.user.id : "device",
         notebooks: body.notebooks.length,
         boards: body.boards.length,
         logs: body.logs.length,
@@ -106,13 +168,25 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!Number.isSafeInteger(since) || since < 0 || !Number.isSafeInteger(limit)) {
       throw new BadRequest("since and limit must be non-negative integers");
     }
-    return pull(deps.pool, deps.storage, deps.schemaVersion, since, limit);
+    return pull(deps.pool, deps.storage, deps.schemaVersion, since, limit, scopeOf(req.principal));
   });
 
   if (deps.thumbs) {
-    app.get("/web/session", async () => ({ ok: true, schema_version: deps.schemaVersion }));
-    registerWebRoutes(app, deps.pool, deps.thumbs);
+    app.get("/web/session", async (req) => ({
+      ok: true,
+      schema_version: deps.schemaVersion,
+      auth:
+        req.principal?.kind === "google"
+          ? { kind: "google", user: { id: req.principal.user.id, email: req.principal.user.email } }
+          : { kind: "device" },
+    }));
+    registerWebRoutes(app, deps.pool, deps.thumbs, (req) => scopeOf(req.principal));
   }
 
   return app;
+}
+
+/** Helper for tests that build a bare FastifyRequest-like principal. */
+export function principalScope(req: FastifyRequest): SyncScope {
+  return scopeOf(req.principal);
 }

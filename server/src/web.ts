@@ -1,24 +1,21 @@
 import type { FastifyInstance } from "fastify";
 import type pg from "pg";
+import { isUnowned, ownedByUser } from "./accounts.js";
 import { InkFormatError } from "./ink.js";
 import type { BoardRow, NotebookRow } from "./lww.js";
-import { planMove, type MoveTarget } from "./order.js";
-import { PUSH_LOCK } from "./sync.js";
+import type { SyncScope } from "./sync.js";
 import type { ImageKind, Thumbnailer } from "./thumbs.js";
-import { BadRequest } from "./validate.js";
-
 /**
- * Read endpoints and small edits for the web overview. Edits are ordinary row
- * writes with a fresh rev and a newer updated_at, taken under the push lock, so
- * the Boox pulls them like any other change and LWW treats them like a device edit.
+ * Read endpoints for the web overview. Mutations (rename/move) are refused —
+ * the companion is strictly read-only; the Boox is the only writer.
  */
 
 export const SCRATCHPAD = "scratchpad";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IMAGE_FILE = /^([0-9a-f]{64})\.png$/;
-const MAX_TITLE = 200;
 
 export class NotFound extends Error {}
+export class Forbidden extends Error {}
 
 export interface WebNotebook {
   id: string;
@@ -45,9 +42,19 @@ export interface WebPage {
 }
 
 const LIVE = "b.deleted_at IS NULL AND b.conflict_of IS NULL";
-/** Pages whose notebook is missing or deleted show in the scratchpad, as they do on the device. */
-const IN_SCRATCHPAD = `(b.notebook_id IS NULL OR NOT EXISTS (
-  SELECT 1 FROM notebooks n WHERE n.id = b.notebook_id AND n.deleted_at IS NULL))`;
+
+function scopeParams(scope: SyncScope): { sql: (table: "notebooks" | "boards", alias: string) => string; params: unknown[] } {
+  if (scope.kind === "user") {
+    return {
+      sql: (table, alias) => ownedByUser(table, alias, 1),
+      params: [scope.userId],
+    };
+  }
+  return {
+    sql: (table, alias) => isUnowned(table, alias),
+    params: [],
+  };
+}
 
 function toPage(row: BoardRow): WebPage {
   return {
@@ -74,17 +81,27 @@ function notebookParam(raw: string): string | null {
   return raw.toLowerCase();
 }
 
-export async function listNotebooks(pool: pg.Pool): Promise<WebNotebook[]> {
+export async function listNotebooks(pool: pg.Pool, scope: SyncScope): Promise<WebNotebook[]> {
+  const { sql, params } = scopeParams(scope);
+  const nOwn = sql("notebooks", "n");
+  const bOwn = sql("boards", "b");
+  // Pages whose notebook is missing/deleted/out of scope show in the scratchpad.
+  const inScratchpad = `(b.notebook_id IS NULL OR NOT EXISTS (
+    SELECT 1 FROM notebooks n WHERE n.id = b.notebook_id AND n.deleted_at IS NULL AND ${nOwn}))`;
+
   const scratch = await pool.query<{ page_count: number; last_edited_at: number | null }>(
     `SELECT count(*)::int AS page_count, max(b.updated_at) AS last_edited_at
-     FROM boards b WHERE ${LIVE} AND ${IN_SCRATCHPAD}`,
+     FROM boards b WHERE ${LIVE} AND ${bOwn} AND ${inScratchpad}`,
+    params,
   );
   const notebooks = await pool.query<NotebookRow & { page_count: number; last_edited_at: number | null }>(
     `SELECT n.*, count(b.id)::int AS page_count, max(b.updated_at) AS last_edited_at
-     FROM notebooks n LEFT JOIN boards b ON b.notebook_id = n.id AND ${LIVE}
-     WHERE n.deleted_at IS NULL
+     FROM notebooks n
+     LEFT JOIN boards b ON b.notebook_id = n.id AND ${LIVE} AND ${bOwn}
+     WHERE n.deleted_at IS NULL AND ${nOwn}
      GROUP BY n.id
      ORDER BY n.position, n.id`,
+    params,
   );
   return [
     {
@@ -110,10 +127,11 @@ export async function listNotebooks(pool: pg.Pool): Promise<WebNotebook[]> {
   ];
 }
 
-async function liveNotebook(db: pg.Pool | pg.PoolClient, id: string, lock = false): Promise<NotebookRow> {
+async function liveNotebook(db: pg.Pool | pg.PoolClient, id: string, scope: SyncScope): Promise<NotebookRow> {
+  const { sql, params } = scopeParams(scope);
   const res = await db.query<NotebookRow>(
-    `SELECT * FROM notebooks WHERE id = $1 AND deleted_at IS NULL${lock ? " FOR UPDATE" : ""}`,
-    [id],
+    `SELECT n.* FROM notebooks n WHERE n.id = $${params.length + 1} AND n.deleted_at IS NULL AND ${sql("notebooks", "n")}`,
+    [...params, id],
   );
   if (res.rows.length === 0) {
     throw new NotFound("notebook not found");
@@ -121,145 +139,53 @@ async function liveNotebook(db: pg.Pool | pg.PoolClient, id: string, lock = fals
   return res.rows[0];
 }
 
-async function pagesIn(db: pg.Pool | pg.PoolClient, notebookId: string | null): Promise<BoardRow[]> {
-  const res =
-    notebookId === null
-      ? await db.query<BoardRow>(`SELECT b.* FROM boards b WHERE ${LIVE} AND ${IN_SCRATCHPAD} ORDER BY b.position, b.id`)
-      : await db.query<BoardRow>(`SELECT b.* FROM boards b WHERE ${LIVE} AND b.notebook_id = $1 ORDER BY b.position, b.id`, [
-          notebookId,
-        ]);
+async function pagesIn(db: pg.Pool | pg.PoolClient, notebookId: string | null, scope: SyncScope): Promise<BoardRow[]> {
+  const { sql, params } = scopeParams(scope);
+  const bOwn = sql("boards", "b");
+  const nOwn = sql("notebooks", "n");
+  if (notebookId === null) {
+    const inScratchpad = `(b.notebook_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM notebooks n WHERE n.id = b.notebook_id AND n.deleted_at IS NULL AND ${nOwn}))`;
+    const res = await db.query<BoardRow>(
+      `SELECT b.* FROM boards b WHERE ${LIVE} AND ${bOwn} AND ${inScratchpad} ORDER BY b.position, b.id`,
+      params,
+    );
+    return res.rows;
+  }
+  const res = await db.query<BoardRow>(
+    `SELECT b.* FROM boards b WHERE ${LIVE} AND ${bOwn} AND b.notebook_id = $${params.length + 1} ORDER BY b.position, b.id`,
+    [...params, notebookId],
+  );
   return res.rows;
 }
 
-export async function listPages(pool: pg.Pool, rawNotebookId: string): Promise<WebPage[]> {
+export async function listPages(pool: pg.Pool, rawNotebookId: string, scope: SyncScope): Promise<WebPage[]> {
   const notebookId = notebookParam(rawNotebookId);
   if (notebookId !== null) {
-    await liveNotebook(pool, notebookId);
+    await liveNotebook(pool, notebookId, scope);
   }
-  return (await pagesIn(pool, notebookId)).map(toPage);
+  return (await pagesIn(pool, notebookId, scope)).map(toPage);
 }
 
-async function inPushLock<T>(pool: pg.Pool, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query("SELECT pg_advisory_xact_lock($1)", [PUSH_LOCK]);
-    const result = await fn(client);
-    await client.query("COMMIT");
-    return result;
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-}
-
-export async function renameNotebook(pool: pg.Pool, rawId: string, rawTitle: unknown, now = Date.now()) {
-  const id = notebookParam(rawId);
-  if (id === null) {
-    throw new BadRequest("the scratchpad cannot be renamed");
-  }
-  const title = typeof rawTitle === "string" ? rawTitle.trim() : "";
-  if (title.length === 0 || title.length > MAX_TITLE) {
-    throw new BadRequest(`title must be 1-${MAX_TITLE} characters`);
-  }
-  return inPushLock(pool, async (client) => {
-    const existing = await liveNotebook(client, id, true);
-    if (existing.title === title) {
-      return existing;
-    }
-    const res = await client.query<NotebookRow>(
-      `UPDATE notebooks SET title = $2, updated_at = GREATEST($3::bigint, updated_at + 1), rev = nextval('sync_rev')
-       WHERE id = $1 RETURNING *`,
-      [id, title, now],
-    );
-    return res.rows[0];
-  });
-}
-
-export interface MoveRequest {
-  notebookId: string | null;
-  target: MoveTarget;
-}
-
-export function parseMoveBody(raw: unknown): MoveRequest {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-    throw new BadRequest("body must be an object");
-  }
-  const body = raw as Record<string, unknown>;
-  const nb = body.notebook_id;
-  let notebookId: string | null;
-  if (nb === null || nb === SCRATCHPAD) {
-    notebookId = null;
-  } else if (typeof nb === "string" && UUID.test(nb)) {
-    notebookId = nb.toLowerCase();
-  } else {
-    throw new BadRequest("notebook_id must be a notebook id, \"scratchpad\" or null");
-  }
-  let target: MoveTarget;
-  if (!("after_id" in body) || body.after_id === undefined) {
-    target = { kind: "end" };
-  } else if (body.after_id === null) {
-    target = { kind: "start" };
-  } else if (typeof body.after_id === "string" && UUID.test(body.after_id)) {
-    target = { kind: "after", id: body.after_id.toLowerCase() };
-  } else {
-    throw new BadRequest("after_id must be a page id, null (first) or omitted (last)");
-  }
-  return { notebookId, target };
-}
-
-export async function movePage(pool: pg.Pool, rawPageId: string, move: MoveRequest, now = Date.now()) {
-  if (!UUID.test(rawPageId)) {
-    throw new NotFound("page not found");
-  }
-  const pageId = rawPageId.toLowerCase();
-  return inPushLock(pool, async (client) => {
-    const page = (
-      await client.query<BoardRow>(`SELECT * FROM boards b WHERE b.id = $1 AND ${LIVE} FOR UPDATE`, [pageId])
-    ).rows[0];
-    if (!page) {
-      throw new NotFound("page not found");
-    }
-    if (move.notebookId !== null) {
-      await liveNotebook(client, move.notebookId);
-    }
-    const targetPages = await pagesIn(client, move.notebookId);
-    const inTarget = targetPages.some((p) => p.id === pageId);
-    const plan = planMove(targetPages, { ...page, inTarget }, move.target);
-    if (plan.kind === "bad_anchor") {
-      throw new BadRequest("after_id is not a live page in the target notebook");
-    }
-    if (plan.kind === "noop" && page.notebook_id === move.notebookId) {
-      return { status: "unchanged" as const, page: toPage(page) };
-    }
-    const position = plan.kind === "write" ? plan.position : page.position;
-    const res = await client.query<BoardRow>(
-      `UPDATE boards SET notebook_id = $2, position = $3,
-         updated_at = GREATEST($4::bigint, updated_at + 1), rev = nextval('sync_rev')
-       WHERE id = $1 RETURNING *`,
-      [pageId, move.notebookId, position, now],
-    );
-    return { status: "moved" as const, page: toPage(res.rows[0]) };
-  });
-}
-
-export function registerWebRoutes(app: FastifyInstance, pool: pg.Pool, thumbs: Thumbnailer): void {
-  app.get("/web/notebooks", async () => ({ notebooks: await listNotebooks(pool) }));
+export function registerWebRoutes(
+  app: FastifyInstance,
+  pool: pg.Pool,
+  thumbs: Thumbnailer,
+  scopeOf: (req: { principal?: import("./auth.js").AuthPrincipal }) => SyncScope,
+): void {
+  app.get("/web/notebooks", async (req) => ({ notebooks: await listNotebooks(pool, scopeOf(req)) }));
 
   app.get<{ Params: { id: string } }>("/web/notebooks/:id/pages", async (req) => ({
     notebook_id: req.params.id,
-    pages: await listPages(pool, req.params.id),
+    pages: await listPages(pool, req.params.id, scopeOf(req)),
   }));
 
-  app.patch<{ Params: { id: string }; Body: { title?: unknown } }>("/web/notebooks/:id", async (req) => {
-    const row = await renameNotebook(pool, req.params.id, req.body?.title);
-    return { notebook: { id: row.id, title: row.title, updated_at: row.updated_at, rev: row.rev } };
-  });
+  app.patch("/web/notebooks/:id", async (_req, reply) =>
+    reply.code(405).send({ error: "read_only", message: "The web companion cannot rename notebooks." }),
+  );
 
-  app.post<{ Params: { id: string } }>("/web/pages/:id/move", async (req) =>
-    movePage(pool, req.params.id, parseMoveBody(req.body)),
+  app.post("/web/pages/:id/move", async (_req, reply) =>
+    reply.code(405).send({ error: "read_only", message: "The web companion cannot move or reorder pages." }),
   );
 
   const image = (kind: ImageKind) =>

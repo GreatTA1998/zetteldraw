@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { planMove, positionBetween, type Placed } from "../../src/order.js";
+import { parseMoveBody, planMove, positionBetween, type Placed } from "../../src/order.js";
 import { BadRequest } from "../../src/validate.js";
-import { parseMoveBody } from "../../src/web.js";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const page = (n: number, position: string): Placed => ({ id: id(n), position });

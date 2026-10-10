@@ -1,14 +1,7 @@
 "use client";
 
-import { useDroppable } from "@dnd-kit/core";
-import { BookOpen, Inbox, LogOut, MoreHorizontal, Pencil } from "lucide-react";
+import { BookOpen, Inbox, LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Notebook } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -16,14 +9,11 @@ import { cn } from "@/lib/utils";
 interface Props {
   notebooks: Notebook[] | undefined;
   selectedId: string | undefined;
-  dragging: boolean;
   onSelect: (id: string) => void;
-  onRename: (notebook: Notebook) => void;
-  /** Omitted when the site uses a shared token and has no sign-in. */
   onSignOut?: () => void;
 }
 
-export function NotebookSidebar({ notebooks, selectedId, dragging, onSelect, onRename, onSignOut }: Props) {
+export function NotebookSidebar({ notebooks, selectedId, onSelect, onSignOut }: Props) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-14 shrink-0 items-center gap-2 px-4">
@@ -47,9 +37,7 @@ export function NotebookSidebar({ notebooks, selectedId, dragging, onSelect, onR
                 <NotebookItem
                   notebook={nb}
                   selected={nb.id === selectedId}
-                  dragging={dragging}
                   onSelect={() => onSelect(nb.id)}
-                  onRename={() => onRename(nb)}
                 />
               </li>
             ))}
@@ -61,14 +49,6 @@ export function NotebookSidebar({ notebooks, selectedId, dragging, onSelect, onR
           </ul>
         )}
       </nav>
-      <div
-        className={cn(
-          "mx-2 mb-2 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground transition-opacity",
-          dragging ? "opacity-100" : "pointer-events-none h-0 overflow-hidden border-0 p-0 opacity-0",
-        )}
-      >
-        Drop on a notebook to move the page there.
-      </div>
       {onSignOut && (
         <div className="border-t p-2">
           <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground" onClick={onSignOut}>
@@ -84,68 +64,25 @@ export function NotebookSidebar({ notebooks, selectedId, dragging, onSelect, onR
 function NotebookItem({
   notebook,
   selected,
-  dragging,
   onSelect,
-  onRename,
 }: {
   notebook: Notebook;
   selected: boolean;
-  dragging: boolean;
   onSelect: () => void;
-  onRename: () => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `nb:${notebook.id}`, disabled: selected });
   const Icon = notebook.kind === "scratchpad" ? Inbox : BookOpen;
   return (
-    <div
-      ref={setNodeRef}
+    <button
+      type="button"
+      onClick={onSelect}
       className={cn(
-        "group relative flex items-center rounded-lg transition-colors",
-        selected ? "bg-accent text-accent-foreground" : "hover:bg-muted",
-        dragging && !selected && "ring-1 ring-border ring-inset",
-        isOver && "bg-primary text-primary-foreground ring-primary hover:bg-primary",
+        "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm transition-colors",
+        selected ? "bg-accent font-medium text-accent-foreground" : "hover:bg-muted",
       )}
     >
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-current={selected ? "page" : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <Icon className="size-4 shrink-0 opacity-70" />
-        <span className={cn("truncate", selected && "font-medium")}>{notebook.title}</span>
-        <span
-          className={cn(
-            "ml-auto shrink-0 text-xs tabular-nums text-muted-foreground",
-            isOver && "text-primary-foreground",
-            notebook.kind === "notebook" && "group-hover:opacity-0 group-has-[[aria-expanded=true]]:opacity-0",
-          )}
-        >
-          {notebook.page_count}
-        </span>
-      </button>
-      {notebook.kind === "notebook" && (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={`Actions for ${notebook.title}`}
-                className="absolute right-1.5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100"
-              />
-            }
-          >
-            <MoreHorizontal />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem onClick={onRename}>
-              <Pencil />
-              Rename
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
-    </div>
+      <Icon className="size-4 shrink-0 opacity-70" />
+      <span className="min-w-0 flex-1 truncate">{notebook.title}</span>
+      <span className="tabular-nums text-xs text-muted-foreground">{notebook.page_count}</span>
+    </button>
   );
 }
