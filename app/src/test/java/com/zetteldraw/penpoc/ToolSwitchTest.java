@@ -100,19 +100,6 @@ public class ToolSwitchTest {
     }
 
     @Test
-    public void setPenColorReachesTouchHelperWhilePenIsSelected() {
-        PageInkView ink = show(laidOut(new Board("a", 1L)));
-        settle();
-        assertEquals(android.graphics.Color.BLACK, pen.strokeColor);
-        ink.setPenColor(0xFF9ED9C8);
-        settle();
-        assertEquals(0xFF9ED9C8, ink.penColor());
-        assertEquals(0xFF9ED9C8, pen.strokeColor);
-        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
-        assertTrue(pen.brush);
-    }
-
-    @Test
     public void penToLassoAppliesEvenWhenThePenStyleIsCachedAndDrawingIsOff() {
         PageInkView ink = show(laidOut(new Board("a", 1L)));
         settle();

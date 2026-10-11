@@ -108,7 +108,8 @@ public final class InkRenderer {
         if (points.isEmpty()) {
             return;
         }
-        paint.setColor(stroke.color);
+        // Monochrome only — ignore any historical per-stroke ARGB from ZDI v3.
+        paint.setColor(Color.BLACK);
         if (points.size() == 1) {
             TouchPoint p = points.get(0);
             paint.setStrokeWidth(widths[0]);

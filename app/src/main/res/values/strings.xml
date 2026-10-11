@@ -3,8 +3,6 @@
     <string name="app_name">Zetteldraw</string>
     <string name="scratchpad">Scratchpad</string>
     <string name="pen">Pen</string>
-    <string name="pen_colors">Colors</string>
-    <string name="pen_stabilization_note">Stroke stabilization stays at the firmware default (TouchHelper has no public setter).</string>
     <string name="eraser">Eraser</string>
     <string name="lasso">Lasso</string>
     <string name="undo">Undo</string>

@@ -426,9 +426,8 @@ final class SurfaceWorker {
 
         @Override
         public void open(Rect limitRect, List<Rect> excludes) {
-            ensureColorScribble();
             call("openRawDrawing", () -> helper.setStrokeWidth(InkRenderer.BASE_WIDTH_PX)
-                    .setStrokeColor(PenPalette.DEFAULT_COLOR)
+                    .setStrokeColor(Color.BLACK)
                     .setLimitRect(limitRect, excludes)
                     .openRawDrawing());
             call("setPenUpRefreshEnabled", () -> helper.setPenUpRefreshEnabled(true));
@@ -440,50 +439,6 @@ final class SurfaceWorker {
         @Override
         public void close() {
             call("closeRawDrawing", helper::closeRawDrawing);
-            call("setDisplaySchemeNormal", () -> {
-                try {
-                    EpdController.setDisplayScheme(EpdController.SCHEME_NORMAL);
-                } catch (RuntimeException | LinkageError ignored) {
-                    // Not an Onyx device.
-                }
-            });
-            call("disableColorCU", () -> {
-                try {
-                    EpdController.disableColorCU();
-                } catch (RuntimeException | LinkageError ignored) {
-                    // Mono Boox / non-Onyx.
-                }
-            });
-        }
-
-        /**
-         * Kaleido color live ink needs Color CU + scribble scheme + enterScribbleMode.
-         * SFTouchRender.pauseRawDrawingRender calls leaveScribbleMode on every pen-off
-         * (full frames, menus) but resume never re-enters — so v47's one-shot enable at
-         * open died after the first pause and color overlay went blank again.
-         */
-        private void ensureColorScribble() {
-            call("enableColorCU", () -> {
-                try {
-                    EpdController.enableColorCU();
-                } catch (RuntimeException | LinkageError ignored) {
-                    // Mono Boox / non-Onyx: no Color CU.
-                }
-            });
-            call("setDisplayScheme", () -> {
-                try {
-                    EpdController.setDisplayScheme(EpdController.SCHEME_SCRIBBLE);
-                } catch (RuntimeException | LinkageError ignored) {
-                    // Not an Onyx device.
-                }
-            });
-            call("enterScribbleMode", () -> {
-                try {
-                    EpdController.enterScribbleMode(surfaceView);
-                } catch (RuntimeException | LinkageError ignored) {
-                    // Not an Onyx device.
-                }
-            });
         }
 
         @Override
@@ -498,50 +453,17 @@ final class SurfaceWorker {
 
         @Override
         public void setStyle(Style st) {
-            // Opaque ARGB — Kaleido CU ignores / drops translucent live ink.
-            final int color = st.color | 0xFF000000;
-            final boolean colorInk = color != PenPalette.DEFAULT_COLOR;
-            final boolean live = st.brush && st.render;
-            // Do not enterScribbleMode while the pen is off: that freezes view
-            // posting and would block the full-frame surface paint that runs with
-            // raw drawing disabled.
-            if (live) {
-                ensureColorScribble();
-            }
-            // Boox-EinkDraw: width + color, openRawDrawing (latches chip), then style
-            // and re-apply. Without reopen, non-black setStrokeColor often never shows
-            // in the live overlay on Kaleido 3.
-            call("setStrokeWidth", () -> helper.setStrokeWidth(st.width));
-            call("setStrokeColor", () -> helper.setStrokeColor(color));
-            if (colorInk && live) {
-                call("openRawDrawing", helper::openRawDrawing);
-            }
+            // Monochrome only: always black. Color CU / non-black latching removed.
             call("setStrokeStyle", () -> helper.setStrokeStyle(st.strokeStyle));
             call("setStrokeWidth", () -> helper.setStrokeWidth(st.width));
-            call("setStrokeColor", () -> helper.setStrokeColor(color));
+            call("setStrokeColor", () -> helper.setStrokeColor(Color.BLACK));
             call("setBrushRawDrawingEnabled", () -> helper.setBrushRawDrawingEnabled(st.brush));
             call("setRawDrawingRenderEnabled", () -> helper.setRawDrawingRenderEnabled(st.render));
-            // openRawDrawing clears TouchHelper's enabled flags; put scribble back if
-            // this style wants a live pen. Re-enter Color CU after — render enable
-            // alone does not call enterScribbleMode.
-            if (live) {
-                call("setRawDrawingEnabled", () -> helper.setRawDrawingEnabled(true));
-                ensureColorScribble();
-                call("setStrokeColor", () -> helper.setStrokeColor(color));
-                call("enableSideBtnErase", () -> helper.enableSideBtnErase(true));
-            }
         }
 
         @Override
         public void setRawDrawingEnabled(boolean on) {
-            if (on) {
-                // Pen-off left scribble mode; must re-enter before color live ink works.
-                ensureColorScribble();
-            }
             call("setRawDrawingEnabled", () -> helper.setRawDrawingEnabled(on));
-            if (on) {
-                ensureColorScribble();
-            }
         }
 
         @Override

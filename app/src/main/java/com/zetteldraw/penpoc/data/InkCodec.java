@@ -36,7 +36,8 @@ import java.util.zip.Inflater;
  * Widths are not stored; {@link InkRenderer#strokeFrom} recomputes them on load.
  * Version 1 files have no stroke ids; they get ids derived from the stroke's
  * index and points, so every device decoding the same file agrees on them.
- * Version 2 adds ids. Version 3 adds per-stroke ARGB color (default black).
+ * Version 2 adds ids. Version 3 has a per-stroke ARGB field that is always
+ * written/read as black (color UI removed; trailer kept for format compat).
  */
 public final class InkCodec {
     public static final int VERSION = 3;
@@ -63,7 +64,8 @@ public final class InkCodec {
                 UUID id = uuidOf(stroke.id);
                 out.writeLong(id.getMostSignificantBits());
                 out.writeLong(id.getLeastSignificantBits());
-                out.writeInt(stroke.color);
+                // v3 trailer kept for format compat; always black (color UI removed).
+                out.writeInt(Color.BLACK);
                 List<TouchPoint> points = stroke.points;
                 out.writeInt(points.size());
                 long t0 = points.isEmpty() ? 0L : points.get(0).timestamp;
@@ -107,7 +109,9 @@ public final class InkCodec {
             ArrayList<InkRenderer.InkStroke> strokes = new ArrayList<>(Math.min(strokeCount, 1 << 16));
             for (int s = 0; s < strokeCount; s++) {
                 String id = hasIds ? new UUID(in.getLong(), in.getLong()).toString() : null;
-                int color = hasColor ? in.getInt() : Color.BLACK;
+                if (hasColor) {
+                    in.getInt(); // skip legacy ARGB; ink is monochrome again
+                }
                 int n = in.getInt();
                 long t0 = in.getLong();
                 if (n < 0 || (long) n * POINT_BYTES > in.remaining()) {
@@ -126,7 +130,7 @@ public final class InkCodec {
                 }
                 if (!points.isEmpty()) {
                     strokes.add(InkRenderer.strokeOwning(
-                            id != null ? id : legacyId(s, points), points, color));
+                            id != null ? id : legacyId(s, points), points, Color.BLACK));
                 }
             }
             return strokes;

@@ -1229,8 +1229,8 @@ public final class NotebookPaper {
                 out.writeInt((int) (p.timestamp - t0));
                 out.writeFloat(widths[i]);
             }
-            // Optional trailer: older readers ignore leftover payload bytes.
-            out.writeInt(stroke.color);
+            // Optional trailer kept for format compat; always black (color UI removed).
+            out.writeInt(android.graphics.Color.BLACK);
             out.flush();
         } catch (IOException e) {
             throw new IllegalStateException(e);
@@ -1255,11 +1255,10 @@ public final class NotebookPaper {
             widths[i] = in.getFloat();
             points.add(new TouchPoint(x, y, pressure, size, tiltX, tiltY, t));
         }
-        int color = android.graphics.Color.BLACK;
         if (in.remaining() >= 4) {
-            color = in.getInt();
+            in.getInt(); // skip legacy ARGB trailer
         }
-        return InkRenderer.strokeWithWidths(id, points, widths, color);
+        return InkRenderer.strokeWithWidths(id, points, widths, android.graphics.Color.BLACK);
     }
 
     private static byte[] idsPayload(List<String> ids) {

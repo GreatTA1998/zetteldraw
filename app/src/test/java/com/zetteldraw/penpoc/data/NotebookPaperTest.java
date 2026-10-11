@@ -74,7 +74,7 @@ public class NotebookPaperTest {
     }
 
     @Test
-    public void strokeColorSurvivesLogReplay() throws Exception {
+    public void strokeColorTrailerReplaysAsBlack() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(200);
         ArrayList<TouchPoint> points = new ArrayList<>();
         points.add(new TouchPoint(10f, 20f, 0.5f, 1f, 0, 0, 1_000L));
@@ -83,7 +83,7 @@ public class NotebookPaperTest {
                 "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", points, 0xFF9ED9C8);
         paper.appendStroke(colored);
         NotebookPaper again = NotebookPaper.replay(paper.bytes());
-        assertEquals(0xFF9ED9C8, again.strokes().get(0).color);
+        assertEquals(android.graphics.Color.BLACK, again.strokes().get(0).color);
         assertEquals(colored.id, again.strokes().get(0).id);
     }
 
