@@ -75,6 +75,13 @@ final class PageInkView extends FrameLayout {
          */
         default void onSelectionScroll(int scrollY) {
         }
+
+        /**
+         * The dashed selection box moved (drag or edge scroll). Reposition any
+         * UI anchored to {@link #selectionBoundsOnSurface()}.
+         */
+        default void onSelectionBoundsChanged() {
+        }
     }
 
     enum Tool { PEN, ERASER, LASSO }
@@ -160,10 +167,21 @@ final class PageInkView extends FrameLayout {
     /** Pointer in the surface while a selection gesture is down; NaN when idle. */
     private float edgePointerX = Float.NaN;
     private float edgePointerY = Float.NaN;
+    /**
+     * True while {@link #edgeScrollTick} is posted. MOVE must not remove/repost
+     * it — stylus streams continuous MOVE events on Boox, which used to reset
+     * the 50 ms delay forever so the notebook never edge-scrolled.
+     */
+    private boolean edgeScrollScheduled;
     /** Deep copies of strokes in paper (or page) coordinates for paste. */
     private ArrayList<InkRenderer.InkStroke> clipboard = new ArrayList<>();
     /** True when the clipboard came from a one-sheet paper selection. */
     private boolean clipboardAcrossPaper;
+    /**
+     * When true and there is no selection, a finger tap on the scroller pastes
+     * at that point (Notes “Tap anywhere to paste”).
+     */
+    private boolean pasteArmed;
 
     PageInkView(Context context) {
         super(context);
@@ -540,6 +558,30 @@ final class PageInkView extends FrameLayout {
         return selection != null;
     }
 
+    /** Arm finger-tap paste when the top instructional bar is showing. */
+    void setPasteArmed(boolean armed) {
+        pasteArmed = armed;
+    }
+
+    /** Finger tap should paste (no selection; clipboard + instructional bar). */
+    boolean wantsPasteTap() {
+        return pasteArmed && selection == null && !clipboard.isEmpty();
+    }
+
+    /**
+     * Dashed selection box in surface / drawing-area coordinates, or null when
+     * nothing is selected.
+     */
+    RectF selectionBoundsOnSurface() {
+        Selection s = selection;
+        return s == null ? null : new RectF(boxOnSurface(s));
+    }
+
+    /** Current ink viewport scroll (paper y of the top of the surface). */
+    int contentScrollY() {
+        return shown.scrollY;
+    }
+
     boolean canUndo() {
         return history.canUndo();
     }
@@ -652,7 +694,7 @@ final class PageInkView extends FrameLayout {
     void close() {
         main.removeCallbacks(resumeAfterLasso);
         removeCallbacks(dragFrame);
-        removeCallbacks(edgeScrollTick);
+        stopEdgeScroll();
         main.removeCallbacks(applyViewport);
         main.removeCallbacks(applyDespiteStuckPen);
         applyPosted = false;
@@ -1247,6 +1289,13 @@ final class PageInkView extends FrameLayout {
                 stopEdgeScroll();
                 if (s.dragging) {
                     commitSelection();
+                } else if (!clipboard.isEmpty()) {
+                    // Notes: tap outside the box pastes at the tap (clipboard stays).
+                    dismissSelectionForPaste();
+                    if (listener != null) {
+                        listener.onLassoCancelled();
+                    }
+                    pasteClipboardAt(x, y);
                 } else {
                     cancelSelection();
                 }
@@ -1280,6 +1329,9 @@ final class PageInkView extends FrameLayout {
         s.dx = offset[0];
         s.dy = offset[1];
         scheduleDragFrame();
+        if (listener != null) {
+            listener.onSelectionBoundsChanged();
+        }
     }
 
     private float paperBottom() {
@@ -1299,15 +1351,16 @@ final class PageInkView extends FrameLayout {
     }
 
     private void armEdgeScroll() {
-        removeCallbacks(edgeScrollTick);
-        if (selection == null || Float.isNaN(edgePointerY)) {
+        if (selection == null || Float.isNaN(edgePointerY) || edgeScrollScheduled) {
             return;
         }
+        edgeScrollScheduled = true;
         postDelayed(edgeScrollTick, EDGE_SCROLL_MS);
     }
 
     private void stopEdgeScroll() {
         removeCallbacks(edgeScrollTick);
+        edgeScrollScheduled = false;
         edgePointerX = Float.NaN;
         edgePointerY = Float.NaN;
     }
@@ -1315,12 +1368,14 @@ final class PageInkView extends FrameLayout {
     private void onEdgeScrollTick() {
         Selection s = selection;
         if (s == null || Float.isNaN(edgePointerX) || Float.isNaN(edgePointerY) || !s.dragging) {
+            edgeScrollScheduled = false;
             return;
         }
         float density = getResources().getDisplayMetrics().density;
         float zone = EDGE_ZONE_DP * density;
         int surfaceH = surfaceView.getHeight();
         if (surfaceH <= 0) {
+            edgeScrollScheduled = false;
             return;
         }
         int step = 0;
@@ -1332,8 +1387,12 @@ final class PageInkView extends FrameLayout {
         if (step != 0) {
             scrollSelectionBy(step);
             applySelectionDrag(s, edgePointerX, edgePointerY);
+            // Stay on the metronome while the pointer remains in the band.
+            postDelayed(edgeScrollTick, EDGE_SCROLL_MS);
+        } else {
+            // Left the band — next MOVE that re-enters will arm again.
+            edgeScrollScheduled = false;
         }
-        armEdgeScroll();
     }
 
     /**
@@ -1359,6 +1418,7 @@ final class PageInkView extends FrameLayout {
         selection.scrolled = true;
         if (listener != null) {
             listener.onSelectionScroll(next);
+            listener.onSelectionBoundsChanged();
         }
     }
 
@@ -1458,6 +1518,20 @@ final class PageInkView extends FrameLayout {
     }
 
     private void cancelSelection() {
+        if (selection == null) {
+            return;
+        }
+        dismissSelectionForPaste();
+        if (listener != null) {
+            listener.onLassoCancelled();
+        }
+    }
+
+    /**
+     * Ends the selection and repaints. Caller fires {@link Listener#onLassoCancelled}
+     * when the UI should drop the floating menu (including before a paste-at-tap).
+     */
+    private void dismissSelectionForPaste() {
         Selection s = selection;
         if (s == null) {
             return;
@@ -1473,9 +1547,6 @@ final class PageInkView extends FrameLayout {
         } else {
             requestFrame(false, dirty, UpdateMode.GC);
         }
-        if (listener != null) {
-            listener.onLassoCancelled();
-        }
     }
 
     private void endSelection() {
@@ -1490,6 +1561,12 @@ final class PageInkView extends FrameLayout {
 
     boolean hasClipboard() {
         return !clipboard.isEmpty();
+    }
+
+    /** Clears the in-app lasso clipboard (Notes “Clear clipboard”). */
+    void clearClipboard() {
+        clipboard = new ArrayList<>();
+        clipboardAcrossPaper = false;
     }
 
     /** Deep-copies the current selection into the clipboard. False when nothing is selected. */
@@ -1516,6 +1593,41 @@ final class PageInkView extends FrameLayout {
             return false;
         }
         return deleteSelection();
+    }
+
+    /**
+     * Places a nudged duplicate of the selection in place (keeps the original).
+     * Does not use the clipboard.
+     */
+    boolean duplicateSelection() {
+        Selection s = selection;
+        if (s == null) {
+            return false;
+        }
+        ArrayList<InkRenderer.InkStroke> picked = selectedStrokes(s);
+        if (picked.isEmpty()) {
+            return false;
+        }
+        float nudge = 28f * getResources().getDisplayMetrics().density;
+        RectF box = boxOnSurface(s);
+        float destX = box.centerX() + nudge;
+        float destY = box.centerY() + nudge;
+        // Temporarily hold strokes so pasteAt can place them; restore clipboard after.
+        ArrayList<InkRenderer.InkStroke> saved = clipboard;
+        boolean savedPaper = clipboardAcrossPaper;
+        clipboard = new ArrayList<>(picked.size());
+        for (InkRenderer.InkStroke stroke : picked) {
+            clipboard.add(stroke.duplicated(0f, 0f));
+        }
+        clipboardAcrossPaper = s.acrossPaper;
+        dismissSelectionForPaste();
+        if (listener != null) {
+            listener.onLassoCancelled();
+        }
+        boolean ok = pasteClipboardAt(destX, destY);
+        clipboard = saved;
+        clipboardAcrossPaper = savedPaper;
+        return ok;
     }
 
     /** Removes the selected strokes. */
@@ -1588,26 +1700,37 @@ final class PageInkView extends FrameLayout {
         if (clipboard.isEmpty() || shown.isEmpty()) {
             return false;
         }
+        float destCx = surfaceView.getWidth() * 0.5f;
+        float destCy = surfaceView.getHeight() * 0.5f;
+        return pasteClipboardAt(destCx, destCy);
+    }
+
+    /**
+     * Pastes so the clipboard bounds are centered on {@code (surfaceX, surfaceY)}
+     * in surface coordinates (converted to paper with the current scroll).
+     */
+    boolean pasteClipboardAt(float surfaceX, float surfaceY) {
+        if (clipboard.isEmpty() || shown.isEmpty()) {
+            return false;
+        }
         if (selection != null) {
             cancelSelection();
         }
         if (onPaper(shown) && clipboardAcrossPaper) {
-            return pasteOnPaper();
+            return pasteOnPaperAt(surfaceX, surfaceY + shown.scrollY);
         }
-        return pasteOnPage();
+        return pasteOnPageAt(surfaceX, surfaceY);
     }
 
-    private boolean pasteOnPaper() {
+    private boolean pasteOnPaperAt(float paperX, float paperY) {
         Board page = shown.page(0);
         NotebookPaper paper = page.paper;
         if (paper == null) {
             return false;
         }
         RectF src = Lasso.boundsOf(clipboard);
-        float destCx = surfaceView.getWidth() * 0.5f;
-        float destCy = shown.scrollY + surfaceView.getHeight() * 0.5f;
-        float dx = destCx - src.centerX();
-        float dy = destCy - src.centerY();
+        float dx = paperX - src.centerX();
+        float dy = paperY - src.centerY();
         float bottom = src.bottom + dy;
         String adopt = null;
         if (bottom >= paper.origin(paper.sliceCount())) {
@@ -1636,15 +1759,15 @@ final class PageInkView extends FrameLayout {
         return true;
     }
 
-    private boolean pasteOnPage() {
-        int index = shown.pageIndexAt(surfaceView.getHeight() * 0.5f);
+    private boolean pasteOnPageAt(float surfaceX, float surfaceY) {
+        int index = shown.pageIndexAt(surfaceY);
         if (index < 0) {
             index = shown.firstVisible();
         }
         Board page = shown.page(index);
         if (page.paper != null) {
             // Clipboard from a legacy page into a one-sheet notebook: shift into
-            // paper coords at the viewport center.
+            // paper coords, then paste at the tap in paper space.
             clipboardAcrossPaper = true;
             ArrayList<InkRenderer.InkStroke> shifted = new ArrayList<>(clipboard.size());
             float origin = page.paperOrigin;
@@ -1652,12 +1775,15 @@ final class PageInkView extends FrameLayout {
                 shifted.add(stroke.duplicated(0f, origin));
             }
             clipboard = shifted;
-            return pasteOnPaper();
+            return pasteOnPaperAt(surfaceX, surfaceY + shown.scrollY);
         }
         RectF src = Lasso.boundsOf(clipboard);
-        float[] nudge = Lasso.clampOffset(src, 24f, 24f, surfaceView.getWidth(), shown.layout.heights[index]);
-        float dx = nudge[0] != 0f || nudge[1] != 0f ? nudge[0] : 24f;
-        float dy = nudge[0] != 0f || nudge[1] != 0f ? nudge[1] : 24f;
+        float pageY = surfaceY - shown.pageTop(index);
+        float dx = surfaceX - src.centerX();
+        float dy = pageY - src.centerY();
+        float[] clamped = Lasso.clampOffset(src, dx, dy, surfaceView.getWidth(), shown.layout.heights[index]);
+        dx = clamped[0];
+        dy = clamped[1];
         ArrayList<InkRenderer.InkStroke> added = new ArrayList<>();
         for (InkRenderer.InkStroke stroke : clipboard) {
             InkRenderer.InkStroke copy = stroke.duplicated(dx, dy);

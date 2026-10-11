@@ -14,14 +14,18 @@
     <string name="lasso_edit">Selection</string>
     <string name="cut">Cut</string>
     <string name="copy">Copy</string>
+    <string name="duplicate">Dup</string>
     <string name="paste">Paste</string>
-    <string name="lasso_copied">Copied</string>
-    <string name="lasso_cut">Cut</string>
+    <string name="tap_anywhere_to_paste">Tap anywhere to paste</string>
+    <string name="clear_clipboard">Clear clipboard</string>
+    <string name="lasso_copied">Copied — tap anywhere to paste</string>
+    <string name="lasso_cut">Cut — tap anywhere to paste</string>
     <string name="lasso_deleted">Deleted</string>
     <string name="lasso_pasted">Pasted</string>
+    <string name="lasso_duplicated">Duplicated</string>
     <plurals name="lasso_selected">
-        <item quantity="one">1 stroke selected. Drag, or Cut / Copy / Delete</item>
-        <item quantity="other">%1$d strokes selected. Drag, or Cut / Copy / Delete</item>
+        <item quantity="one">1 stroke selected. Drag, or use the menu above</item>
+        <item quantity="other">%1$d strokes selected. Drag, or use the menu above</item>
     </plurals>
     <string name="undo_nothing">Nothing left to undo</string>
     <string name="redo_nothing">Nothing left to redo</string>

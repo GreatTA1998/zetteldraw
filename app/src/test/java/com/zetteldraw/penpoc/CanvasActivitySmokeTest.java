@@ -30,6 +30,7 @@ import org.robolectric.shadows.ShadowLooper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /** Drives the notebook UI without a Boox: create, rename, delete via the in-window forms. */
 @RunWith(RobolectricTestRunner.class)
@@ -411,7 +412,7 @@ public class CanvasActivitySmokeTest {
         idle();
         assertTrue(ink.hasSelection());
         assertTrue(ink.capturesTouches());
-        assertNotNull(find(root, "1 stroke selected. Drag, or Cut / Copy / Delete"));
+        assertNotNull(find(root, "1 stroke selected. Drag, or use the menu above"));
 
         touch(ink, MotionEvent.ACTION_DOWN, 210f, 205f);
         touch(ink, MotionEvent.ACTION_MOVE, 260f, 235f);
@@ -452,6 +453,64 @@ public class CanvasActivitySmokeTest {
         assertFalse("tap outside cancels", ink.hasSelection());
         assertEquals(original.points.get(0).y, page.paper.stroke(original.id).points.get(0).y, 0.001f);
         assertEquals(PageInkView.Tool.LASSO, ink.tool());
+
+        controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void lassoEdgeScrollAdvancesUnderContinuousMove() {
+        Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        Board page = repo.scratchpadPages().get(0);
+        page.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, 200f));
+        repo.saveInk(page);
+        // Second inked slice so the sheet is taller than one viewport.
+        Board second = repo.scratchpadPages().get(repo.scratchpadPages().size() - 1);
+        second.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, 200f));
+        repo.saveInk(second);
+        BoardRepository.NotebookInfo notebook = repo.createNotebook("edge-scroll");
+        for (Board each : new ArrayList<>(repo.scratchpadPages())) {
+            if (!each.isBlank()) {
+                repo.movePageToNotebook(each.id, notebook.id);
+            }
+        }
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+        click(root, "edge-scroll");
+        idle();
+        clickDesc(root, "Lasso");
+        PageInkView ink = findInk(root);
+        assertNotNull(ink);
+        ink.setContentScrollY(0);
+        idle();
+
+        ArrayList<TouchPoint> outline = new ArrayList<>();
+        outline.add(new TouchPoint(150f, 150f, 0.5f, 1f, 0, 0, 1L));
+        outline.add(new TouchPoint(300f, 150f, 0.5f, 1f, 0, 0, 2L));
+        outline.add(new TouchPoint(300f, 300f, 0.5f, 1f, 0, 0, 3L));
+        outline.add(new TouchPoint(150f, 300f, 0.5f, 1f, 0, 0, 4L));
+        ink.finishLasso(outline);
+        idle();
+        assertTrue(ink.hasSelection());
+
+        int before = ink.contentScrollY();
+        int surfaceH = Math.max(ink.getHeight(), 1);
+        float edgeY = surfaceH - 8f;
+        touch(ink, MotionEvent.ACTION_DOWN, 210f, 205f);
+        // Stylus-like stream: MOVE every 10 ms. The old armEdgeScroll reset the
+        // 50 ms delay on each MOVE so the tick never ran; the metronome must keep
+        // ticking through this.
+        for (int i = 0; i < 20; i++) {
+            touch(ink, MotionEvent.ACTION_MOVE, 210f, edgeY);
+            ShadowLooper.idleMainLooper(10, TimeUnit.MILLISECONDS);
+        }
+        assertTrue("edge scroll should advance while held at the bottom band (was "
+                        + before + ", now " + ink.contentScrollY() + ")",
+                ink.contentScrollY() > before);
+        touch(ink, MotionEvent.ACTION_UP, 210f, edgeY);
+        idle();
 
         controller.pause().stop().destroy();
     }

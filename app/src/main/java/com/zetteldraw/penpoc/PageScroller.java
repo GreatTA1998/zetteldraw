@@ -2,6 +2,7 @@ package com.zetteldraw.penpoc;
 
 import android.content.Context;
 import android.graphics.Rect;
+import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -17,6 +18,7 @@ final class PageScroller extends ScrollView {
     }
 
     private final Rect hitRect = new Rect();
+    private final GestureDetector pasteTapDetector;
     private View stylusTarget;
     private Listener listener;
     private boolean forwardingStylus;
@@ -26,6 +28,19 @@ final class PageScroller extends ScrollView {
         setFillViewport(true);
         setVerticalScrollBarEnabled(false);
         setOverScrollMode(OVER_SCROLL_NEVER);
+        pasteTapDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onSingleTapUp(MotionEvent e) {
+                if (!(stylusTarget instanceof PageInkView)) {
+                    return false;
+                }
+                PageInkView ink = (PageInkView) stylusTarget;
+                if (!ink.wantsPasteTap()) {
+                    return false;
+                }
+                return ink.pasteClipboardAt(e.getX(), e.getY());
+            }
+        });
     }
 
     void setStylusTarget(View target) {
@@ -49,6 +64,11 @@ final class PageScroller extends ScrollView {
             if (forwardingStylus) {
                 return stylusTarget.dispatchTouchEvent(ev);
             }
+        }
+        if (stylusTarget instanceof PageInkView && ((PageInkView) stylusTarget).wantsPasteTap()
+                && !PageInkView.isStylus(ev)) {
+            // Detect a finger tap without blocking scroll on drag.
+            pasteTapDetector.onTouchEvent(ev);
         }
         return super.dispatchTouchEvent(ev);
     }
