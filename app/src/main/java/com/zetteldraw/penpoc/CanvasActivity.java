@@ -138,6 +138,7 @@ public final class CanvasActivity extends Activity {
     private ImageButton penButton;
     private ImageButton eraserButton;
     private ImageButton lassoButton;
+    private ToolController tools;
     private ImageButton settingsButton;
     private ImageButton undoButton;
     private ImageButton redoButton;
@@ -245,6 +246,17 @@ public final class CanvasActivity extends Activity {
         root.addView(lassoMenu, lassoLp);
 
         inkView = new PageInkView(this);
+        tools = new ToolController(inkView, new ToolController.Host() {
+            @Override
+            public void styleToolButton(ImageButton button, boolean selected) {
+                styleTool(button, selected);
+            }
+
+            @Override
+            public void onAfterToolChanged(PageInkView.Tool tool) {
+                afterToolChanged(tool);
+            }
+        });
         inkView.setListener(new PageInkView.Listener() {
             @Override
             public void onPageChanged(Board page) {
@@ -286,7 +298,7 @@ public final class CanvasActivity extends Activity {
                 showHint("", false);
                 hideLassoMenu();
                 syncPasteInstructBar();
-                setTool(PageInkView.Tool.PEN);
+                tools.setTool(PageInkView.Tool.PEN);
             }
 
             @Override
@@ -345,7 +357,8 @@ public final class CanvasActivity extends Activity {
 
         setContentView(root);
         repository.addRemoteChangeListener(remoteChanged);
-        setTool(PageInkView.Tool.PEN);
+        tools.bind(penButton, eraserButton, lassoButton, toolbar);
+        tools.setTool(PageInkView.Tool.PEN);
         inkView.setPenColor(prefs.getInt(PREF_PEN_COLOR, PenPalette.DEFAULT_COLOR));
         syncHistory();
         syncNav();
@@ -479,14 +492,23 @@ public final class CanvasActivity extends Activity {
             }
         });
         onTap(penButton, v -> {
-            if (inkView.tool() == PageInkView.Tool.PEN) {
+            dismissOverlay();
+            if (tools.tool() == PageInkView.Tool.PEN) {
+                // Re-push fountain so a stuck lasso dash cannot outlive the Pen chrome.
+                tools.reassert();
                 showPenColorMenu();
             } else {
-                setTool(PageInkView.Tool.PEN);
+                tools.setTool(PageInkView.Tool.PEN);
             }
         });
-        onTap(eraserButton, v -> setTool(PageInkView.Tool.ERASER));
-        onTap(lassoButton, v -> setTool(PageInkView.Tool.LASSO));
+        onTap(eraserButton, v -> {
+            dismissOverlay();
+            tools.setTool(PageInkView.Tool.ERASER);
+        });
+        onTap(lassoButton, v -> {
+            dismissOverlay();
+            tools.setTool(PageInkView.Tool.LASSO);
+        });
         settingsButton = iconButton(R.drawable.ic_settings, R.string.settings);
         onTap(settingsButton, v -> showSettings());
         toolbar.addView(undoButton, iconLp(6));
@@ -518,9 +540,13 @@ public final class CanvasActivity extends Activity {
         return lp;
     }
 
-    /** Borderless icon; the active one gets a 2 dp black underline. */
+    /**
+     * Borderless icon; the active one gets a 2 dp black underline.
+     * Always assign a drawable (never null) so e-ink clears the previous
+     * underline when selection moves.
+     */
     private void styleTool(ImageButton button, boolean selected) {
-        button.setBackground(selected ? new Underline(dp(2), dp(10)) : null);
+        button.setBackground(new Underline(dp(2), dp(10), selected));
         button.setImageTintList(ColorStateList.valueOf(Color.BLACK));
         button.setSelected(selected);
     }
@@ -1411,7 +1437,7 @@ public final class CanvasActivity extends Activity {
     private void syncPasteInstructBar() {
         boolean show = inkView != null
                 && inkView.hasClipboard()
-                && inkView.tool() == PageInkView.Tool.LASSO
+                && tools.tool() == PageInkView.Tool.LASSO
                 && modeBar.getVisibility() != View.VISIBLE;
         int next = show ? View.VISIBLE : View.GONE;
         if (pasteInstructBar.getVisibility() != next) {
@@ -2509,19 +2535,8 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    private void setTool(PageInkView.Tool tool) {
-        styleTool(penButton, tool == PageInkView.Tool.PEN);
-        styleTool(eraserButton, tool == PageInkView.Tool.ERASER);
-        styleTool(lassoButton, tool == PageInkView.Tool.LASSO);
-        // A style change takes the firmware pen down until it is applied. The buttons
-        // stay pressable the whole time, including the one that is already selected.
-        penButton.setEnabled(true);
-        penButton.setClickable(true);
-        eraserButton.setEnabled(true);
-        eraserButton.setClickable(true);
-        lassoButton.setEnabled(true);
-        lassoButton.setClickable(true);
-        inkView.setTool(tool);
+    /** Side effects after {@link ToolController} has synced chrome + ink tool. */
+    private void afterToolChanged(PageInkView.Tool tool) {
         if (tool == PageInkView.Tool.LASSO) {
             showHint(getString(R.string.lasso_hint), false);
             if (inkView.hasSelection()) {
@@ -2538,9 +2553,11 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Boox Notes pattern: with Pen already selected, tap Pen again for the color
-     * menu (does not switch tools). Overlay hold + full-surface exclude keep the
-     * menu a stylus hole. Stroke stabilization is not exposed — TouchHelper has
-     * no public setter for it.
+     * menu (does not switch tools). Hosted on {@link #drawingArea} so Pen/Eraser/Lasso
+     * stay tappable above the scrim — a root scrim swallowed tool taps and left the
+     * underline on Pen while a later stroke could still use a stuck dash. Overlay
+     * hold + full-surface exclude keep the menu a stylus hole. Stroke stabilization
+     * is not exposed — TouchHelper has no public setter for it.
      */
     private void showPenColorMenu() {
         LinearLayout box = panel();
@@ -2588,7 +2605,29 @@ public final class CanvasActivity extends Activity {
         noteLp.topMargin = dp(6);
         box.addView(note, noteLp);
 
-        showOverlay(box, anchoredLp(penButton, box), root);
+        showOverlay(box, anchoredInDrawingArea(penButton, box), drawingArea);
+    }
+
+    /**
+     * Hang a panel from the top of {@link #drawingArea}, left-aligned with {@code anchor}
+     * (typically a toolbar button above the drawing surface).
+     */
+    private FrameLayout.LayoutParams anchoredInDrawingArea(View anchor, View content) {
+        content.measure(
+                View.MeasureSpec.makeMeasureSpec(drawingArea.getWidth() - dp(16), View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(drawingArea.getHeight(), View.MeasureSpec.AT_MOST));
+        int[] areaAt = new int[2];
+        int[] anchorAt = new int[2];
+        drawingArea.getLocationInWindow(areaAt);
+        anchor.getLocationInWindow(anchorAt);
+        int left = anchorAt[0] - areaAt[0];
+        left = Math.max(dp(8), Math.min(left, drawingArea.getWidth() - content.getMeasuredWidth() - dp(8)));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.leftMargin = left;
+        lp.topMargin = dp(4);
+        return lp;
     }
 
     private View colorSwatchButton(PenPalette.Swatch swatch, boolean selected) {
@@ -3083,20 +3122,29 @@ public final class CanvasActivity extends Activity {
         button.setTypeface(Typeface.DEFAULT, primary ? Typeface.BOLD : Typeface.NORMAL);
     }
 
-    /** A black bar along the bottom edge, inset from the sides: the active tool or tab. */
+    /** A black bar along the bottom edge when selected; empty otherwise (clears e-ink ghosts). */
     private static final class Underline extends Drawable {
         private final Paint paint = new Paint();
         private final int thickness;
         private final int inset;
+        private final boolean selected;
 
         Underline(int thickness, int inset) {
+            this(thickness, inset, true);
+        }
+
+        Underline(int thickness, int inset, boolean selected) {
             this.thickness = thickness;
             this.inset = inset;
+            this.selected = selected;
             paint.setColor(Color.BLACK);
         }
 
         @Override
         public void draw(Canvas canvas) {
+            if (!selected) {
+                return;
+            }
             Rect b = getBounds();
             canvas.drawRect(b.left + inset, b.bottom - thickness, b.right - inset, b.bottom, paint);
         }

@@ -15,6 +15,7 @@ import android.os.SystemClock;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageButton;
 
 import androidx.test.core.app.ApplicationProvider;
 
@@ -364,6 +365,110 @@ public class ToolSwitchTest {
         assertEquals(PageInkView.Tool.PEN, ink.tool());
 
         controller.pause().stop().destroy();
+    }
+
+    /**
+     * Regression (Elton 2026-10-11): after Pen, tapping Lasso must move the
+     * underline and the ink tool enum together, and TouchHelper must get DASH.
+     * ToolController is the single setTool path for chrome + PageInkView.
+     */
+    @Test
+    public void penToLassoUpdatesChromeAndToolEnumTogether() {
+        ZettelData.resetForTest();
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        settle();
+
+        View penButton = byDescription(root, "Pen").get(0);
+        View lassoButton = byDescription(root, "Lasso").get(0);
+        PageInkView ink = findInk(root);
+        assertNotNull(ink);
+        // Activity setup alone may not open the surface; arm it so style writes reach the mock pen.
+        ink.onSurface(true);
+        ink.dispatchWindowVisibilityChanged(View.VISIBLE);
+        settle();
+
+        assertTrue(penButton.isSelected());
+        assertFalse(lassoButton.isSelected());
+        assertEquals(PageInkView.Tool.PEN, ink.tool());
+
+        assertTrue(lassoButton.performClick());
+        ShadowLooper.idleMainLooper();
+        settle();
+
+        assertTrue("Lasso underline/selected affordance moves with the tool",
+                lassoButton.isSelected());
+        assertFalse("Pen underline clears when Lasso is selected", penButton.isSelected());
+        assertEquals("ink tool enum matches chrome", PageInkView.Tool.LASSO, ink.tool());
+        assertEquals("TouchHelper brush follows the same tool",
+                TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+
+        // Back to Pen, then re-tap Pen (color-menu path reasserts fountain).
+        assertTrue(penButton.performClick());
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertTrue(penButton.isSelected());
+        assertEquals(PageInkView.Tool.PEN, ink.tool());
+        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+
+        assertTrue("re-tap Pen while already selected", penButton.performClick());
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertTrue(penButton.isSelected());
+        assertFalse(lassoButton.isSelected());
+        assertEquals(PageInkView.Tool.PEN, ink.tool());
+        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+
+        // Lasso must still move chrome + enum after the Pen color-menu path.
+        assertTrue(lassoButton.performClick());
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertTrue(lassoButton.isSelected());
+        assertFalse(penButton.isSelected());
+        assertEquals(PageInkView.Tool.LASSO, ink.tool());
+        assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+
+        controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void toolControllerKeepsChromeSyncedWithInkTool() {
+        PageInkView ink = show(laidOut(new Board("a", 1L)));
+        settle();
+        final ImageButton[] buttons = new ImageButton[3];
+        buttons[0] = new ImageButton(context);
+        buttons[1] = new ImageButton(context);
+        buttons[2] = new ImageButton(context);
+        ToolController tools = new ToolController(ink, new ToolController.Host() {
+            @Override
+            public void styleToolButton(ImageButton button, boolean selected) {
+                button.setSelected(selected);
+            }
+
+            @Override
+            public void onAfterToolChanged(PageInkView.Tool tool) {
+            }
+        });
+        tools.bind(buttons[0], buttons[1], buttons[2], null);
+
+        tools.setTool(PageInkView.Tool.LASSO);
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertEquals(PageInkView.Tool.LASSO, tools.tool());
+        assertEquals(PageInkView.Tool.LASSO, ink.tool());
+        assertFalse(buttons[0].isSelected());
+        assertFalse(buttons[1].isSelected());
+        assertTrue(buttons[2].isSelected());
+        assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+
+        tools.setTool(PageInkView.Tool.PEN);
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertEquals(PageInkView.Tool.PEN, tools.tool());
+        assertEquals(PageInkView.Tool.PEN, ink.tool());
+        assertTrue(buttons[0].isSelected());
+        assertFalse(buttons[2].isSelected());
+        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
     }
 
     private PageInkView laidOut(Board... pages) {

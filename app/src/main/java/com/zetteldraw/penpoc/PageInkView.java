@@ -139,12 +139,16 @@ final class PageInkView extends FrameLayout {
     private boolean live;
     private final EnumSet<Hold> holds = EnumSet.noneOf(Hold.class);
     private boolean paused;
-    /** What the buttons show. Updated the moment a tool is tapped. */
+    /**
+     * Selected tool (toolbar chrome + next stroke). Owned by {@link ToolController};
+     * do not write from elsewhere. Updated the moment a tool is tapped.
+     */
     private volatile Tool tool = Tool.PEN;
     /**
-     * What the firmware is set to. A stroke already on the glass keeps this
-     * until the pen lifts, so the Boox finishes that stroke in the tool it
-     * started with.
+     * What TouchHelper is set to. May lag {@link #tool} until {@link #commitTool}
+     * runs; a stroke already on the glass keeps this until lift so the Boox
+     * finishes that stroke in the tool it started with. Not a second "selected"
+     * flag for chrome.
      */
     private volatile Tool firmwareTool = Tool.PEN;
     /** Live / freeze pen color. Default black; last choice is restored by the activity. */
