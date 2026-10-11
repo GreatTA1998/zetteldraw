@@ -19,7 +19,8 @@ import android.util.Log;
  */
 public final class UiClick {
     private static final String TAG = "zd-click";
-    private static final float FALLBACK_VOLUME = 0.28f;
+    /** Soft enough to blend with the physical screen tap on Boox. */
+    private static final float FALLBACK_VOLUME = 0.20f;
 
     private static SoundPool pool;
     private static int soundId;

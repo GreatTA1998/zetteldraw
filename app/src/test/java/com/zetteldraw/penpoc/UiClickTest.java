@@ -6,7 +6,9 @@ import static org.junit.Assert.assertTrue;
 import android.app.Application;
 import android.content.Context;
 import android.media.AudioManager;
+import android.os.SystemClock;
 import android.provider.Settings;
+import android.view.MotionEvent;
 import android.view.View;
 
 import androidx.test.core.app.ApplicationProvider;
@@ -72,13 +74,20 @@ public class UiClickTest {
     }
 
     @Test
-    public void toolButtonStillClicksWithFeedbackWired() {
+    public void toolButtonStillClicksWithDownFeedbackWired() {
         var controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         CanvasActivity activity = controller.get();
         View eraserButton = findByDescription(activity.getWindow().getDecorView(),
                 activity.getString(R.string.eraser));
         assertNotNull(eraserButton);
-        assertTrue(eraserButton.performClick());
+        // Sound path is ACTION_DOWN; click still runs the tool switch.
+        long now = SystemClock.uptimeMillis();
+        MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, 10f, 10f, 0);
+        MotionEvent up = MotionEvent.obtain(now, now + 20, MotionEvent.ACTION_UP, 10f, 10f, 0);
+        assertTrue(eraserButton.dispatchTouchEvent(down));
+        assertTrue(eraserButton.dispatchTouchEvent(up));
+        down.recycle();
+        up.recycle();
         controller.pause().stop().destroy();
     }
 

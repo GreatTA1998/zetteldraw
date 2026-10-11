@@ -29,6 +29,7 @@ import android.text.style.AbsoluteSizeSpan;
 import android.text.style.StyleSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
@@ -2481,20 +2482,29 @@ public final class CanvasActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT);
     }
 
-    /** Soft click + action. Disables the View's own sound so we never double-tick. */
+    /**
+     * Soft click on press ({@link MotionEvent#ACTION_DOWN}), action on click.
+     * Sound is down-only so it never double-fires with the click/long-click.
+     */
     private void onTap(View view, View.OnClickListener listener) {
         view.setSoundEffectsEnabled(false);
-        view.setOnClickListener(v -> {
-            UiClick.play(v.getContext());
-            listener.onClick(v);
-        });
+        attachDownClick(view);
+        view.setOnClickListener(listener);
     }
 
     private void onLongTap(View view, View.OnLongClickListener listener) {
         view.setSoundEffectsEnabled(false);
-        view.setOnLongClickListener(v -> {
-            UiClick.play(v.getContext());
-            return listener.onLongClick(v);
+        attachDownClick(view);
+        view.setOnLongClickListener(listener);
+    }
+
+    /** Play once when the finger/stylus contacts the control; do not consume the event. */
+    private static void attachDownClick(View view) {
+        view.setOnTouchListener((v, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                UiClick.play(v.getContext());
+            }
+            return false;
         });
     }
 
