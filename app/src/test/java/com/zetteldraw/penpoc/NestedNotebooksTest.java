@@ -3,6 +3,7 @@ package com.zetteldraw.penpoc;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
@@ -281,6 +282,71 @@ public class NestedNotebooksTest {
                 .remove("scroll_" + notebookId)
                 .apply();
         return height;
+    }
+
+    @Test
+    public void placeUnderUsesSnackbarAndSelectedNotebookNotPageMidline() {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        BoardRepository.NotebookInfo notes = repo.createNotebook("notes");
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+
+        assertTrue(find(root, "notes").performLongClick());
+        idle();
+        click(root, "Place under…");
+        assertNotNull(find(root, "Placing notes under…"));
+        View confirm = find(root, "Confirm");
+        assertNotNull(confirm);
+        assertFalse("Scratchpad is not a place target", confirm.isEnabled());
+
+        click(root, "notes");
+        idle();
+        assertFalse("cannot place under itself", find(root, "Confirm").isEnabled());
+        assertNotNull(find(root, "Placing notes under…"));
+
+        click(root, "shelf");
+        idle();
+        assertNotNull(find(root, "Place notes under shelf"));
+        assertTrue(find(root, "Confirm").isEnabled());
+
+        click(root, "chapter");
+        idle();
+        assertNotNull(find(root, "Place notes under chapter"));
+        click(root, "Confirm");
+        idle();
+
+        assertEquals(chapter.id, repo.notebooks().stream()
+                .filter(n -> n.id.equals(notes.id)).findFirst().get().parentId);
+        assertNull("snackbar closes after confirm", find(root, "Place notes under chapter"));
+        assertNull(find(root, "Placing notes under…"));
+
+        assertTrue(find(root, "notes").performLongClick());
+        idle();
+        click(root, "Place under…");
+        click(root, "chapter");
+        idle();
+        assertFalse("already under chapter keeps Confirm disabled", find(root, "Confirm").isEnabled());
+        assertNotNull(find(root, "Placing notes under…"));
+        click(root, "Cancel");
+        idle();
+        assertNull(find(root, "Placing notes under…"));
+
+        // shelf → chapter → notes; filing shelf under chapter (or notes) would cycle.
+        assertTrue(find(root, "shelf").performLongClick());
+        idle();
+        click(root, "Place under…");
+        click(root, "chapter");
+        idle();
+        assertFalse("cannot place under a descendant", find(root, "Confirm").isEnabled());
+        assertNotNull(find(root, "Placing shelf under…"));
+        click(root, "Cancel");
+
+        controller.pause().stop().destroy();
     }
 
     @Test

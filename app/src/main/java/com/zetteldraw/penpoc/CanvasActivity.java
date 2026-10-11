@@ -88,8 +88,8 @@ public final class CanvasActivity extends Activity {
     private FrameLayout overlay;
     private LinearLayout topBar;
     /**
-     * Bottom strip for Link / Move. Floated on {@link #root}, not parented
-     * into the notebook bars, so it stays separate from the top nav.
+     * Bottom strip for Link / Move / Place under. Floated on {@link #root},
+     * not parented into the notebook bars, so it stays separate from the top nav.
      */
     private LinearLayout modeBar;
     private TextView modeText;
@@ -114,6 +114,9 @@ public final class CanvasActivity extends Activity {
     private String moveSourceRef;
     /** Notebook id of the move source ({@code null} = Scratchpad). */
     private String moveSourceNotebookId;
+    /** Notebook being filed under another via Place under. Null when closed. */
+    private String placeSourceId;
+    private String placeSourceTitle;
     private View toolbar;
     private PageInkView inkView;
     private PageScroller scroller;
@@ -1210,8 +1213,8 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Floating bottom chip for Link and Move. Not parented into the notebook
-     * tab bars; a hole in the Onyx reader when visible (bounds follow margins).
+     * Floating bottom chip for Link, Move, and Place under. Not parented into
+     * the notebook tab bars; a hole in the Onyx reader when visible (bounds follow margins).
      */
     private LinearLayout buildModeBar() {
         LinearLayout stack = new LinearLayout(this);
@@ -1347,7 +1350,11 @@ public final class CanvasActivity extends Activity {
     }
 
     private void startLinking(PageSlot slot) {
+        if (slot.page.isBlank()) {
+            return;
+        }
         cancelMoving();
+        cancelPlacing();
         hideLassoBar();
         linkSourceId = slot.page.id;
         linkSourceRef = refOnScreen(slot);
@@ -1361,6 +1368,7 @@ public final class CanvasActivity extends Activity {
             return;
         }
         cancelLinking();
+        cancelPlacing();
         hideLassoBar();
         moveSourceId = slot.page.id;
         moveSourceRef = refOnScreen(slot);
@@ -1370,11 +1378,27 @@ public final class CanvasActivity extends Activity {
         updateExcludeRects();
     }
 
+    private void startPlacing(String notebookId) {
+        if (notebookId == null || notebookById(notebookId) == null) {
+            return;
+        }
+        cancelLinking();
+        cancelMoving();
+        hideLassoBar();
+        placeSourceId = notebookId;
+        placeSourceTitle = titleOf(notebookId);
+        modeBar.setVisibility(View.VISIBLE);
+        refreshModeBar();
+        updateExcludeRects();
+    }
+
     private void cancelMode() {
         if (linkSourceId != null) {
             cancelLinking();
-        } else {
+        } else if (moveSourceId != null) {
             cancelMoving();
+        } else {
+            cancelPlacing();
         }
     }
 
@@ -1383,13 +1407,19 @@ public final class CanvasActivity extends Activity {
             confirmLinking();
         } else if (moveSourceId != null) {
             confirmMoving();
+        } else if (placeSourceId != null) {
+            confirmPlacing();
         }
+    }
+
+    private boolean modeActive() {
+        return linkSourceId != null || moveSourceId != null || placeSourceId != null;
     }
 
     private void cancelLinking() {
         linkSourceId = null;
         linkSourceRef = null;
-        if (moveSourceId == null) {
+        if (!modeActive()) {
             modeBar.setVisibility(View.GONE);
             modeConfirm.setVisibility(View.GONE);
         } else {
@@ -1402,7 +1432,19 @@ public final class CanvasActivity extends Activity {
         moveSourceId = null;
         moveSourceRef = null;
         moveSourceNotebookId = null;
-        if (linkSourceId == null) {
+        if (!modeActive()) {
+            modeBar.setVisibility(View.GONE);
+            modeConfirm.setVisibility(View.GONE);
+        } else {
+            refreshModeBar();
+        }
+        updateExcludeRects();
+    }
+
+    private void cancelPlacing() {
+        placeSourceId = null;
+        placeSourceTitle = null;
+        if (!modeActive()) {
             modeBar.setVisibility(View.GONE);
             modeConfirm.setVisibility(View.GONE);
         } else {
@@ -1617,6 +1659,64 @@ public final class CanvasActivity extends Activity {
                 modeText.setText(getString(R.string.place_before, moveSourceRef, refOnScreen(target)));
                 setModeConfirmEnabled(true);
             }
+            return;
+        }
+        if (placeSourceId != null && placeSourceTitle != null) {
+            String targetId = placeTargetNotebookId();
+            if (!canPlaceUnder(placeSourceId, targetId)) {
+                modeText.setText(getString(R.string.placing_under, placeSourceTitle));
+                setModeConfirmEnabled(false);
+            } else {
+                modeText.setText(getString(R.string.place_under_target, placeSourceTitle,
+                        titleOf(targetId)));
+                setModeConfirmEnabled(true);
+            }
+        }
+    }
+
+    /** Selected notebook tab (pages ignored). Null on Scratchpad. */
+    private String placeTargetNotebookId() {
+        if (SCRATCHPAD.equals(collectionId)) {
+            return null;
+        }
+        return collectionId;
+    }
+
+    /**
+     * Valid Place under target: a different notebook that is not a descendant
+     * and not already the source's parent.
+     */
+    private boolean canPlaceUnder(String sourceId, String targetId) {
+        if (sourceId == null || targetId == null || sourceId.equals(targetId)) {
+            return false;
+        }
+        BoardRepository.NotebookInfo source = notebookById(sourceId);
+        BoardRepository.NotebookInfo target = notebookById(targetId);
+        if (source == null || target == null) {
+            return false;
+        }
+        if (targetId.equals(source.parentId)) {
+            return false;
+        }
+        return !descendantIds(sourceId).contains(targetId);
+    }
+
+    private void confirmPlacing() {
+        String targetId = placeTargetNotebookId();
+        if (placeSourceId == null || !canPlaceUnder(placeSourceId, targetId)) {
+            refreshModeBar();
+            return;
+        }
+        String sourceId = placeSourceId;
+        if (!repository.placeNotebook(sourceId, targetId)) {
+            refreshModeBar();
+            return;
+        }
+        cancelPlacing();
+        if (trail.contains(sourceId) || sourceId.equals(collectionId)) {
+            openNotebook(sourceId);
+        } else {
+            rebuildNotebookTabs();
         }
     }
 
@@ -1748,7 +1848,7 @@ public final class CanvasActivity extends Activity {
 
     /** Wipe and Delete for one page, anchored to its ⋮; each confirms in the same spot. */
     private void showPageMenu(PageSlot slot) {
-        if (isTrailingBlank(slot)) {
+        if (isTrailingBlank(slot) || !slot.moreButton.isEnabled()) {
             return;
         }
         LinearLayout menu = panel();
@@ -1822,7 +1922,7 @@ public final class CanvasActivity extends Activity {
         LinearLayout menu = panel();
         menu.setMinimumWidth(Math.max(dp(200), tab.getWidth()));
         addPanelButton(menu, getString(R.string.rename), 0, () -> showNameForm(id, tab));
-        addPanelButton(menu, getString(R.string.place_under), 0, () -> showPlaceMenu(id, tab));
+        addPanelButton(menu, getString(R.string.place_under), 0, () -> startPlacing(id));
         addPanelButton(menu, getString(R.string.make_top_level), 0, () -> {
             if (repository.placeNotebook(id, null) && trail.contains(id)) {
                 openNotebook(id);
@@ -1832,40 +1932,6 @@ public final class CanvasActivity extends Activity {
         });
         addPanelButton(menu, getString(R.string.delete), 0, () -> confirmDelete(id, tab));
         showOverlay(menu, anchoredLp(tab, menu), root);
-    }
-
-    /** Indented tree of every notebook that is not this one and not under it. */
-    private void showPlaceMenu(String id, View anchor) {
-        HashSet<String> skip = descendantIds(id);
-        LinearLayout menu = panel();
-        menu.setMinimumWidth(dp(200));
-        if (!addPlaceTree(menu, null, 0, id, skip)) {
-            menu.addView(panelText(getString(R.string.no_place_target), 14));
-        }
-        showOverlay(menu, anchoredLp(anchor, menu), root);
-    }
-
-    private boolean addPlaceTree(LinearLayout menu, String parentId, int depth, String moving, HashSet<String> skip) {
-        boolean any = false;
-        for (BoardRepository.NotebookInfo each : childrenOf(parentId)) {
-            if (each.id.equals(moving) || skip.contains(each.id)) {
-                continue;
-            }
-            any = true;
-            addPanelButton(menu, each.title, depth, () -> {
-                if (repository.placeNotebook(moving, each.id)) {
-                    if (trail.contains(moving)) {
-                        openNotebook(moving);
-                    } else {
-                        rebuildNotebookTabs();
-                    }
-                }
-            });
-            if (addPlaceTree(menu, each.id, depth + 1, moving, skip)) {
-                any = true;
-            }
-        }
-        return any;
     }
 
     private HashSet<String> descendantIds(String id) {
@@ -1982,6 +2048,9 @@ public final class CanvasActivity extends Activity {
         box.addView(panelText(pages == 0
                 ? getString(R.string.delete_notebook_empty)
                 : getResources().getQuantityString(R.plurals.delete_notebook_pages, pages, pages), 13));
+        if (!childrenOf(id).isEmpty()) {
+            box.addView(panelText(getString(R.string.delete_notebook_children), 13));
+        }
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         Button cancel = tinyButton(getString(R.string.cancel), 15);
@@ -2682,13 +2751,22 @@ public final class CanvasActivity extends Activity {
             number.setContentDescription(getString(R.string.page_number, index, total));
         }
 
+        /**
+         * Blank pages: Link and Move greyed like each other. Trailing blank:
+         * ⋮ stays visible and uses the same disabled alpha (no invisible chrome).
+         */
         void syncEnabled() {
-            boolean enabled = !page.isBlank();
-            if (moveButton.isEnabled() != enabled) {
-                moveButton.setEnabled(enabled);
-                moveButton.setAlpha(enabled ? 1f : 0.35f);
-            }
-            moreButton.setVisibility(isTrailingBlank(this) ? View.INVISIBLE : View.VISIBLE);
+            boolean blank = page.isBlank();
+            boolean trailing = isTrailingBlank(this);
+            setChromeEnabled(linkButton, !blank);
+            setChromeEnabled(moveButton, !blank);
+            moreButton.setVisibility(View.VISIBLE);
+            setChromeEnabled(moreButton, !trailing);
+        }
+
+        private void setChromeEnabled(Button button, boolean enabled) {
+            button.setEnabled(enabled);
+            button.setAlpha(enabled ? 1f : 0.35f);
         }
 
         /** Outgoing lines first, then backlinks. A missing page is not shown. */

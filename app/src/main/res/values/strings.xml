@@ -32,6 +32,8 @@
     <string name="moving">Moving %1$s</string>
     <string name="place_before">Place %1$s before %2$s</string>
     <string name="place_in">Place %1$s in %2$s</string>
+    <string name="placing_under">Placing %1$s under…</string>
+    <string name="place_under_target">Place %1$s under %2$s</string>
     <string name="confirm">Confirm</string>
     <string name="link_outgoing">→ %1$s</string>
     <string name="link_incoming">← %1$s</string>
@@ -61,9 +63,9 @@
         <item quantity="other">Its %1$d pages move back to the Scratchpad.</item>
     </plurals>
     <string name="delete_notebook_empty">It has no pages.</string>
+    <string name="delete_notebook_children">Sub-notebooks move up a level and keep their pages.</string>
     <string name="place_under">Place under…</string>
     <string name="make_top_level">Make top-level</string>
-    <string name="no_place_target">No other notebook.</string>
     <string name="child_notebooks">Child notebooks</string>
     <string name="launch_log_title">Launch log (ms since the app started; newest launch first)</string>
     <string name="close">Close</string>

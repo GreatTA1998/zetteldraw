@@ -148,7 +148,10 @@ public class CanvasActivitySmokeTest {
         View root = controller.get().getWindow().getDecorView();
         idle();
         List<View> menus = byDescription(root, "Page options");
-        assertEquals("every page but the trailing blank has a ⋮", 2, menus.size());
+        assertEquals("every page shows ⋮; trailing blank is disabled", 3, menus.size());
+        assertTrue(menus.get(0).isEnabled());
+        assertTrue(menus.get(1).isEnabled());
+        assertFalse("trailing blank ⋮ is visible but disabled", menus.get(2).isEnabled());
         assertEquals(java.util.Arrays.asList("1/3", "2/3", "3/3"), pageLabels(root));
         assertNull("Wipe lives in the menu now", find(root, "Wipe"));
 
@@ -174,7 +177,10 @@ public class CanvasActivitySmokeTest {
         assertEquals(2, pages.size());
         assertEquals(second.id, pages.get(0).id);
         assertTrue(pages.get(1).isBlank());
-        assertEquals("the trailing blank offers no Wipe or Delete", 1, byDescription(root, "Page options").size());
+        menus = byDescription(root, "Page options");
+        assertEquals(2, menus.size());
+        assertTrue(menus.get(0).isEnabled());
+        assertFalse("trailing blank offers no Wipe or Delete", menus.get(1).isEnabled());
 
         byDescription(root, "Page options").get(0).performClick();
         idle();
@@ -184,7 +190,9 @@ public class CanvasActivitySmokeTest {
         assertEquals("the inked last page goes; the blank takes its place", 1, pages.size());
         assertTrue(pages.get(0).isBlank());
         assertEquals("the count shrinks with the list", java.util.Arrays.asList("1/1"), pageLabels(root));
-        assertTrue(byDescription(root, "Page options").isEmpty());
+        menus = byDescription(root, "Page options");
+        assertEquals(1, menus.size());
+        assertFalse("sole trailing blank keeps a disabled ⋮", menus.get(0).isEnabled());
         controller.pause().stop().destroy();
     }
 
@@ -197,7 +205,9 @@ public class CanvasActivitySmokeTest {
         idle();
 
         click(root, "comedy");
-        assertTrue("an empty notebook's one blank page has no ⋮", byDescription(root, "Page options").isEmpty());
+        List<View> emptyMenus = byDescription(root, "Page options");
+        assertEquals("empty notebook blank keeps a visible ⋮", 1, emptyMenus.size());
+        assertFalse("…disabled until there is something to wipe/delete", emptyMenus.get(0).isEnabled());
         assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
         assertEquals(1, byDescription(root, "Page 1 of 1").size());
         assertNull("no empty-notebook hint any more", find(root, "No notebooks yet. Tap + to add one."));
@@ -212,7 +222,10 @@ public class CanvasActivitySmokeTest {
         assertEquals(2, pages.size());
         assertFalse(pages.get(0).isBlank());
         assertTrue(pages.get(1).isBlank());
-        assertEquals("a new blank page follows", 1, byDescription(root, "Page options").size());
+        List<View> menus = byDescription(root, "Page options");
+        assertEquals("inked page + trailing blank both show ⋮", 2, menus.size());
+        assertTrue(menus.get(0).isEnabled());
+        assertFalse(menus.get(1).isEnabled());
         assertEquals("a new page updates every count", java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
 
         byDescription(root, "Page options").get(0).performClick();
