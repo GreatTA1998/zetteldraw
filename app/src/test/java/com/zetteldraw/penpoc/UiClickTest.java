@@ -1,5 +1,6 @@
 package com.zetteldraw.penpoc;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -7,7 +8,6 @@ import android.app.Application;
 import android.content.Context;
 import android.media.AudioManager;
 import android.os.SystemClock;
-import android.provider.Settings;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -20,10 +20,13 @@ import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowLooper;
+
+import java.util.concurrent.TimeUnit;
 
 /**
- * Tap feedback must stay off the ink path and must not throw when audio is
- * silent or when Robolectric has no speaker.
+ * Tap feedback must stay off the ink path, cycle four bundled sounds, and
+ * not throw when audio is silent or when Robolectric has no speaker.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class, shadows = IdleSurfaceViewShadow.class)
@@ -52,25 +55,21 @@ public class UiClickTest {
     }
 
     @Test
-    public void playDoesNotThrowWhenTouchSoundsOn() {
+    public void cycleAdvancesFourSlots() {
         audio.setRingerMode(AudioManager.RINGER_MODE_NORMAL);
-        Settings.System.putInt(
-                context.getContentResolver(),
-                Settings.System.SOUND_EFFECTS_ENABLED,
-                1);
-        UiClick.play(context);
-    }
-
-    @Test
-    public void playDoesNotThrowWhenTouchSoundsOff() {
-        audio.setRingerMode(AudioManager.RINGER_MODE_NORMAL);
-        Settings.System.putInt(
-                context.getContentResolver(),
-                Settings.System.SOUND_EFFECTS_ENABLED,
-                0);
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, 7, 0);
         UiClick.warm(context);
+        // Allow SoundPool load callbacks.
+        ShadowLooper.idleMainLooper(200, TimeUnit.MILLISECONDS);
+        assertEquals(0, UiClick.nextSlotForTest());
         UiClick.play(context);
+        assertEquals(1, UiClick.nextSlotForTest());
+        UiClick.play(context);
+        assertEquals(2, UiClick.nextSlotForTest());
+        UiClick.play(context);
+        assertEquals(3, UiClick.nextSlotForTest());
+        UiClick.play(context);
+        assertEquals(0, UiClick.nextSlotForTest());
     }
 
     @Test
@@ -80,7 +79,6 @@ public class UiClickTest {
         View eraserButton = findByDescription(activity.getWindow().getDecorView(),
                 activity.getString(R.string.eraser));
         assertNotNull(eraserButton);
-        // Sound path is ACTION_DOWN; click still runs the tool switch.
         long now = SystemClock.uptimeMillis();
         MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, 10f, 10f, 0);
         MotionEvent up = MotionEvent.obtain(now, now + 20, MotionEvent.ACTION_UP, 10f, 10f, 0);
