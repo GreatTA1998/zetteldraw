@@ -498,9 +498,11 @@ final class PageInkView extends FrameLayout {
     }
 
     void setPenColor(int color) {
-        penColor = color;
-        paint.setColor(color);
-        // Re-apply the fountain style so TouchHelper picks up the new stroke color.
+        // Kaleido live CU wants opaque ink; keep alpha at FF for firmware + freeze.
+        penColor = color | 0xFF000000;
+        paint.setColor(penColor);
+        // Re-apply the fountain style so TouchHelper picks up the new stroke color
+        // (SurfaceWorker re-enters scribble + reopens raw for non-black).
         if (tool == Tool.PEN) {
             pushToolStyle();
         }
@@ -871,7 +873,7 @@ final class PageInkView extends FrameLayout {
         SurfaceWorker.Style style = new SurfaceWorker.Style(
                 lasso ? TouchHelper.STROKE_STYLE_DASH : TouchHelper.STROKE_STYLE_FOUNTAIN,
                 lasso ? Math.max(2f, InkRenderer.BASE_WIDTH_PX * 0.5f) : InkRenderer.BASE_WIDTH_PX,
-                penColor,
+                penColor | 0xFF000000,
                 !eraser, !eraser && !eraseRenderOff);
         worker.setPen(live && surfaceReady, on, canvasLimit(), excludeRects, style, handwritingPenState);
     }
