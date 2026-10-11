@@ -67,6 +67,14 @@ final class PageInkView extends FrameLayout {
 
         /** Undo / redo availability may have changed. */
         void onHistoryChanged();
+
+        /**
+         * The ink surface scrolled while a selection is up (edge scroll). The
+         * page column should match {@code scrollY} without calling
+         * {@link #setContentScrollY} again.
+         */
+        default void onSelectionScroll(int scrollY) {
+        }
     }
 
     enum Tool { PEN, ERASER, LASSO }
@@ -78,6 +86,11 @@ final class PageInkView extends FrameLayout {
     /** Stock-app resume delay after a lasso on colour devices; shorter ones drop the first stroke. */
     private static final long LASSO_RESUME_MS = 500;
     private static final long DRAG_FRAME_MS = 40;
+    /** Top/bottom band (dp) that auto-scrolls while a selection is active. */
+    private static final float EDGE_ZONE_DP = 56f;
+    /** Paper px per tick; modest for Kaleido so the stack stays readable. */
+    private static final int EDGE_SCROLL_STEP_PX = 36;
+    private static final long EDGE_SCROLL_MS = 50;
 
     private final SurfaceView surfaceView;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -140,6 +153,14 @@ final class PageInkView extends FrameLayout {
     private long lastFrameAt;
     private final Runnable resumeAfterLasso = this::onResumeAfterLasso;
     private final Runnable dragFrame = this::drawDragFrame;
+    private final Runnable edgeScrollTick = this::onEdgeScrollTick;
+    /** Pointer in the surface while a selection gesture is down; NaN when idle. */
+    private float edgePointerX = Float.NaN;
+    private float edgePointerY = Float.NaN;
+    /** Deep copies of strokes in paper (or page) coordinates for paste. */
+    private ArrayList<InkRenderer.InkStroke> clipboard = new ArrayList<>();
+    /** True when the clipboard came from a one-sheet paper selection. */
+    private boolean clipboardAcrossPaper;
 
     PageInkView(Context context) {
         super(context);
@@ -533,8 +554,18 @@ final class PageInkView extends FrameLayout {
     }
 
     private boolean applyHistory(Set<Board> changed) {
+        HashSet<NotebookPaper> papers = new HashSet<>();
         for (Board page : changed) {
-            invalidatePage(page.id);
+            if (page.paper != null) {
+                papers.add(page.paper);
+            } else {
+                invalidatePage(page.id);
+            }
+        }
+        // Paper edits are recorded against one board (usually slice 0) but move
+        // ink on every slice the strokes touch — clear every page of that sheet.
+        for (NotebookPaper paper : papers) {
+            invalidatePaper(shown, paper);
         }
         if (!changed.isEmpty()) {
             redrawAll();
@@ -605,6 +636,7 @@ final class PageInkView extends FrameLayout {
     void close() {
         main.removeCallbacks(resumeAfterLasso);
         removeCallbacks(dragFrame);
+        removeCallbacks(edgeScrollTick);
         main.removeCallbacks(applyViewport);
         main.removeCallbacks(applyDespiteStuckPen);
         applyPosted = false;
@@ -1170,23 +1202,25 @@ final class PageInkView extends FrameLayout {
                 s.dragging = grab.contains(x, y);
                 s.downX = x;
                 s.downY = y;
+                s.scrollAtDown = shown.scrollY;
                 s.drawnBox = boxOnSurface(s);
+                edgePointerX = x;
+                edgePointerY = y;
+                if (s.dragging) {
+                    armEdgeScroll();
+                }
                 break;
             }
             case MotionEvent.ACTION_MOVE:
+                edgePointerX = x;
+                edgePointerY = y;
                 if (s.dragging) {
-                    float[] offset = s.acrossPaper
-                            ? Lasso.clampInto(s.bounds, x - s.downX, y - s.downY,
-                                    0f, shown.scrollY, surfaceView.getWidth(),
-                                    shown.scrollY + surfaceView.getHeight())
-                            : Lasso.clampOffset(s.bounds, x - s.downX, y - s.downY,
-                                    surfaceView.getWidth(), shown.layout.heights[s.index]);
-                    s.dx = offset[0];
-                    s.dy = offset[1];
-                    scheduleDragFrame();
+                    applySelectionDrag(s, x, y);
+                    armEdgeScroll();
                 }
                 break;
             case MotionEvent.ACTION_UP:
+                stopEdgeScroll();
                 if (s.dragging) {
                     commitSelection();
                 } else {
@@ -1194,10 +1228,112 @@ final class PageInkView extends FrameLayout {
                 }
                 break;
             case MotionEvent.ACTION_CANCEL:
+                stopEdgeScroll();
                 cancelSelection();
                 break;
             default:
                 break;
+        }
+    }
+
+    /**
+     * Finger delta in surface space, plus any edge-scroll since pen-down, so the
+     * sprite stays under the pointer while the paper moves.
+     */
+    private void applySelectionDrag(Selection s, float x, float y) {
+        float rawDx = x - s.downX;
+        float rawDy = y - s.downY + (shown.scrollY - s.scrollAtDown);
+        float[] offset;
+        if (s.acrossPaper) {
+            // Clamp to the whole sheet (including the trailing blank), not the
+            // viewport — edge scroll is what brings other pages into view.
+            offset = Lasso.clampIntoAllowingOverflow(s.bounds, rawDx, rawDy,
+                    0f, 0f, surfaceView.getWidth(), paperBottom());
+        } else {
+            offset = Lasso.clampOffset(s.bounds, rawDx, rawDy,
+                    surfaceView.getWidth(), shown.layout.heights[s.index]);
+        }
+        s.dx = offset[0];
+        s.dy = offset[1];
+        scheduleDragFrame();
+    }
+
+    private float paperBottom() {
+        if (shown.isEmpty()) {
+            return surfaceView.getHeight();
+        }
+        int last = shown.layout.size() - 1;
+        return shown.layout.tops[last] + shown.layout.heights[last];
+    }
+
+    private int maxScrollY() {
+        int surfaceH = surfaceView.getHeight();
+        if (surfaceH <= 0) {
+            return 0;
+        }
+        return Math.max(0, Math.round(paperBottom()) - surfaceH);
+    }
+
+    private void armEdgeScroll() {
+        removeCallbacks(edgeScrollTick);
+        if (selection == null || Float.isNaN(edgePointerY)) {
+            return;
+        }
+        postDelayed(edgeScrollTick, EDGE_SCROLL_MS);
+    }
+
+    private void stopEdgeScroll() {
+        removeCallbacks(edgeScrollTick);
+        edgePointerX = Float.NaN;
+        edgePointerY = Float.NaN;
+    }
+
+    private void onEdgeScrollTick() {
+        Selection s = selection;
+        if (s == null || Float.isNaN(edgePointerX) || Float.isNaN(edgePointerY) || !s.dragging) {
+            return;
+        }
+        float density = getResources().getDisplayMetrics().density;
+        float zone = EDGE_ZONE_DP * density;
+        int surfaceH = surfaceView.getHeight();
+        if (surfaceH <= 0) {
+            return;
+        }
+        int step = 0;
+        if (edgePointerY <= zone) {
+            step = -EDGE_SCROLL_STEP_PX;
+        } else if (edgePointerY >= surfaceH - zone) {
+            step = EDGE_SCROLL_STEP_PX;
+        }
+        if (step != 0) {
+            scrollSelectionBy(step);
+            applySelectionDrag(s, edgePointerX, edgePointerY);
+        }
+        armEdgeScroll();
+    }
+
+    /**
+     * Moves the viewport while a selection is up without ending it or pausing
+     * raw drawing (already off). Rebuilds missing slice bases for newly visible
+     * pages so a cross-page drag does not paint blank paper under the sprite.
+     */
+    private void scrollSelectionBy(int deltaY) {
+        if (selection == null || deltaY == 0 || shown.isEmpty()) {
+            return;
+        }
+        int next = Math.max(0, Math.min(maxScrollY(), shown.scrollY + deltaY));
+        if (next == shown.scrollY) {
+            return;
+        }
+        shown = shown.withScroll(next);
+        if (requested != null && requested.layout == shown.layout) {
+            requested = shown;
+        }
+        if (selection.acrossPaper) {
+            ensureSliceBases(selection);
+        }
+        if (listener != null) {
+            listener.onSelectionScroll(next);
         }
     }
 
@@ -1233,6 +1369,7 @@ final class PageInkView extends FrameLayout {
             return;
         }
         removeCallbacks(dragFrame);
+        stopEdgeScroll();
         RectF dirty = touchedArea(s);
         Lasso.Move move = Lasso.move(s.page, s.ids, s.dx, s.dy);
         // Hold the pen off before dropping the selection, so this cannot turn
@@ -1271,6 +1408,7 @@ final class PageInkView extends FrameLayout {
             return;
         }
         removeCallbacks(dragFrame);
+        stopEdgeScroll();
         RectF dirty = touchedArea(s);
         scheduleResume();
         endSelection();
@@ -1284,9 +1422,215 @@ final class PageInkView extends FrameLayout {
         if (selection == null) {
             return;
         }
+        stopEdgeScroll();
         // Not recycled: a queued frame may still draw them.
         selection = null;
         syncRaw();
+    }
+
+    boolean hasClipboard() {
+        return !clipboard.isEmpty();
+    }
+
+    /** Deep-copies the current selection into the clipboard. False when nothing is selected. */
+    boolean copySelection() {
+        Selection s = selection;
+        if (s == null) {
+            return false;
+        }
+        ArrayList<InkRenderer.InkStroke> picked = selectedStrokes(s);
+        if (picked.isEmpty()) {
+            return false;
+        }
+        clipboard = new ArrayList<>(picked.size());
+        for (InkRenderer.InkStroke stroke : picked) {
+            clipboard.add(stroke.duplicated(0f, 0f));
+        }
+        clipboardAcrossPaper = s.acrossPaper;
+        return true;
+    }
+
+    /** Copies then deletes. */
+    boolean cutSelection() {
+        if (!copySelection()) {
+            return false;
+        }
+        return deleteSelection();
+    }
+
+    /** Removes the selected strokes. */
+    boolean deleteSelection() {
+        Selection s = selection;
+        if (s == null) {
+            return false;
+        }
+        removeCallbacks(dragFrame);
+        stopEdgeScroll();
+        RectF dirty = touchedArea(s);
+        if (s.acrossPaper) {
+            NotebookPaper paper = s.page.paper;
+            ArrayList<InkRenderer.InkStroke> removed = selectedStrokes(s);
+            if (paper == null || removed.isEmpty()) {
+                scheduleResume();
+                endSelection();
+                requestFrame(false, dirty, UpdateMode.GC);
+                if (listener != null) {
+                    listener.onLassoCancelled();
+                }
+                return false;
+            }
+            paper.deleteIds(s.ids);
+            invalidatePaperRegion(paper, new RectF(s.bounds));
+            scheduleResume();
+            endSelection();
+            requestFrame(false, dirty, UpdateMode.GC);
+            history.record(InkHistory.Edit.of(InkHistory.Part.paperRemoved(s.page, removed)));
+            historyChanged();
+            notifyChanged(s.page);
+        } else {
+            ArrayList<InkHistory.Placed> removed = new ArrayList<>();
+            for (int i = 0; i < s.page.strokes.size(); i++) {
+                InkRenderer.InkStroke stroke = s.page.strokes.get(i);
+                if (s.ids.contains(stroke.id)) {
+                    removed.add(new InkHistory.Placed(stroke, i));
+                }
+            }
+            for (int i = removed.size() - 1; i >= 0; i--) {
+                s.page.strokes.remove(removed.get(i).index);
+            }
+            scheduleResume();
+            endSelection();
+            invalidatePage(s.page.id);
+            requestFrame(false, dirty, UpdateMode.GC);
+            if (!removed.isEmpty()) {
+                history.record(InkHistory.Edit.of(InkHistory.Part.removed(s.page, removed)));
+                historyChanged();
+                notifyChanged(s.page);
+            }
+        }
+        if (listener != null) {
+            listener.onLassoCancelled();
+        }
+        return true;
+    }
+
+    /**
+     * Pastes the clipboard as new strokes near the viewport center (paper) or
+     * with a small nudge (legacy page). Keeps writing unblocked: selection is
+     * cleared first if one is up.
+     */
+    boolean pasteClipboard() {
+        if (clipboard.isEmpty() || shown.isEmpty()) {
+            return false;
+        }
+        if (selection != null) {
+            cancelSelection();
+        }
+        if (onPaper(shown) && clipboardAcrossPaper) {
+            return pasteOnPaper();
+        }
+        return pasteOnPage();
+    }
+
+    private boolean pasteOnPaper() {
+        Board page = shown.page(0);
+        NotebookPaper paper = page.paper;
+        if (paper == null) {
+            return false;
+        }
+        RectF src = Lasso.boundsOf(clipboard);
+        float destCx = surfaceView.getWidth() * 0.5f;
+        float destCy = shown.scrollY + surfaceView.getHeight() * 0.5f;
+        float dx = destCx - src.centerX();
+        float dy = destCy - src.centerY();
+        float bottom = src.bottom + dy;
+        String adopt = null;
+        if (bottom >= paper.origin(paper.sliceCount())) {
+            Board tail = shown.page(shown.layout.size() - 1);
+            if (tail.sliceIndex >= paper.sliceCount()) {
+                adopt = tail.id;
+            }
+        }
+        ArrayList<InkRenderer.InkStroke> placed = new ArrayList<>(clipboard.size());
+        for (InkRenderer.InkStroke stroke : clipboard) {
+            InkRenderer.InkStroke copy = stroke.duplicated(dx, dy);
+            paper.appendStroke(copy, adopt);
+            adopt = null;
+            placed.add(copy);
+        }
+        RectF touched = new RectF(src);
+        touched.offset(dx, dy);
+        invalidatePaperRegion(paper, touched);
+        history.record(InkHistory.Edit.of(InkHistory.Part.paperAdded(page, placed)));
+        historyChanged();
+        redrawAll();
+        notifyChanged(page);
+        if (listener != null) {
+            listener.onPageBecameNonEmpty(page);
+        }
+        return true;
+    }
+
+    private boolean pasteOnPage() {
+        int index = shown.pageIndexAt(surfaceView.getHeight() * 0.5f);
+        if (index < 0) {
+            index = shown.firstVisible();
+        }
+        Board page = shown.page(index);
+        if (page.paper != null) {
+            // Clipboard from a legacy page into a one-sheet notebook: shift into
+            // paper coords at the viewport center.
+            clipboardAcrossPaper = true;
+            ArrayList<InkRenderer.InkStroke> shifted = new ArrayList<>(clipboard.size());
+            float origin = page.paperOrigin;
+            for (InkRenderer.InkStroke stroke : clipboard) {
+                shifted.add(stroke.duplicated(0f, origin));
+            }
+            clipboard = shifted;
+            return pasteOnPaper();
+        }
+        RectF src = Lasso.boundsOf(clipboard);
+        float[] nudge = Lasso.clampOffset(src, 24f, 24f, surfaceView.getWidth(), shown.layout.heights[index]);
+        float dx = nudge[0] != 0f || nudge[1] != 0f ? nudge[0] : 24f;
+        float dy = nudge[0] != 0f || nudge[1] != 0f ? nudge[1] : 24f;
+        ArrayList<InkRenderer.InkStroke> added = new ArrayList<>();
+        for (InkRenderer.InkStroke stroke : clipboard) {
+            InkRenderer.InkStroke copy = stroke.duplicated(dx, dy);
+            page.strokes.add(copy);
+            added.add(copy);
+        }
+        invalidatePage(page.id);
+        InkHistory.Edit edit = new InkHistory.Edit();
+        for (InkRenderer.InkStroke stroke : added) {
+            edit.add(InkHistory.Part.added(page, stroke));
+        }
+        history.record(edit);
+        historyChanged();
+        redrawAll();
+        notifyChanged(page);
+        return true;
+    }
+
+    private ArrayList<InkRenderer.InkStroke> selectedStrokes(Selection s) {
+        ArrayList<InkRenderer.InkStroke> picked = new ArrayList<>();
+        if (s.acrossPaper) {
+            NotebookPaper paper = s.page.paper;
+            if (paper == null) {
+                return picked;
+            }
+            for (InkRenderer.InkStroke stroke : paper.strokes()) {
+                if (s.ids.contains(stroke.id)) {
+                    picked.add(stroke);
+                }
+            }
+        } else {
+            for (InkRenderer.InkStroke stroke : s.page.strokes) {
+                if (s.ids.contains(stroke.id)) {
+                    picked.add(stroke);
+                }
+            }
+        }
+        return picked;
     }
 
     private void scheduleResume() {
@@ -1409,27 +1753,55 @@ final class PageInkView extends FrameLayout {
         Canvas spriteCanvas = new Canvas(sprite);
         spriteCanvas.translate(-spriteRect.left, -spriteRect.top);
         InkRenderer.drawAll(spriteCanvas, paint, picked);
-        // Only the slices on screen. Rebuilding every page in the notebook was
-        // the lasso freeze on dense one-sheet stacks (v20+): scroll is held while
-        // a selection is up, so off-screen bases are never drawn.
-        HashMap<String, Bitmap> bases = new HashMap<>();
-        int first = shown.firstVisible();
-        int last = shown.lastVisible(surfaceView.getHeight());
-        for (int i = first; i <= last; i++) {
-            Board slice = shown.page(i);
-            bases.put(slice.id, renderSlice(slice, width, shown.layout.heights[i], ids));
-        }
-        selection = new Selection(page, 0, ids, new RectF(spriteRect),
-                bases.get(page.id), sprite);
+        selection = new Selection(page, 0, ids, new RectF(spriteRect), null, sprite);
         selection.acrossPaper = true;
-        selection.sliceBases = bases;
+        selection.sliceBases = new HashMap<>();
+        // Visible slices only (plus any the selection bounds already meet). A
+        // full-notebook rebuild was the dense-page freeze; edge scroll fills in
+        // newly revealed pages via ensureSliceBases.
+        ensureSliceBases(selection);
         setPenState(EpdPenManager.PEN_PAUSE);
         requestFrame(true, null, UpdateMode.GC);
         return true;
     }
 
+    /**
+     * Builds page bases for every on-screen slice (and any slice the selection
+     * bounds touch) that is still missing. Selected strokes are punched out so
+     * the sprite is the only copy while dragging across the dashed mark.
+     */
+    private void ensureSliceBases(Selection s) {
+        if (s == null || !s.acrossPaper || s.sliceBases == null || shown.isEmpty()) {
+            return;
+        }
+        int width = surfaceView.getWidth();
+        if (width <= 0) {
+            return;
+        }
+        int first = shown.firstVisible();
+        int last = shown.lastVisible(surfaceView.getHeight());
+        RectF moved = new RectF(s.bounds);
+        moved.offset(s.dx, s.dy);
+        for (int i = 0; i < shown.layout.size(); i++) {
+            Board slice = shown.page(i);
+            float top = slice.paperOrigin;
+            float bottom = top + shown.layout.heights[i];
+            boolean visible = i >= first && i <= last;
+            boolean touched = moved.bottom >= top && moved.top < bottom
+                    || s.bounds.bottom >= top && s.bounds.top < bottom;
+            if (!visible && !touched) {
+                continue;
+            }
+            if (s.sliceBases.containsKey(slice.id)) {
+                continue;
+            }
+            s.sliceBases.put(slice.id, renderSlice(slice, width, shown.layout.heights[i], s.ids));
+        }
+    }
+
     private void commitPaperSelection(Selection s) {
         removeCallbacks(dragFrame);
+        stopEdgeScroll();
         RectF dirty = touchedArea(s);
         float dx = s.dx;
         float dy = s.dy;
@@ -1553,6 +1925,8 @@ final class PageInkView extends FrameLayout {
         boolean dragging;
         float downX;
         float downY;
+        /** {@link InkViewport#scrollY} at ACTION_DOWN; edge scroll adds the delta to dy. */
+        int scrollAtDown;
         RectF drawnBox;
 
         Selection(Board page, int index, Set<String> ids, RectF bounds, Bitmap base, Bitmap sprite) {

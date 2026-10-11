@@ -398,7 +398,7 @@ public class CanvasActivitySmokeTest {
         idle();
         assertTrue(ink.hasSelection());
         assertTrue(ink.capturesTouches());
-        assertNotNull(find(root, "1 stroke selected. Drag it, or tap outside to cancel"));
+        assertNotNull(find(root, "1 stroke selected. Drag, or Cut / Copy / Delete"));
 
         touch(ink, MotionEvent.ACTION_DOWN, 210f, 205f);
         touch(ink, MotionEvent.ACTION_MOVE, 260f, 235f);

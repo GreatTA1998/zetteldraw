@@ -191,6 +191,11 @@ final class InkHistory {
             return paper(page, PaperKind.ADD, List.of(stroke), List.of(), 0f, 0f);
         }
 
+        /** Paste / multi-stroke add on the paper. */
+        static Part paperAdded(Board page, List<InkRenderer.InkStroke> strokes) {
+            return paper(page, PaperKind.ADD, strokes, List.of(), 0f, 0f);
+        }
+
         /** Eraser. The whole stroke, on every slice. */
         static Part paperRemoved(Board page, List<InkRenderer.InkStroke> strokes) {
             return paper(page, PaperKind.REMOVE, strokes, List.of(), 0f, 0f);

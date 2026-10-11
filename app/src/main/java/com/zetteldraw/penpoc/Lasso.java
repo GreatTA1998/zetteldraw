@@ -206,13 +206,46 @@ final class Lasso {
     static float[] clampInto(RectF bounds, float dx, float dy,
                               float minX, float minY, float maxX, float maxY) {
         return new float[]{
-                clamp(dx, Math.min(0f, minX - bounds.left), Math.max(0f, maxX - bounds.right)),
-                clamp(dy, Math.min(0f, minY - bounds.top), Math.max(0f, maxY - bounds.bottom)),
+                clampAxis(dx, minX - bounds.left, maxX - bounds.right),
+                clampAxis(dy, minY - bounds.top, maxY - bounds.bottom),
+        };
+    }
+
+    /**
+     * Same as {@link #clampInto}, but when the selection is already taller or
+     * wider than the allowed rectangle (common when a cross-page box meets a
+     * short viewport) it still allows motion that reduces the overflow instead
+     * of freezing dy/dx at 0.
+     */
+    static float[] clampIntoAllowingOverflow(RectF bounds, float dx, float dy,
+                                              float minX, float minY, float maxX, float maxY) {
+        return new float[]{
+                clampAxisAllowingOverflow(dx, minX - bounds.left, maxX - bounds.right),
+                clampAxisAllowingOverflow(dy, minY - bounds.top, maxY - bounds.bottom),
         };
     }
 
     private static float clamp(float value, float min, float max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    /** When max &lt; min the box already overflows; freeze that axis at 0. */
+    private static float clampAxis(float value, float min, float max) {
+        if (max < min) {
+            return 0f;
+        }
+        return clamp(value, min, max);
+    }
+
+    /**
+     * Like {@link #clampAxis}, but an overflowing box may still move toward
+     * fitting (min..max can be inverted; value is clamped into that interval).
+     */
+    private static float clampAxisAllowingOverflow(float value, float min, float max) {
+        if (max < min) {
+            return clamp(value, max, min);
+        }
+        return clamp(value, min, max);
     }
 
     static Set<String> idsOf(Collection<InkRenderer.InkStroke> strokes) {

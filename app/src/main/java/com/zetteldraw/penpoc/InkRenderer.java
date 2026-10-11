@@ -376,6 +376,16 @@ public final class InkRenderer {
             return new InkStroke(id, moved, widths);
         }
 
+        /** New id, same shape, shifted. Used for paste / duplicate. */
+        public InkStroke duplicated(float dx, float dy) {
+            ArrayList<TouchPoint> moved = copyPoints(points);
+            for (TouchPoint point : moved) {
+                point.x += dx;
+                point.y += dy;
+            }
+            return new InkStroke(UUID.randomUUID().toString(), moved, widths);
+        }
+
         public float[] widthCopy() {
             return Arrays.copyOf(widths, widths.length);
         }

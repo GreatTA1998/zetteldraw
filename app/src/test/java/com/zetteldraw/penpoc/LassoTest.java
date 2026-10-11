@@ -169,6 +169,32 @@ public class LassoTest {
     }
 
     @Test
+    public void clampIntoFreezesWhenSelectionTallerThanViewport() {
+        // Cross-page box taller than the visible band: old clamp froze dy at 0.
+        RectF tall = new RectF(40f, 100f, 200f, 2000f);
+        float minY = 500f;
+        float maxY = 1900f;
+        float[] frozen = Lasso.clampInto(tall, 0f, 80f, 0f, minY, 1000f, maxY);
+        assertEquals(0f, frozen[1], 0f);
+
+        float[] moved = Lasso.clampIntoAllowingOverflow(tall, 0f, 80f, 0f, minY, 1000f, maxY);
+        assertEquals("overflowing selection can still move toward fitting", 80f, moved[1], 0f);
+
+        float[] up = Lasso.clampIntoAllowingOverflow(tall, 0f, -400f, 0f, minY, 1000f, maxY);
+        assertTrue("can drag up to reduce bottom overflow", up[1] < 0f);
+    }
+
+    @Test
+    public void clampIntoAllowingOverflowKeepsInBoundsSelectionInside() {
+        RectF box = new RectF(100f, 800f, 300f, 1000f);
+        float[] ok = Lasso.clampIntoAllowingOverflow(box, 40f, -30f, 0f, 500f, 1000f, 1900f);
+        assertEquals(40f, ok[0], 0f);
+        assertEquals(-30f, ok[1], 0f);
+        float[] hitBottom = Lasso.clampIntoAllowingOverflow(box, 0f, 5000f, 0f, 500f, 1000f, 1900f);
+        assertEquals(900f, hitBottom[1], 0f);
+    }
+
+    @Test
     public void moveRewritesPointsAndKeepsIdsAndOrder() {
         Board page = Board.blank();
         InkRenderer.InkStroke a = line(150f, 150f, 5);

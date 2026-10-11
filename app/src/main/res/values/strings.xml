@@ -9,9 +9,17 @@
     <string name="redo">Redo</string>
     <string name="lasso_hint">Circle ink to select it</string>
     <string name="lasso_nothing">Nothing selected</string>
+    <string name="lasso_edit">Selection</string>
+    <string name="cut">Cut</string>
+    <string name="copy">Copy</string>
+    <string name="paste">Paste</string>
+    <string name="lasso_copied">Copied</string>
+    <string name="lasso_cut">Cut</string>
+    <string name="lasso_deleted">Deleted</string>
+    <string name="lasso_pasted">Pasted</string>
     <plurals name="lasso_selected">
-        <item quantity="one">1 stroke selected. Drag it, or tap outside to cancel</item>
-        <item quantity="other">%1$d strokes selected. Drag them, or tap outside to cancel</item>
+        <item quantity="one">1 stroke selected. Drag, or Cut / Copy / Delete</item>
+        <item quantity="other">%1$d strokes selected. Drag, or Cut / Copy / Delete</item>
     </plurals>
     <string name="undo_nothing">Nothing left to undo</string>
     <string name="redo_nothing">Nothing left to redo</string>
