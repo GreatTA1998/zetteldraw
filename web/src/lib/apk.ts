@@ -3,6 +3,8 @@ const ASSET = "zetteldraw.apk";
 const META_TTL_MS = 5 * 60 * 1000;
 
 type Release = { tag: string; url: string; size: number | null };
+type GhAsset = { name: string; size: number; browser_download_url: string };
+type GhRelease = { tag_name: string; assets: GhAsset[] };
 
 let cached: { release: Release; at: number } | null = null;
 
@@ -15,19 +17,39 @@ function githubHeaders(): HeadersInit {
   return headers;
 }
 
+function pickAsset(body: GhRelease): Release | null {
+  const asset = body.assets.find((a) => a.name === ASSET);
+  if (!asset) return null;
+  return { tag: body.tag_name, url: asset.browser_download_url, size: asset.size };
+}
+
 async function fromApi(): Promise<Release> {
   const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
     headers: githubHeaders(),
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`GitHub API ${res.status}`);
-  const body = (await res.json()) as {
-    tag_name: string;
-    assets: { name: string; size: number; browser_download_url: string }[];
-  };
-  const asset = body.assets.find((a) => a.name === ASSET);
-  if (!asset) throw new Error(`release ${body.tag_name} has no ${ASSET}`);
-  return { tag: body.tag_name, url: asset.browser_download_url, size: asset.size };
+  const body = (await res.json()) as GhRelease;
+  const latest = pickAsset(body);
+  if (latest) return latest;
+  // Latest tag without zetteldraw.apk (misnamed upload) used to 502 the tip.
+  // Walk a few newer→older releases and serve the newest that has the asset.
+  return fromRecentReleases(body.tag_name);
+}
+
+async function fromRecentReleases(skipTag: string): Promise<Release> {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=10`, {
+    headers: githubHeaders(),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`GitHub releases list ${res.status}`);
+  const list = (await res.json()) as GhRelease[];
+  for (const body of list) {
+    if (body.tag_name === skipTag) continue;
+    const hit = pickAsset(body);
+    if (hit) return hit;
+  }
+  throw new Error(`no release in the last ${list.length} has ${ASSET} (latest ${skipTag} missing it)`);
 }
 
 // Unlike the API, the github.com redirect isn't subject to the 60/hour unauthenticated limit
