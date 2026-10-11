@@ -9,10 +9,12 @@ import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
 import android.graphics.Rect;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import com.onyx.android.sdk.data.note.TouchPoint;
@@ -413,6 +415,7 @@ public class CanvasActivitySmokeTest {
         assertTrue(ink.hasSelection());
         assertTrue(ink.capturesTouches());
         assertNotNull(find(root, "1 stroke selected. Drag, or use the menu above"));
+        assertFloatingLassoPill(root, ink);
 
         touch(ink, MotionEvent.ACTION_DOWN, 210f, 205f);
         touch(ink, MotionEvent.ACTION_MOVE, 260f, 235f);
@@ -674,6 +677,40 @@ public class CanvasActivitySmokeTest {
         MotionEvent event = MotionEvent.obtain(0L, 0L, action, x, y, 0);
         target.dispatchTouchEvent(event);
         event.recycle();
+    }
+
+    /**
+     * Selection chrome must be a WRAP_CONTENT pill on the window root (not a
+     * MATCH_PARENT Gravity.BOTTOM snackbar), parked near the selection box.
+     */
+    private static void assertFloatingLassoPill(View root, PageInkView ink) {
+        idle();
+        TextView cut = find(root, "Cut");
+        assertNotNull("Cut action visible while selected", cut);
+        View pill = cut.getParent() instanceof View ? (View) cut.getParent() : null;
+        assertNotNull(pill);
+        assertEquals(View.VISIBLE, pill.getVisibility());
+        ViewGroup.LayoutParams raw = pill.getLayoutParams();
+        assertTrue("pill uses FrameLayout.LayoutParams on the window root",
+                raw instanceof FrameLayout.LayoutParams);
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) raw;
+        assertEquals(FrameLayout.LayoutParams.WRAP_CONTENT, lp.width);
+        assertEquals(FrameLayout.LayoutParams.WRAP_CONTENT, lp.height);
+        assertEquals(Gravity.TOP | Gravity.START, lp.gravity);
+        assertTrue("not pinned as a bottom snackbar", lp.bottomMargin == 0);
+        android.graphics.RectF box = ink.selectionBoundsOnSurface();
+        assertNotNull(box);
+        // Pill top should sit near the selection, not at the window bottom band.
+        int[] pillLoc = new int[2];
+        int[] inkLoc = new int[2];
+        pill.getLocationOnScreen(pillLoc);
+        ink.getLocationOnScreen(inkLoc);
+        int pillTopInSurface = pillLoc[1] - inkLoc[1];
+        assertTrue("pill co-located with selection (pillTop=" + pillTopInSurface
+                        + ", box.top=" + box.top + ", surfaceH=" + ink.getHeight() + ")",
+                pillTopInSurface < ink.getHeight() * 0.75f);
+        assertTrue(Math.abs(pillTopInSurface - box.top) < ink.getHeight() * 0.5f
+                || Math.abs(pillTopInSurface - box.bottom) < ink.getHeight() * 0.5f);
     }
 
     private static PageInkView findInk(View view) {

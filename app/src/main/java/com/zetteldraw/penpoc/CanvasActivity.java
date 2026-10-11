@@ -96,8 +96,9 @@ public final class CanvasActivity extends Activity {
     private Button modeConfirm;
     /**
      * Notes-like floating pill above the lasso selection (Cut / Dup / Copy /
-     * Delete, optional Paste). Parent is {@link #drawingArea} so margins match
-     * surface coordinates from {@link PageInkView#selectionBoundsOnSurface()}.
+     * Delete, optional Paste). Parent is {@link #root} (same overlay layer as
+     * {@link #modeBar}) so it paints above the Onyx SurfaceView — parenting
+     * inside {@link #drawingArea} left it looking like a bottom chip on Boox.
      */
     private LinearLayout lassoMenu;
     private Button lassoCutButton;
@@ -236,6 +237,12 @@ public final class CanvasActivity extends Activity {
                 FrameLayout.LayoutParams.WRAP_CONTENT);
         pasteLp.gravity = Gravity.TOP;
         root.addView(pasteInstructBar, pasteLp);
+        lassoMenu = buildLassoMenu();
+        FrameLayout.LayoutParams lassoLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        lassoLp.gravity = Gravity.TOP | Gravity.START;
+        root.addView(lassoMenu, lassoLp);
 
         inkView = new PageInkView(this);
         inkView.setListener(new PageInkView.Listener() {
@@ -333,14 +340,6 @@ public final class CanvasActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT));
         drawingArea.addView(scroller, matchMatch());
-
-        lassoMenu = buildLassoMenu();
-        FrameLayout.LayoutParams lassoLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT);
-        lassoLp.gravity = Gravity.TOP | Gravity.START;
-        drawingArea.addView(lassoMenu, lassoLp);
-
 
         drawingArea.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> onDrawingAreaLaidOut());
 
@@ -1275,15 +1274,18 @@ public final class CanvasActivity extends Activity {
         pill.setOrientation(LinearLayout.HORIZONTAL);
         pill.setGravity(Gravity.CENTER_VERTICAL);
         GradientDrawable background = new GradientDrawable();
-        background.setCornerRadius(dp(20));
+        // Compact Notes-like capsule (not the wide bottom snackbar chip).
+        background.setCornerRadius(dp(22));
         background.setColor(Color.WHITE);
         background.setStroke(dp(1), Color.BLACK);
         pill.setBackground(background);
         pill.setVisibility(View.GONE);
         pill.setElevation(0f);
-        pill.setPadding(dp(4), dp(2), dp(4), dp(2));
+        pill.setPadding(dp(2), dp(1), dp(2), dp(1));
         pill.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-            positionLassoMenu();
+            if (l != ol || t != ot || r != or || b != ob) {
+                positionLassoMenu();
+            }
             updateExcludeRects();
         });
         lassoCutButton = menuChip(getString(R.string.cut));
@@ -1332,10 +1334,10 @@ public final class CanvasActivity extends Activity {
     }
 
     private Button menuChip(String label) {
-        Button button = tinyButton(label, 14);
-        button.setMinimumHeight(dp(40));
-        button.setMinimumWidth(dp(40));
-        button.setPadding(dp(10), 0, dp(10), 0);
+        Button button = tinyButton(label, 13);
+        button.setMinimumHeight(dp(36));
+        button.setMinimumWidth(dp(36));
+        button.setPadding(dp(8), 0, dp(8), 0);
         return button;
     }
 
@@ -1384,6 +1386,8 @@ public final class CanvasActivity extends Activity {
         }
         syncLassoMenuActions();
         lassoMenu.setVisibility(View.VISIBLE);
+        lassoMenu.bringToFront();
+        // Position after layout so measure/getLocationOnScreen are valid.
         lassoMenu.post(this::positionLassoMenu);
         updateExcludeRects();
     }
@@ -1412,42 +1416,80 @@ public final class CanvasActivity extends Activity {
         int next = show ? View.VISIBLE : View.GONE;
         if (pasteInstructBar.getVisibility() != next) {
             pasteInstructBar.setVisibility(next);
+            if (show) {
+                pasteInstructBar.bringToFront();
+            }
             updateExcludeRects();
+        }
+        // Keep the selection pill above the paste bar in z-order.
+        if (lassoMenu.getVisibility() == View.VISIBLE) {
+            lassoMenu.bringToFront();
         }
         inkView.setPasteArmed(show && !inkView.hasSelection());
     }
 
-    /** Anchor the floating pill just above the dashed selection bounds. */
+    /**
+     * Anchor the floating pill just above the dashed selection bounds, in
+     * {@link #root} coordinates (ink surface origin + surface-local box).
+     */
     private void positionLassoMenu() {
-        if (lassoMenu.getVisibility() != View.VISIBLE || inkView == null) {
+        if (lassoMenu.getVisibility() != View.VISIBLE || inkView == null || root == null) {
             return;
         }
         android.graphics.RectF box = inkView.selectionBoundsOnSurface();
         if (box == null) {
             return;
         }
-        int areaW = drawingArea.getWidth();
-        int areaH = drawingArea.getHeight();
-        if (areaW <= 0 || areaH <= 0) {
+        int rootW = root.getWidth();
+        int rootH = root.getHeight();
+        if (rootW <= 0 || rootH <= 0) {
             return;
         }
+        int[] inkLoc = new int[2];
+        int[] rootLoc = new int[2];
+        inkView.getLocationOnScreen(inkLoc);
+        root.getLocationOnScreen(rootLoc);
+        int originX = inkLoc[0] - rootLoc[0];
+        int originY = inkLoc[1] - rootLoc[1];
+
         lassoMenu.measure(
-                View.MeasureSpec.makeMeasureSpec(areaW, View.MeasureSpec.AT_MOST),
-                View.MeasureSpec.makeMeasureSpec(areaH, View.MeasureSpec.AT_MOST));
-        int w = lassoMenu.getMeasuredWidth();
-        int h = lassoMenu.getMeasuredHeight();
-        int gap = dp(8);
-        int left = Math.round(box.centerX() - w / 2f);
-        int top = Math.round(box.top - h - gap);
-        if (top < dp(4)) {
-            top = Math.round(box.bottom + gap);
+                View.MeasureSpec.makeMeasureSpec(rootW, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(rootH, View.MeasureSpec.AT_MOST));
+        int w = Math.max(lassoMenu.getMeasuredWidth(), lassoMenu.getWidth());
+        int h = Math.max(lassoMenu.getMeasuredHeight(), lassoMenu.getHeight());
+        if (w <= 0 || h <= 0) {
+            lassoMenu.post(this::positionLassoMenu);
+            return;
         }
-        left = Math.max(dp(4), Math.min(left, areaW - w - dp(4)));
-        top = Math.max(dp(4), Math.min(top, areaH - h - dp(4)));
+        int gap = dp(8);
+        int left = originX + Math.round(box.centerX() - w / 2f);
+        int top = originY + Math.round(box.top - h - gap);
+        // Prefer above the box; if that would cover the top chrome, sit just below.
+        int minTop = originY + dp(4);
+        if (top < minTop) {
+            top = originY + Math.round(box.bottom + gap);
+        }
+        left = Math.max(dp(4), Math.min(left, rootW - w - dp(4)));
+        // Clamp to the ink band so the pill never parks as a fake bottom snackbar
+        // under the drawing area (the v50 failure mode when Y was out of range).
+        int maxTop = originY + Math.max(dp(4), drawingArea.getHeight() - h - dp(4));
+        top = Math.max(minTop, Math.min(top, maxTop));
+
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) lassoMenu.getLayoutParams();
+        if (lp.gravity == (Gravity.TOP | Gravity.START)
+                && lp.leftMargin == left
+                && lp.topMargin == top
+                && lp.width == FrameLayout.LayoutParams.WRAP_CONTENT
+                && lp.height == FrameLayout.LayoutParams.WRAP_CONTENT) {
+            return;
+        }
         lp.gravity = Gravity.TOP | Gravity.START;
+        lp.width = FrameLayout.LayoutParams.WRAP_CONTENT;
+        lp.height = FrameLayout.LayoutParams.WRAP_CONTENT;
         lp.leftMargin = left;
         lp.topMargin = top;
+        lp.rightMargin = 0;
+        lp.bottomMargin = 0;
         lassoMenu.setLayoutParams(lp);
     }
 
