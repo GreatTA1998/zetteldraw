@@ -61,6 +61,11 @@ public class PageLinksTest {
         repo.saveInk(pages.get(0));
         openNotebook(root, "dense");
         assertEquals(41, repo.pages(dense.id).size());
+        // Return restores the left-behind scroll (page 1); move to the inked page so the
+        // source is also the front page and the banner stays "Linking from …".
+        pageScroller(root).scrollTo(0, 39 * height);
+        idle();
+        relayout(root);
 
         // Logs on disk, sheets dropped. The old press replayed each of them once and cached the
         // sheet, so the first press froze and the tenth did not.
@@ -310,6 +315,9 @@ public class PageLinksTest {
         openNotebook(root, "frombook");
         clickOnPage(root, "1/2", "Link");
         openNotebook(root, "tobook");
+        pageScroller(root).scrollTo(0, height);
+        idle();
+        relayout(root);
         assertNotNull(find(root, "Link from frombook 1 to tobook 2"));
         click(root, "Confirm");
 
@@ -386,13 +394,18 @@ public class PageLinksTest {
         clickOnPage(root, "1/2", "Link");
         click(root, "shelf");
         openNotebook(root, "chapter");
-        assertNotNull(find(root, "Link from frombook 1 to chapter 3"));
+        // Return restores the scroll left behind (page 1), not the last inked page.
+        assertNotNull(find(root, "Link from frombook 1 to chapter 1"));
         View scroller = pageScroller(root);
+        scroller.scrollTo(0, 2 * height);
+        idle();
+        relayout(root);
+        assertNotNull(find(root, "Link from frombook 1 to chapter 3"));
+        assertNull(find(root, "Link from frombook 1 to chapter 1"));
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
         assertNotNull(find(root, "Link from frombook 1 to chapter 1"));
-        assertNull(find(root, "Link from frombook 1 to chapter 3"));
         click(root, "Confirm");
 
         openNotebook(root, "frombook");

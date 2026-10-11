@@ -69,11 +69,17 @@ public final class CanvasActivity extends Activity {
     private static final String SHORT_PAGES_SINCE = "short_pages_since";
     /** Last chosen pen color (ARGB int). Default black. */
     private static final String PREF_PEN_COLOR = "pen_color";
+    /**
+     * Per-collection vertical scroll (prefs key {@code scroll_} + id). Survives
+     * process death. First open (no key) still jumps to the last inked page.
+     */
+    private static final String PREF_SCROLL_PREFIX = "scroll_";
 
     private BoardRepository repository;
     private String collectionId = SCRATCHPAD;
     /** Last opened notebook; null until one is chosen or when none exist. */
     private String notebookId;
+    /** Scroll Y remembered per Scratchpad / notebook id for this process. */
     private final HashMap<String, Integer> scrollByCollection = new HashMap<>();
 
     private FrameLayout root;
@@ -370,6 +376,7 @@ public final class CanvasActivity extends Activity {
 
     @Override
     protected void onPause() {
+        rememberOpenScroll();
         inkView.pauseLive();
         super.onPause();
     }
@@ -817,22 +824,62 @@ public final class CanvasActivity extends Activity {
             inkView.clearHistory();
         }
         if (pagesLoaded && !loading()) {
-            scrollByCollection.put(collectionId, scroller.getScrollY());
+            rememberScroll(collectionId, scroller.getScrollY());
         }
         pagesLoaded = true;
         collectionId = id;
         syncNav();
         // The tab is marked now; its pages load off the main thread, so a tap never waits on
         // storage. The old pages stay up with the pen held until the new ones replace them.
-        // A non-null keepScroll (a page link) wins over the last-inked-page jump.
+        // A non-null keepScroll (a page link) wins over a remembered scroll and the
+        // first-open last-inked jump.
         startLoad(id, keepScroll, true);
+    }
+
+    /** Saves the open list's scroll so a later return (or process death) can restore it. */
+    private void rememberOpenScroll() {
+        if (!pagesLoaded || loading() || collectionId == null) {
+            return;
+        }
+        rememberScroll(collectionId, scroller.getScrollY());
+    }
+
+    private void rememberScroll(String id, int scrollY) {
+        if (id == null) {
+            return;
+        }
+        int y = Math.max(0, scrollY);
+        scrollByCollection.put(id, y);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putInt(PREF_SCROLL_PREFIX + id, y)
+                .apply();
+    }
+
+    /**
+     * Scroll for a collection that was opened before in this install. Null means
+     * never visited: the first open still jumps to the last inked page.
+     */
+    private Integer rememberedScroll(String id) {
+        Integer memory = scrollByCollection.get(id);
+        if (memory != null) {
+            return memory;
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        String key = PREF_SCROLL_PREFIX + id;
+        if (!prefs.contains(key)) {
+            return null;
+        }
+        int saved = Math.max(0, prefs.getInt(key, 0));
+        scrollByCollection.put(id, saved);
+        return saved;
     }
 
     /**
      * Loads the notebooks and one page list off the main thread. Nothing can
      * leave it unshown: if the list is not up by the deadline the load runs
      * again on a fresh thread, with a longer deadline each time, until it is.
-     * {@code keepScroll} null means the list's remembered position.
+     * {@code keepScroll} null means restore a remembered scroll, else first-open
+     * last page / last inked.
      */
     private void startLoad(String id, Integer keepScroll, boolean holdPen) {
         int generation = ++loadGeneration;
@@ -968,20 +1015,23 @@ public final class CanvasActivity extends Activity {
         }
         int target;
         if (loaded.keepScroll != null) {
+            // Explicit navigation (page link, refresh, Move) wins.
             target = loaded.keepScroll;
-        } else if (SCRATCHPAD.equals(loaded.id)) {
-            if (scrollByCollection.containsKey(loaded.id)) {
-                target = scrollByCollection.get(loaded.id);
-            } else {
+        } else {
+            Integer remembered = rememberedScroll(loaded.id);
+            if (remembered != null) {
+                // Returning to a notebook (or Scratchpad) restores where the user left.
+                target = remembered;
+            } else if (SCRATCHPAD.equals(loaded.id)) {
+                // First Scratchpad open: last page (trailing blank).
                 target = 0;
                 for (int i = 0; i < loaded.pages.size() - 1; i++) {
                     target += heightOf(loaded.pages.get(i)) + layoutGap(loaded.pages);
                 }
+            } else {
+                // First notebook open: last inked page.
+                target = lastInkOffset(loaded.pages);
             }
-        } else {
-            // A fresh selection jumps to the last inked page. An explicit
-            // keepScroll (a refresh, or a link opened later) already won above.
-            target = lastInkOffset(loaded.pages);
         }
         showPages(loaded.pages, target);
         syncNav();

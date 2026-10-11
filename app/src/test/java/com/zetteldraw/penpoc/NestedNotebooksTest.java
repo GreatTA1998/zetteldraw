@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
+import android.content.Context;
 import android.graphics.Rect;
 import android.view.View;
 import android.view.ViewGroup;
@@ -40,6 +41,11 @@ public class NestedNotebooksTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+        ApplicationProvider.getApplicationContext()
+                .getSharedPreferences("canvas", Context.MODE_PRIVATE)
+                .edit()
+                .clear()
+                .apply();
     }
 
     @Test
@@ -148,10 +154,11 @@ public class NestedNotebooksTest {
     }
 
     @Test
-    public void selectingANotebookShowsItsLastInkedPageAndDoesNotRenderEarlierOnes() {
+    public void firstOpenShowsLastInkedPageAndDoesNotRenderEarlierOnes() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("resume");
+        int height = seedLastInkedOnPageThree(app, repo, notebook.id);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         CanvasActivity activity = controller.get();
@@ -160,27 +167,13 @@ public class NestedNotebooksTest {
         PageInkView ink = findInk(root);
         ink.onSurface(true);
         click(root, "resume");
-        idle();
+        idleForPaint();
         relayout(root);
+        ink.onWindowVisibilityChanged(View.VISIBLE);
+        ink.onSurface(true);
+        idleForPaint();
 
         List<Board> pages = repo.pages(notebook.id);
-        int height = pages.get(0).slicePx;
-        assertTrue(height > 40);
-        pages.get(0).paper.appendStroke(TestStrokes.stroke(12f, 2f * height + 10f));
-        repo.saveInk(pages.get(0));
-
-        clickDesc(root, "Scratchpad");
-        ink.onWindowVisibilityChanged(View.VISIBLE);
-        ink.onSurface(true);
-        idle();
-        click(root, "resume");
-        idleForPaint();
-        relayout(root);
-        ink.onWindowVisibilityChanged(View.VISIBLE);
-        ink.onSurface(true);
-        idleForPaint();
-
-        pages = repo.pages(notebook.id);
         assertEquals(4, pages.size());
         assertEquals(2, pages.get(0).paper.lastInkedSlice());
         View scroller = pageScroller(root);
@@ -200,6 +193,94 @@ public class NestedNotebooksTest {
         assertTrue(painted.contains(pages.get(2).id));
 
         controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void returningToANotebookRestoresTheScrollLeftBehind() {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        BoardRepository.NotebookInfo notebook = repo.createNotebook("resume");
+        int height = seedLastInkedOnPageThree(app, repo, notebook.id);
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+        PageInkView ink = findInk(root);
+        ink.onSurface(true);
+        click(root, "resume");
+        idleForPaint();
+        relayout(root);
+
+        View scroller = pageScroller(root);
+        assertEquals("first open lands on last inked", 2 * height, scroller.getScrollY());
+        ((PageScroller) scroller).scrollTo(0, height);
+        idle();
+        assertEquals(height, scroller.getScrollY());
+
+        clickDesc(root, "Scratchpad");
+        idle();
+        click(root, "resume");
+        idleForPaint();
+        relayout(root);
+        scroller = pageScroller(root);
+        assertEquals("return restores the left-behind page, not last inked",
+                height, scroller.getScrollY());
+        assertNotNull(find(root, "2/4"));
+
+        controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void scrollPositionSurvivesProcessDeathViaPrefs() {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        BoardRepository.NotebookInfo notebook = repo.createNotebook("resume");
+        int height = seedLastInkedOnPageThree(app, repo, notebook.id);
+
+        ActivityController<CanvasActivity> first = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = first.get().getWindow().getDecorView();
+        idle();
+        click(root, "resume");
+        idleForPaint();
+        relayout(root);
+        View scroller = pageScroller(root);
+        ((PageScroller) scroller).scrollTo(0, height);
+        idle();
+        first.pause().stop().destroy();
+
+        ActivityController<CanvasActivity> second = Robolectric.buildActivity(CanvasActivity.class).setup();
+        root = second.get().getWindow().getDecorView();
+        idle();
+        click(root, "resume");
+        idleForPaint();
+        relayout(root);
+        assertEquals("prefs restore the left-behind page after a new activity",
+                height, pageScroller(root).getScrollY());
+        second.pause().stop().destroy();
+    }
+
+    /**
+     * Opens the notebook once so the UI page height is known, inks page 3, then
+     * clears the remembered scroll so the next open is a true first open.
+     */
+    private static int seedLastInkedOnPageThree(Application app, BoardRepository repo, String notebookId) {
+        ActivityController<CanvasActivity> probe = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = probe.get().getWindow().getDecorView();
+        idle();
+        click(root, "resume");
+        idle();
+        relayout(root);
+        List<Board> pages = repo.pages(notebookId);
+        int height = pages.get(0).slicePx;
+        assertTrue(height > 40);
+        pages.get(0).paper.appendStroke(TestStrokes.stroke(12f, 2f * height + 10f));
+        repo.saveInk(pages.get(0));
+        probe.pause().stop().destroy();
+        app.getSharedPreferences("canvas", Context.MODE_PRIVATE)
+                .edit()
+                .remove("scroll_" + notebookId)
+                .apply();
+        return height;
     }
 
     @Test
