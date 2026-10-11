@@ -450,20 +450,26 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             after = cache.get(afterBoardId);
             if (moving == null || after == null || moving.paper == null || after.paper == null
                     || moving.paper != after.paper
-                    || !java.util.Objects.equals(moving.sheetId, after.sheetId)
-                    || moving.sliceIndex < 0 || after.sliceIndex < 0
-                    || moving.sliceIndex >= moving.paper.sliceCount()
-                    || after.sliceIndex >= after.paper.sliceCount()
-                    || moving.isBlank() || after.isBlank()) {
+                    || !java.util.Objects.equals(moving.sheetId, after.sheetId)) {
+                return;
+            }
+            int sourceIndex = moving.paper.indexOfSliceId(boardId);
+            int afterIndex = after.paper.indexOfSliceId(afterBoardId);
+            if (sourceIndex < 0 || afterIndex < 0
+                    || !moving.paper.containsInk(sourceIndex)
+                    || !after.paper.containsInk(afterIndex)) {
                 return;
             }
             String sheetId = moving.sheetId;
             try {
-                moving.paper.reorderAfter(moving.sliceIndex, after.sliceIndex);
+                moving.paper.reorderAfter(sourceIndex, afterIndex);
             } catch (RuntimeException e) {
                 Log.e(TAG, "reorder page failed; left notebook unchanged", e);
+                LaunchLog.mark("reorder failed; notebook left unchanged: " + e.getMessage());
                 return;
             }
+            syncSliceIndex(moving.paper, boardId);
+            syncSliceIndex(after.paper, afterBoardId);
             writer.execute(() -> rewriteSheet(sheetId));
         }
     }
@@ -479,36 +485,38 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             moving = cache.get(boardId);
             before = cache.get(beforeBoardId);
         }
-        if (moving == null || before == null || moving.paper == null || before.paper == null
-                || moving.isBlank()
-                || moving.sliceIndex < 0
-                || moving.sliceIndex >= moving.paper.sliceCount()) {
+        if (moving == null || before == null || moving.paper == null || before.paper == null) {
             return;
         }
         if (moving.paper == before.paper
                 && java.util.Objects.equals(moving.sheetId, before.sheetId)) {
             synchronized (lock) {
-                if (before.isBlank() || before.sliceIndex < 0
-                        || before.sliceIndex >= before.paper.sliceCount()) {
-                    // Trailing blank: append at end (after the last inked slice).
-                    int last = before.paper.sliceCount() - 1;
-                    if (last < 0 || moving.sliceIndex == last) {
-                        return;
-                    }
-                    try {
-                        moving.paper.reorderAfter(moving.sliceIndex, last);
-                    } catch (RuntimeException e) {
-                        Log.e(TAG, "place page at end failed; left notebook unchanged", e);
-                        return;
-                    }
-                } else {
-                    try {
-                        moving.paper.reorderBefore(moving.sliceIndex, before.sliceIndex);
-                    } catch (RuntimeException e) {
-                        Log.e(TAG, "place page reorder failed; left notebook unchanged", e);
-                        return;
-                    }
+                int sourceIndex = moving.paper.indexOfSliceId(boardId);
+                if (sourceIndex < 0 || !moving.paper.containsInk(sourceIndex)) {
+                    return;
                 }
+                boolean beforeIsTrailing = isTrailingBlankBoard(before, moving.paper);
+                int beforeIndex = beforeIsTrailing ? -1 : moving.paper.indexOfSliceId(beforeBoardId);
+                if (!beforeIsTrailing && beforeIndex < 0) {
+                    return;
+                }
+                try {
+                    if (beforeIsTrailing) {
+                        // Trailing blank: append at end (after the last inked slice).
+                        int last = moving.paper.sliceCount() - 1;
+                        if (last < 0 || sourceIndex == last) {
+                            return;
+                        }
+                        moving.paper.reorderAfter(sourceIndex, last);
+                    } else {
+                        moving.paper.reorderBefore(sourceIndex, beforeIndex);
+                    }
+                } catch (RuntimeException e) {
+                    Log.e(TAG, "place page reorder failed; left notebook unchanged", e);
+                    LaunchLog.mark("place-before reorder failed; left unchanged: " + e.getMessage());
+                    return;
+                }
+                syncSliceIndex(moving.paper, boardId);
                 String sheetId = moving.sheetId;
                 writer.execute(() -> rewriteSheet(sheetId));
             }
@@ -520,30 +528,92 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         synchronized (lock) {
             OpenSheet dest = sheets.get(NotebookPaper.sheetId(destNotebookId));
-            if (dest == null || !dest.ready || moving.sliceIndex < 0
-                    || moving.sliceIndex >= moving.paper.sliceCount()) {
+            int sourceIndex = moving.paper.indexOfSliceId(boardId);
+            if (dest == null || !dest.ready || sourceIndex < 0
+                    || !moving.paper.containsInk(sourceIndex)) {
                 return;
             }
             String sourceSheetId = moving.sheetId;
             String destSheetId = NotebookPaper.sheetId(destNotebookId);
+            boolean beforeIsTrailing = isTrailingBlankBoard(before, dest.paper)
+                    || before.paper != dest.paper;
+            int beforeIndex = beforeIsTrailing ? -1 : dest.paper.indexOfSliceId(beforeBoardId);
+            if (!beforeIsTrailing && beforeIndex < 0) {
+                return;
+            }
+            int sourceStrokes = moving.paper.strokes().size();
+            int destStrokes = dest.paper.strokes().size();
             try {
-                if (before.isBlank() || before.sliceIndex < 0
-                        || before.sliceIndex >= before.paper.sliceCount()
-                        || before.paper != dest.paper) {
+                if (beforeIsTrailing) {
                     // Trailing blank / empty list: append as newest.
                     int afterSlice = dest.paper.sliceCount() - 1;
-                    moving.paper.tearMoveAfter(moving.sliceIndex, dest.paper, afterSlice);
+                    moving.paper.tearMoveAfter(sourceIndex, dest.paper, afterSlice);
                 } else {
-                    moving.paper.tearMoveBefore(moving.sliceIndex, dest.paper, before.sliceIndex);
+                    moving.paper.tearMoveBefore(sourceIndex, dest.paper, beforeIndex);
                 }
             } catch (RuntimeException e) {
                 Log.e(TAG, "place page move failed; left both notebooks unchanged", e);
+                LaunchLog.mark("place-before move failed; both notebooks unchanged: " + e.getMessage());
                 return;
             }
-            // Destination was fully rewritten; source only appended a tear.
-            writer.execute(() -> rewriteSheet(destSheetId));
-            writer.execute(() -> flushSheet(sourceSheetId));
+            if (dest.paper.indexOfSliceId(boardId) < 0
+                    || dest.paper.strokes().size() < destStrokes
+                    || moving.paper.indexOfSliceId(boardId) >= 0) {
+                LaunchLog.mark("place-before postflight failed; refusing disk commit"
+                        + " srcStrokes=" + sourceStrokes + " destStrokes=" + dest.paper.strokes().size());
+                Log.e(TAG, "place page postflight failed; not persisting");
+                return;
+            }
+            syncSliceIndex(dest.paper, boardId);
+            // Dest rewrite must succeed before the source tear is flushed to disk.
+            writer.execute(() -> persistCrossNotebookPlace(destSheetId, sourceSheetId));
         }
+    }
+
+    /**
+     * Trailing blank is not a paper slice yet ({@code sliceIndex == sliceCount}),
+     * or its id is absent from the sheet. Never trust a cached sliceIndex alone.
+     */
+    private static boolean isTrailingBlankBoard(Board before, NotebookPaper paper) {
+        if (before == null || paper == null) {
+            return true;
+        }
+        if (paper.indexOfSliceId(before.id) < 0) {
+            return before.sliceIndex < 0 || before.sliceIndex >= paper.sliceCount() || before.isBlank();
+        }
+        return false;
+    }
+
+    /** Refresh the Board.sliceIndex for this id after a tear/reorder. */
+    private void syncSliceIndex(NotebookPaper paper, String boardId) {
+        if (paper == null || boardId == null) {
+            return;
+        }
+        Board board = cache.get(boardId);
+        if (board == null) {
+            return;
+        }
+        int index = paper.indexOfSliceId(boardId);
+        board.paper = paper;
+        board.sliceIndex = index;
+        if (index >= 0) {
+            board.paperOrigin = paper.origin(index);
+            board.slicePx = paper.heightAt(index);
+        }
+    }
+
+    /**
+     * Writer thread: rewrite destination first; only then append the source tear.
+     * If dest rewrite fails, the source tear stays in memory but not on disk so a
+     * restart still has the page on the origin notebook.
+     */
+    private void persistCrossNotebookPlace(String destSheetId, String sourceSheetId) {
+        if (!rewriteSheetOrFalse(destSheetId)) {
+            LaunchLog.mark("place-before dest rewrite failed; source not torn on disk");
+            Log.e(TAG, "place-before dest rewrite failed; source not torn on disk");
+            return;
+        }
+        flushSheet(sourceSheetId);
     }
 
     /** Notebook id for a sheet id ({@code null} = Scratchpad). */
@@ -566,21 +636,30 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             synchronized (lock) {
                 OpenSheet dest = sheets.get(NotebookPaper.sheetId(notebookId));
-                if (dest != null && dest.ready && moving.sliceIndex >= 0
-                        && moving.sliceIndex < moving.paper.sliceCount()) {
+                int sourceIndex = moving.paper.indexOfSliceId(boardId);
+                if (dest != null && dest.ready && sourceIndex >= 0
+                        && moving.paper.containsInk(sourceIndex)) {
+                    int destStrokes = dest.paper.strokes().size();
                     try {
-                        moving.paper.tearMove(moving.sliceIndex, dest.paper);
+                        moving.paper.tearMove(sourceIndex, dest.paper);
                     } catch (RuntimeException e) {
                         // tearMove puts the ink back on the source when the
                         // destination append fails; do not flush a half-move.
                         Log.e(TAG, "move page failed; left both notebooks unchanged", e);
+                        LaunchLog.mark("tearMove failed; both notebooks unchanged: " + e.getMessage());
                         return;
                     }
-                    // The slice id does not survive the move, so a link to it would name a missing page.
+                    if (dest.paper.strokes().size() < destStrokes) {
+                        LaunchLog.mark("tearMove postflight: dest shrank; refusing disk commit");
+                        Log.e(TAG, "tearMove postflight failed; not persisting");
+                        return;
+                    }
+                    // The slice id does not survive append-style move, so a link would name a missing page.
                     tombstoneLinksTouchingLocked(boardId);
-                    // Destination first: a crash after this still keeps the ink.
-                    writer.execute(() -> flushSheet(NotebookPaper.sheetId(notebookId)));
-                    writer.execute(() -> flushSheet(moving.sheetId));
+                    // Destination first: only flush source after dest write succeeds.
+                    String destSheetId = NotebookPaper.sheetId(notebookId);
+                    String sourceSheetId = moving.sheetId;
+                    writer.execute(() -> persistCrossNotebookAppend(destSheetId, sourceSheetId));
                 }
             }
             return;
@@ -2113,14 +2192,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * prefix). Resets {@code flushed} so a later append starts from the new end.
      */
     private void rewriteSheet(String sheetId) {
+        rewriteSheetOrFalse(sheetId);
+    }
+
+    /** @return false when the sheet could not be written; caller must not tear the source on disk. */
+    private boolean rewriteSheetOrFalse(String sheetId) {
         if (sheetId == null) {
-            return;
+            return false;
         }
         byte[] all;
         synchronized (lock) {
             OpenSheet open = sheets.get(sheetId);
             if (open == null || !open.ready) {
-                return;
+                return false;
             }
             all = open.paper.bytes();
         }
@@ -2128,13 +2212,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             ink.writeLog(sheetId, all);
         } catch (IOException e) {
             Log.e(TAG, "ink log rewrite failed " + sheetId, e);
-            return;
+            LaunchLog.mark("ink log rewrite failed " + sheetId + ": " + e.getMessage());
+            return false;
         }
         String hash = InkFileStore.sha256(all);
         synchronized (lock) {
             OpenSheet open = sheets.get(sheetId);
             if (open == null) {
-                return;
+                return false;
             }
             open.flushed = all.length;
             NotebookLogEntity row = dao.notebookLog(sheetId);
@@ -2158,23 +2243,39 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             mirrorLog(sheetId, all);
             localEdits.merge(sheetId, 1L, Long::sum);
         }
+        return true;
+    }
+
+    /** Append-style cross-notebook move: dest flush, then source tear flush. */
+    private void persistCrossNotebookAppend(String destSheetId, String sourceSheetId) {
+        if (!flushSheetOrFalse(destSheetId)) {
+            LaunchLog.mark("tearMove dest flush failed; source not torn on disk");
+            Log.e(TAG, "tearMove dest flush failed; source not torn on disk");
+            return;
+        }
+        flushSheet(sourceSheetId);
     }
 
     /** Writer thread. Appends the new tail of the log; it does not rewrite the prefix. */
     private void flushSheet(String sheetId) {
+        flushSheetOrFalse(sheetId);
+    }
+
+    /** @return false when an append was needed and failed. */
+    private boolean flushSheetOrFalse(String sheetId) {
         if (sheetId == null) {
-            return;
+            return false;
         }
         byte[] suffix;
         int flushed;
         synchronized (lock) {
             OpenSheet open = sheets.get(sheetId);
             if (open == null || !open.ready) {
-                return;
+                return false;
             }
             byte[] all = open.paper.bytes();
             if (all.length <= open.flushed) {
-                return;
+                return true;
             }
             suffix = java.util.Arrays.copyOfRange(all, open.flushed, all.length);
             flushed = all.length;
@@ -2183,29 +2284,30 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             ink.appendLog(sheetId, suffix);
         } catch (IOException e) {
             Log.e(TAG, "ink log append failed " + sheetId, e);
-            return;
+            LaunchLog.mark("ink log append failed " + sheetId + ": " + e.getMessage());
+            return false;
         }
         byte[] all;
         try {
             all = ink.readLog(sheetId);
         } catch (IOException e) {
             Log.e(TAG, "ink log read failed " + sheetId, e);
-            return;
+            return false;
         }
         if (all == null) {
-            return;
+            return false;
         }
         String hash = InkFileStore.sha256(all);
         synchronized (lock) {
             OpenSheet open = sheets.get(sheetId);
             if (open == null) {
-                return;
+                return false;
             }
             open.flushed = Math.max(open.flushed, flushed);
             NotebookLogEntity row = dao.notebookLog(sheetId);
             if (row == null || java.util.Objects.equals(row.inkHash, hash)) {
                 if (row != null) {
-                    return;
+                    return true;
                 }
                 row = new NotebookLogEntity();
                 row.id = sheetId;
@@ -2226,6 +2328,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             mirrorLog(sheetId, all);
             localEdits.merge(sheetId, 1L, Long::sum);
         }
+        return true;
     }
 
     private void mirrorLog(String sheetId, byte[] bytes) {

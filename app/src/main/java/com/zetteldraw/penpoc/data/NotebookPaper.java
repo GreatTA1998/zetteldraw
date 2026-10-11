@@ -13,6 +13,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -234,6 +235,34 @@ public final class NotebookPaper {
 
     public String sliceId(int index) {
         return sliceIds.get(index);
+    }
+
+    /**
+     * Index of the slice with this id, or -1. Prefer this over a cached
+     * {@code Board.sliceIndex}: after delete/reorder that field can point at
+     * a neighbor, and Move would tear the wrong page.
+     */
+    public int indexOfSliceId(String id) {
+        if (id == null) {
+            return -1;
+        }
+        for (int i = 0; i < sliceIds.size(); i++) {
+            if (id.equals(sliceIds.get(i))) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Stable fingerprint of every stroke id currently on this paper. */
+    public Set<String> strokeIdSet() {
+        HashSet<String> ids = new HashSet<>(strokes.size() * 2);
+        for (InkRenderer.InkStroke stroke : strokes) {
+            if (stroke != null && stroke.id != null) {
+                ids.add(stroke.id);
+            }
+        }
+        return ids;
     }
 
     public float origin(int index) {
@@ -491,6 +520,9 @@ public final class NotebookPaper {
         ArrayList<String> idsBefore = new ArrayList<>(sliceIds);
         ArrayList<InkRenderer.InkStroke> strokesBefore = new ArrayList<>(strokes);
         int lastInkedBefore = lastInked;
+        int slicesBefore = heights.size();
+        Set<String> strokeIdsBefore = strokeIdSet();
+        String movedId = sliceIds.get(source);
         try {
             float oldOrigin = origin(source);
             int height = heights.get(source);
@@ -513,6 +545,7 @@ public final class NotebookPaper {
             rewriteLogFromStrokes();
             trimTail();
             refreshLastInked();
+            assertReorderPreserved(slicesBefore, strokeIdsBefore, movedId);
         } catch (Throwable failed) {
             log = logBefore;
             heights.clear();
@@ -526,6 +559,28 @@ public final class NotebookPaper {
                 throw (RuntimeException) failed;
             }
             throw new IllegalStateException(failed);
+        }
+    }
+
+    /**
+     * Same-notebook reorder must not drop a page or a stroke id. trimTail may
+     * only remove empty trailing slices that were empty before the reorder too;
+     * an inked slice id that was present before must still be present.
+     */
+    private void assertReorderPreserved(int slicesBefore, Set<String> strokeIdsBefore,
+                                        String movedId) {
+        if (indexOfSliceId(movedId) < 0) {
+            throw new IllegalStateException("reorder dropped moved page " + movedId);
+        }
+        Set<String> after = strokeIdSet();
+        if (!after.containsAll(strokeIdsBefore)) {
+            HashSet<String> missing = new HashSet<>(strokeIdsBefore);
+            missing.removeAll(after);
+            throw new IllegalStateException("reorder dropped strokes " + missing);
+        }
+        // Empty trailing slices may trim, but never below the inked content we kept.
+        if (heights.size() > slicesBefore) {
+            throw new IllegalStateException("reorder grew slice count unexpectedly");
         }
     }
 
@@ -647,11 +702,19 @@ public final class NotebookPaper {
         ArrayList<String> destIdsBefore = new ArrayList<>(destination.sliceIds);
         ArrayList<InkRenderer.InkStroke> destStrokesBefore = new ArrayList<>(destination.strokes);
         int destLastInkedBefore = destination.lastInked;
+        int destStrokeCountBefore = destination.strokes.size();
+        int destSlicesBefore = destination.heights.size();
 
         String id = sliceIds.get(slice);
         int height = heights.get(slice);
         float oldOrigin = origin(slice);
+        Set<String> takenIds = new HashSet<>();
         Tear cut = cut(slice, false);
+        for (InkRenderer.InkStroke piece : cut.taken) {
+            if (piece != null && piece.id != null) {
+                takenIds.add(piece.id);
+            }
+        }
         try {
             destination.openGap(insertAt, height, id);
             float shift = destination.origin(insertAt) - oldOrigin;
@@ -663,6 +726,18 @@ public final class NotebookPaper {
             destination.rewriteLogFromStrokes();
             destination.trimTail();
             destination.refreshLastInked();
+            if (destination.indexOfSliceId(id) < 0) {
+                throw new IllegalStateException("dest rewrite dropped moved page " + id);
+            }
+            if (destination.strokes.size() < destStrokeCountBefore + takenIds.size()) {
+                throw new IllegalStateException("dest rewrite shrank ink unexpectedly");
+            }
+            if (!destination.strokeIdSet().containsAll(takenIds)) {
+                throw new IllegalStateException("dest rewrite missing taken stroke ids");
+            }
+            if (destination.heights.size() < destSlicesBefore + 1) {
+                throw new IllegalStateException("dest rewrite lost a slice");
+            }
         } catch (Throwable failed) {
             destination.log = destLogBefore;
             destination.heights.clear();
