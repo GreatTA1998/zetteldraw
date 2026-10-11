@@ -1,5 +1,7 @@
 const REPO = process.env.ZD_APK_REPO ?? "GreatTA1998/zetteldraw";
 const ASSET = "zetteldraw.apk";
+/** Gradle debug builds are often uploaded under this basename by mistake. */
+const ASSET_ALIASES = ["app-debug.apk"];
 const META_TTL_MS = 5 * 60 * 1000;
 
 type Release = { tag: string; url: string; size: number | null };
@@ -17,10 +19,24 @@ function githubHeaders(): HeadersInit {
   return headers;
 }
 
+function toRelease(tag: string, asset: GhAsset): Release {
+  return { tag, url: asset.browser_download_url, size: asset.size };
+}
+
 function pickAsset(body: GhRelease): Release | null {
-  const asset = body.assets.find((a) => a.name === ASSET);
-  if (!asset) return null;
-  return { tag: body.tag_name, url: asset.browser_download_url, size: asset.size };
+  const preferred = body.assets.find((a) => a.name === ASSET);
+  if (preferred) return toRelease(body.tag_name, preferred);
+
+  for (const name of ASSET_ALIASES) {
+    const alias = body.assets.find((a) => a.name === name);
+    if (alias) return toRelease(body.tag_name, alias);
+  }
+
+  // Single APK under any name (e.g. zetteldraw-v47.apk) is still the release build.
+  const apkAssets = body.assets.filter((a) => a.name.toLowerCase().endsWith(".apk"));
+  if (apkAssets.length === 1) return toRelease(body.tag_name, apkAssets[0]);
+
+  return null;
 }
 
 async function fromApi(): Promise<Release> {
@@ -32,8 +48,7 @@ async function fromApi(): Promise<Release> {
   const body = (await res.json()) as GhRelease;
   const latest = pickAsset(body);
   if (latest) return latest;
-  // Latest tag without zetteldraw.apk (misnamed upload) used to 502 the tip.
-  // Walk a few newer→older releases and serve the newest that has the asset.
+  // Latest tag with no usable APK used to 502 the tip. Prefer an older release that still has one.
   return fromRecentReleases(body.tag_name);
 }
 
@@ -49,20 +64,28 @@ async function fromRecentReleases(skipTag: string): Promise<Release> {
     const hit = pickAsset(body);
     if (hit) return hit;
   }
-  throw new Error(`no release in the last ${list.length} has ${ASSET} (latest ${skipTag} missing it)`);
+  throw new Error(`no release in the last ${list.length} has an APK asset (latest ${skipTag} missing it)`);
 }
 
 // Unlike the API, the github.com redirect isn't subject to the 60/hour unauthenticated limit
 // that Render's shared egress IPs can exhaust.
-async function fromRedirect(): Promise<Release> {
-  const res = await fetch(`https://github.com/${REPO}/releases/latest/download/${ASSET}`, {
+async function redirectFor(assetName: string): Promise<Release | null> {
+  const res = await fetch(`https://github.com/${REPO}/releases/latest/download/${assetName}`, {
     redirect: "manual",
     cache: "no-store",
   });
   const location = res.headers.get("location") ?? "";
   const tag = location.match(/\/releases\/download\/([^/]+)\//)?.[1];
-  if (!tag) throw new Error(`no release redirect (${res.status})`);
+  if (!tag) return null;
   return { tag: decodeURIComponent(tag), url: new URL(location, res.url).toString(), size: null };
+}
+
+async function fromRedirect(): Promise<Release> {
+  for (const name of [ASSET, ...ASSET_ALIASES]) {
+    const hit = await redirectFor(name);
+    if (hit) return hit;
+  }
+  throw new Error("no release redirect for APK assets");
 }
 
 async function latestRelease(): Promise<Release> {
