@@ -64,20 +64,24 @@ public class PageMoveUiTest {
         String id4 = before.get(3).id;
 
         View scroller = pageScroller(root);
-        // Open lands on last inked; scroll to page 3 so Confirm stays hidden on source.
+        // Open lands on last inked; scroll to page 3 so Confirm is disabled on source.
         scroller.scrollTo(0, 2 * height);
         idle();
         relayout(root);
         clickOnPage(root, "3/5", "Move");
         assertNotNull(find(root, "Moving book 3"));
-        assertNull("confirm stays hidden on the source page", find(root, "Confirm"));
+        TextView confirmOnSource = find(root, "Confirm");
+        assertNotNull("confirm stays visible on the source page", confirmOnSource);
+        assertFalse("confirm is disabled on the source page", confirmOnSource.isEnabled());
 
         // Center page 2 (viewport midline owns that page).
         scroller.scrollTo(0, height);
         idle();
         relayout(root);
         assertNotNull(find(root, "Place book 3 before book 2"));
-        assertNotNull(find(root, "Confirm"));
+        TextView confirm = find(root, "Confirm");
+        assertNotNull(confirm);
+        assertTrue(confirm.isEnabled());
         click(root, "Confirm");
         idleForPaint();
         relayout(root);
@@ -95,7 +99,7 @@ public class PageMoveUiTest {
     }
 
     @Test
-    public void confirmHiddenOnSourceAndCancelNoOps() {
+    public void confirmDisabledOnSourceAndCancelNoOps() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -116,7 +120,9 @@ public class PageMoveUiTest {
         relayout(root);
         clickOnPage(root, "1/3", "Move");
         assertNotNull(find(root, "Moving book 1"));
-        assertNull(find(root, "Confirm"));
+        TextView confirm = find(root, "Confirm");
+        assertNotNull(confirm);
+        assertFalse(confirm.isEnabled());
         click(root, "Cancel");
         assertNull(find(root, "Moving book 1"));
         assertEquals(first, repo.pages(book.id).get(0).id);
@@ -187,6 +193,12 @@ public class PageMoveUiTest {
         View strip = (View) banner.getParent().getParent();
         assertFalse(isDescendant(strip, (View) area.getParent()));
         assertSame(strip.getParent(), ((View) area.getParent()).getParent());
+        ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) strip.getLayoutParams();
+        assertTrue("chip floats above the bottom edge", lp.bottomMargin > 0);
+        assertTrue("chip has side inset", lp.leftMargin > 0 && lp.rightMargin > 0);
+        TextView confirm = find(root, "Confirm");
+        assertNotNull(confirm);
+        assertFalse(confirm.isEnabled());
 
         controller.pause().stop().destroy();
     }

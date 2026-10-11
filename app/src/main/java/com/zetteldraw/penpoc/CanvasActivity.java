@@ -188,12 +188,15 @@ public final class CanvasActivity extends Activity {
         column.addView(drawingArea, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // Bottom strip overlays the window; it is not inserted into the top column.
+        // Floating mode chip overlays the window; it is not inserted into the top column.
         modeBar = buildModeBar();
         FrameLayout.LayoutParams modeLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT);
         modeLp.gravity = Gravity.BOTTOM;
+        modeLp.leftMargin = dp(10);
+        modeLp.rightMargin = dp(10);
+        modeLp.bottomMargin = dp(12);
         root.addView(modeBar, modeLp);
 
         inkView = new PageInkView(this);
@@ -1111,19 +1114,19 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Bottom floating strip for Link and Move. Not parented into the notebook
-     * tab bars; a hole in the Onyx reader when visible.
+     * Floating bottom chip for Link and Move. Not parented into the notebook
+     * tab bars; a hole in the Onyx reader when visible (bounds follow margins).
      */
     private LinearLayout buildModeBar() {
         LinearLayout stack = new LinearLayout(this);
         stack.setOrientation(LinearLayout.VERTICAL);
-        stack.setBackgroundColor(Color.WHITE);
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(dp(6));
+        background.setColor(Color.WHITE);
+        background.setStroke(dp(1), Color.BLACK);
+        stack.setBackground(background);
         stack.setVisibility(View.GONE);
         stack.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
-        View hairline = new View(this);
-        hairline.setBackgroundColor(Color.BLACK);
-        stack.addView(hairline, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, Math.max(1, dp(1))));
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -1392,10 +1395,10 @@ public final class CanvasActivity extends Activity {
             PageSlot front = frontSlot();
             if (front == null || front.page.id.equals(linkSourceId)) {
                 modeText.setText(getString(R.string.linking_from, linkSourceRef));
-                modeConfirm.setVisibility(View.GONE);
+                setModeConfirmEnabled(false);
             } else {
                 modeText.setText(getString(R.string.link_from_to, linkSourceRef, refOnScreen(front)));
-                modeConfirm.setVisibility(View.VISIBLE);
+                setModeConfirmEnabled(true);
             }
             return;
         }
@@ -1403,23 +1406,30 @@ public final class CanvasActivity extends Activity {
             PageSlot target = moveTargetSlot();
             if (target == null || target.page.id.equals(moveSourceId)) {
                 modeText.setText(getString(R.string.moving, moveSourceRef));
-                modeConfirm.setVisibility(View.GONE);
+                setModeConfirmEnabled(false);
             } else if (!target.page.isBlank() && sameNotebookForMove(target)
                     && isAlreadyBeforeTarget(target)) {
                 modeText.setText(getString(R.string.moving, moveSourceRef));
-                modeConfirm.setVisibility(View.GONE);
+                setModeConfirmEnabled(false);
             } else if (target.page.isBlank() && sameNotebookForMove(target)
                     && isSourceLastInked()) {
                 modeText.setText(getString(R.string.moving, moveSourceRef));
-                modeConfirm.setVisibility(View.GONE);
+                setModeConfirmEnabled(false);
             } else if (target.page.isBlank()) {
                 modeText.setText(getString(R.string.place_in, moveSourceRef, nameOnScreen()));
-                modeConfirm.setVisibility(View.VISIBLE);
+                setModeConfirmEnabled(true);
             } else {
                 modeText.setText(getString(R.string.place_before, moveSourceRef, refOnScreen(target)));
-                modeConfirm.setVisibility(View.VISIBLE);
+                setModeConfirmEnabled(true);
             }
         }
+    }
+
+    /** Confirm stays visible while the mode chip is up; greyed when the action is a no-op. */
+    private void setModeConfirmEnabled(boolean enabled) {
+        modeConfirm.setVisibility(View.VISIBLE);
+        modeConfirm.setEnabled(enabled);
+        modeConfirm.setAlpha(enabled ? 1f : 0.3f);
     }
 
     /**

@@ -103,7 +103,9 @@ public class PageLinksTest {
                     isDescendant(strip, (View) area.getParent()));
             // Mode bar is a sibling of the main column on the content root.
             assertSame(strip.getParent(), ((View) area.getParent()).getParent());
-            assertNull(find(root, "Confirm"));
+            TextView confirm = find(root, "Confirm");
+            assertNotNull("confirm stays visible on the source page", confirm);
+            assertFalse("confirm is disabled on the source page", confirm.isEnabled());
             click(root, "Cancel");
             idle();
             relayout(root);
@@ -201,7 +203,9 @@ public class PageLinksTest {
         clickOnPage(root, "1/2", "Link");
         assertNotNull(find(root, "Link"));
         assertNotNull(find(root, "Linking from frombook 1"));
-        assertNull("confirm stays hidden on the source page", find(root, "Confirm"));
+        TextView confirmOnSource = find(root, "Confirm");
+        assertNotNull("confirm stays visible on the source page", confirmOnSource);
+        assertFalse("confirm is disabled on the source page", confirmOnSource.isEnabled());
 
         PageInkView ink = findInk(root);
         relayout(root);
@@ -209,7 +213,9 @@ public class PageLinksTest {
 
         openNotebook(root, "tobook");
         assertNotNull(find(root, "Link from frombook 1 to tobook 1"));
-        assertNotNull(find(root, "Confirm"));
+        TextView confirm = find(root, "Confirm");
+        assertNotNull(confirm);
+        assertTrue(confirm.isEnabled());
         click(root, "Confirm");
 
         String sourceId = repo.pages(from.id).get(0).id;
@@ -229,7 +235,7 @@ public class PageLinksTest {
     }
 
     @Test
-    public void confirmStaysHiddenWhenThePageInFrontIsTheSource() {
+    public void confirmDisabledWhenThePageInFrontIsTheSource() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
@@ -243,12 +249,18 @@ public class PageLinksTest {
         openNotebook(root, "frombook");
 
         clickOnPage(root, "1/2", "Link");
-        assertNull(find(root, "Confirm"));
+        TextView confirm = find(root, "Confirm");
+        assertNotNull(confirm);
+        assertFalse(confirm.isEnabled());
         openNotebook(root, "tobook");
-        assertNotNull(find(root, "Confirm"));
+        confirm = find(root, "Confirm");
+        assertNotNull(confirm);
+        assertTrue(confirm.isEnabled());
         openNotebook(root, "frombook");
         assertNotNull(find(root, "Linking from frombook 1"));
-        assertNull("back on the source, confirm is gone", find(root, "Confirm"));
+        confirm = find(root, "Confirm");
+        assertNotNull("back on the source, confirm stays visible", confirm);
+        assertFalse("back on the source, confirm is disabled", confirm.isEnabled());
 
         controller.pause().stop().destroy();
     }
