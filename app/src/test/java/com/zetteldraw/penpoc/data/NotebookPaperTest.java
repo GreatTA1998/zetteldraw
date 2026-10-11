@@ -74,6 +74,20 @@ public class NotebookPaperTest {
     }
 
     @Test
+    public void strokeColorSurvivesLogReplay() throws Exception {
+        NotebookPaper paper = NotebookPaper.empty(200);
+        ArrayList<TouchPoint> points = new ArrayList<>();
+        points.add(new TouchPoint(10f, 20f, 0.5f, 1f, 0, 0, 1_000L));
+        points.add(new TouchPoint(30f, 40f, 0.6f, 1f, 0, 0, 1_008L));
+        InkRenderer.InkStroke colored = InkRenderer.strokeOwning(
+                "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", points, 0xFF9ED9C8);
+        paper.appendStroke(colored);
+        NotebookPaper again = NotebookPaper.replay(paper.bytes());
+        assertEquals(0xFF9ED9C8, again.strokes().get(0).color);
+        assertEquals(colored.id, again.strokes().get(0).id);
+    }
+
+    @Test
     public void lassoDragAcrossTheMarkIsOneShiftAndUndoSubtractsIt() {
         NotebookPaper paper = NotebookPaper.empty(1420);
         InkRenderer.InkStroke stroke = line("stroke-1", 10f, 1400f, 1600f);

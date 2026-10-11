@@ -26,6 +26,7 @@ final class TestInk {
     static void assertSameInk(List<InkRenderer.InkStroke> expected, List<InkRenderer.InkStroke> actual) {
         org.junit.Assert.assertEquals(expected.size(), actual.size());
         for (int s = 0; s < expected.size(); s++) {
+            org.junit.Assert.assertEquals(expected.get(s).color, actual.get(s).color);
             List<TouchPoint> e = expected.get(s).points;
             List<TouchPoint> a = actual.get(s).points;
             org.junit.Assert.assertEquals(e.size(), a.size());

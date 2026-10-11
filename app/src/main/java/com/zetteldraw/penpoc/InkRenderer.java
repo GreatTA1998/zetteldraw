@@ -1,6 +1,7 @@
 package com.zetteldraw.penpoc;
 
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.util.DisplayMetrics;
@@ -54,7 +55,11 @@ public final class InkRenderer {
 
     /** {@code points} become the stroke's own: no other code may hold or change them. */
     public static InkStroke strokeOwning(String id, ArrayList<TouchPoint> points) {
-        return new InkStroke(id, points, widthsFor(points));
+        return strokeOwning(id, points, Color.BLACK);
+    }
+
+    public static InkStroke strokeOwning(String id, ArrayList<TouchPoint> points, int color) {
+        return new InkStroke(id, points, widthsFor(points), color);
     }
 
     /**
@@ -62,10 +67,18 @@ public final class InkRenderer {
      * recomputed, so a cut does not grow a new taper tip.
      */
     public static InkStroke strokeWithWidths(String id, ArrayList<TouchPoint> points, float[] widths) {
+        return strokeWithWidths(id, points, widths, Color.BLACK);
+    }
+
+    public static InkStroke strokeWithWidths(String id, ArrayList<TouchPoint> points, float[] widths, int color) {
         if (widths == null || widths.length != points.size()) {
-            return strokeOwning(id, points);
+            return strokeOwning(id, points, color);
         }
-        return new InkStroke(id, points, Arrays.copyOf(widths, widths.length));
+        return new InkStroke(id, points, Arrays.copyOf(widths, widths.length), color);
+    }
+
+    public static InkStroke strokeFrom(List<TouchPoint> points, int color) {
+        return strokeOwning(UUID.randomUUID().toString(), copyPoints(points), color);
     }
 
     static void draw(Canvas canvas, Paint paint, InkStroke stroke) {
@@ -83,41 +96,47 @@ public final class InkRenderer {
      * one native call per segment, which made a full page take ~0.5 s.
      */
     static void drawAll(Canvas canvas, Paint paint, List<InkStroke> strokes) {
+        // One stroke at a time so color stays correct; width batching is per stroke.
+        for (InkStroke stroke : strokes) {
+            drawStroke(canvas, paint, stroke);
+        }
+    }
+
+    private static void drawStroke(Canvas canvas, Paint paint, InkStroke stroke) {
+        List<TouchPoint> points = stroke.points;
+        float[] widths = stroke.widths;
+        if (points.isEmpty()) {
+            return;
+        }
+        paint.setColor(stroke.color);
+        if (points.size() == 1) {
+            TouchPoint p = points.get(0);
+            paint.setStrokeWidth(widths[0]);
+            canvas.drawPoint(p.x, p.y, paint);
+            return;
+        }
         float[][] lines = new float[MAX_WIDTH_STEP + 1][];
         int[] counts = new int[MAX_WIDTH_STEP + 1];
-        for (InkStroke stroke : strokes) {
-            List<TouchPoint> points = stroke.points;
-            float[] widths = stroke.widths;
-            if (points.isEmpty()) {
-                continue;
+        TouchPoint previous = points.get(0);
+        float previousWidth = widths[0];
+        for (int i = 1; i < points.size(); i++) {
+            TouchPoint point = points.get(i);
+            int step = Math.min(MAX_WIDTH_STEP,
+                    Math.max(1, Math.round((previousWidth + widths[i]) * 0.5f * WIDTH_STEPS)));
+            float[] buf = lines[step];
+            if (buf == null) {
+                buf = lines[step] = new float[256];
+            } else if (counts[step] + 4 > buf.length) {
+                buf = lines[step] = Arrays.copyOf(buf, buf.length * 2);
             }
-            if (points.size() == 1) {
-                TouchPoint p = points.get(0);
-                paint.setStrokeWidth(widths[0]);
-                canvas.drawPoint(p.x, p.y, paint);
-                continue;
-            }
-            TouchPoint previous = points.get(0);
-            float previousWidth = widths[0];
-            for (int i = 1; i < points.size(); i++) {
-                TouchPoint point = points.get(i);
-                int step = Math.min(MAX_WIDTH_STEP,
-                        Math.max(1, Math.round((previousWidth + widths[i]) * 0.5f * WIDTH_STEPS)));
-                float[] buf = lines[step];
-                if (buf == null) {
-                    buf = lines[step] = new float[256];
-                } else if (counts[step] + 4 > buf.length) {
-                    buf = lines[step] = Arrays.copyOf(buf, buf.length * 2);
-                }
-                int n = counts[step];
-                buf[n] = previous.x;
-                buf[n + 1] = previous.y;
-                buf[n + 2] = point.x;
-                buf[n + 3] = point.y;
-                counts[step] = n + 4;
-                previous = point;
-                previousWidth = widths[i];
-            }
+            int n = counts[step];
+            buf[n] = previous.x;
+            buf[n + 1] = previous.y;
+            buf[n + 2] = point.x;
+            buf[n + 3] = point.y;
+            counts[step] = n + 4;
+            previous = point;
+            previousWidth = widths[i];
         }
         for (int step = 1; step <= MAX_WIDTH_STEP; step++) {
             if (counts[step] > 0) {
@@ -349,13 +368,16 @@ public final class InkRenderer {
         public final String id;
         public final ArrayList<TouchPoint> points;
         final float[] widths;
+        /** ARGB; default black for files written before color existed. */
+        public final int color;
         public final RectF bounds;
         public final float maxWidth;
 
-        InkStroke(String id, ArrayList<TouchPoint> points, float[] widths) {
+        InkStroke(String id, ArrayList<TouchPoint> points, float[] widths, int color) {
             this.id = id;
             this.points = points;
             this.widths = widths;
+            this.color = color;
             float max = InkRenderer.BASE_WIDTH_PX;
             for (float w : widths) {
                 if (w > max) {
@@ -366,24 +388,24 @@ public final class InkRenderer {
             this.bounds = boundsOf(points, max * 0.5f + 2f);
         }
 
-        /** Same id and widths, every point shifted. */
+        /** Same id, widths and color, every point shifted. */
         public InkStroke translated(float dx, float dy) {
             ArrayList<TouchPoint> moved = copyPoints(points);
             for (TouchPoint point : moved) {
                 point.x += dx;
                 point.y += dy;
             }
-            return new InkStroke(id, moved, widths);
+            return new InkStroke(id, moved, widths, color);
         }
 
-        /** New id, same shape, shifted. Used for paste / duplicate. */
+        /** New id, same shape and color, shifted. Used for paste / duplicate. */
         public InkStroke duplicated(float dx, float dy) {
             ArrayList<TouchPoint> moved = copyPoints(points);
             for (TouchPoint point : moved) {
                 point.x += dx;
                 point.y += dy;
             }
-            return new InkStroke(UUID.randomUUID().toString(), moved, widths);
+            return new InkStroke(UUID.randomUUID().toString(), moved, widths, color);
         }
 
         public float[] widthCopy() {

@@ -6,6 +6,7 @@ import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
+import android.graphics.Color;
 
 import com.onyx.android.sdk.data.note.TouchPoint;
 import com.zetteldraw.penpoc.InkRenderer;
@@ -33,6 +34,22 @@ public class InkCodecTest {
         byte[] bytes = InkCodec.encode(strokes);
         TestInk.assertSameInk(strokes, InkCodec.decode(bytes));
         assertEquals(bytes.length, InkCodec.encode(InkCodec.decode(bytes)).length);
+    }
+
+    @Test
+    public void roundTripsStrokeColors() throws IOException {
+        ArrayList<TouchPoint> redPts = new ArrayList<>();
+        redPts.add(new TouchPoint(1f, 2f, 0.5f, 1f, 0, 0, 1000L));
+        ArrayList<TouchPoint> mintPts = new ArrayList<>();
+        mintPts.add(new TouchPoint(3f, 4f, 0.5f, 1f, 0, 0, 1001L));
+        List<InkRenderer.InkStroke> strokes = new ArrayList<>();
+        strokes.add(InkRenderer.strokeOwning("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", redPts, 0xFFE53935));
+        strokes.add(InkRenderer.strokeOwning("11111111-2222-3333-4444-555555555555", mintPts, 0xFF9ED9C8));
+        List<InkRenderer.InkStroke> decoded = InkCodec.decode(InkCodec.encode(strokes));
+        assertEquals(InkCodec.VERSION, InkCodec.encode(strokes)[3]);
+        assertEquals(0xFFE53935, decoded.get(0).color);
+        assertEquals(0xFF9ED9C8, decoded.get(1).color);
+        assertEquals(Color.BLACK, InkCodec.decode(encodeV1(strokes)).get(0).color);
     }
 
     @Test

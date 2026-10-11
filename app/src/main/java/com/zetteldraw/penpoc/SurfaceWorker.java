@@ -68,12 +68,14 @@ final class SurfaceWorker {
     static final class Style {
         final int strokeStyle;
         final float width;
+        final int color;
         final boolean brush;
         final boolean render;
 
-        Style(int strokeStyle, float width, boolean brush, boolean render) {
+        Style(int strokeStyle, float width, int color, boolean brush, boolean render) {
             this.strokeStyle = strokeStyle;
             this.width = width;
+            this.color = color;
             this.brush = brush;
             this.render = render;
         }
@@ -84,12 +86,13 @@ final class SurfaceWorker {
                 return false;
             }
             Style s = (Style) o;
-            return strokeStyle == s.strokeStyle && width == s.width && brush == s.brush && render == s.render;
+            return strokeStyle == s.strokeStyle && width == s.width && color == s.color
+                    && brush == s.brush && render == s.render;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(strokeStyle, width, brush, render);
+            return Objects.hash(strokeStyle, width, color, brush, render);
         }
     }
 
@@ -374,7 +377,7 @@ final class SurfaceWorker {
         // The stroke style still changes, which is what the next stroke will use.
         Style write = st;
         if (write != null && !on && write.render) {
-            write = new Style(write.strokeStyle, write.width, write.brush, false);
+            write = new Style(write.strokeStyle, write.width, write.color, write.brush, false);
         }
         if (write != null && !write.equals(style)) {
             writeStyle(h, write);
@@ -424,7 +427,7 @@ final class SurfaceWorker {
         @Override
         public void open(Rect limitRect, List<Rect> excludes) {
             call("openRawDrawing", () -> helper.setStrokeWidth(InkRenderer.BASE_WIDTH_PX)
-                    .setStrokeColor(Color.BLACK)
+                    .setStrokeColor(PenPalette.DEFAULT_COLOR)
                     .setLimitRect(limitRect, excludes)
                     .openRawDrawing());
             call("setPenUpRefreshEnabled", () -> helper.setPenUpRefreshEnabled(true));
@@ -452,7 +455,7 @@ final class SurfaceWorker {
         public void setStyle(Style st) {
             call("setStrokeStyle", () -> helper.setStrokeStyle(st.strokeStyle));
             call("setStrokeWidth", () -> helper.setStrokeWidth(st.width));
-            call("setStrokeColor", () -> helper.setStrokeColor(Color.BLACK));
+            call("setStrokeColor", () -> helper.setStrokeColor(st.color));
             call("setBrushRawDrawingEnabled", () -> helper.setBrushRawDrawingEnabled(st.brush));
             call("setRawDrawingRenderEnabled", () -> helper.setRawDrawingRenderEnabled(st.render));
         }

@@ -140,8 +140,11 @@ final class PageInkView extends FrameLayout {
      * started with.
      */
     private volatile Tool firmwareTool = Tool.PEN;
+    /** Live / freeze pen color. Default black; last choice is restored by the activity. */
+    private volatile int penColor = PenPalette.DEFAULT_COLOR;
     /** Captured at pen-down. The point list is committed as this, not as whatever the buttons say later. */
     private Tool strokeTool;
+    private int strokeColor = PenPalette.DEFAULT_COLOR;
     private boolean strokeOpen;
     private boolean pointsCommitted;
     private boolean penLifted;
@@ -476,6 +479,19 @@ final class PageInkView extends FrameLayout {
         main.post(() -> commitTool(next));
     }
 
+    void setPenColor(int color) {
+        penColor = color;
+        paint.setColor(color);
+        // Re-apply the fountain style so TouchHelper picks up the new stroke color.
+        if (tool == Tool.PEN) {
+            pushToolStyle();
+        }
+    }
+
+    int penColor() {
+        return penColor;
+    }
+
     private void commitTool(Tool next) {
         if (next != tool) {
             return;
@@ -808,6 +824,7 @@ final class PageInkView extends FrameLayout {
         SurfaceWorker.Style style = new SurfaceWorker.Style(
                 lasso ? TouchHelper.STROKE_STYLE_DASH : TouchHelper.STROKE_STYLE_FOUNTAIN,
                 lasso ? Math.max(2f, InkRenderer.BASE_WIDTH_PX * 0.5f) : InkRenderer.BASE_WIDTH_PX,
+                penColor,
                 !eraser, !eraser && !eraseRenderOff);
         worker.setPen(live && surfaceReady, on, canvasLimit(), excludeRects, style, handwritingPenState);
     }
@@ -895,6 +912,7 @@ final class PageInkView extends FrameLayout {
 
     private void beginStroke(Tool mode) {
         strokeTool = mode;
+        strokeColor = penColor;
         strokeOpen = true;
         pointsCommitted = false;
         penLifted = false;
@@ -928,6 +946,7 @@ final class PageInkView extends FrameLayout {
         boolean toolLag = firmwareTool != tool;
         strokeOpen = false;
         strokeTool = null;
+        strokeColor = penColor;
         penLifted = false;
         pointsCommitted = false;
         eraseRenderOff = false;
@@ -961,7 +980,7 @@ final class PageInkView extends FrameLayout {
         }
         Board page = drawnOn.page(index);
         boolean wasBlank = page.isBlank();
-        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(drawnOn.toPage(points, index));
+        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(drawnOn.toPage(points, index), strokeColor);
         page.strokes.add(stroke);
         history.record(InkHistory.Edit.of(InkHistory.Part.added(page, stroke)));
         historyChanged();
@@ -1682,7 +1701,7 @@ final class PageInkView extends FrameLayout {
         boolean wasBlank = page.isBlank();
         ArrayList<TouchPoint> paperPoints = toPaper(points, drawnOn.scrollY);
         String adopt = adoptBlank(paper, paperPoints, drawnOn);
-        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(paperPoints);
+        InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(paperPoints, strokeColor);
         paper.appendStroke(stroke, adopt);
         history.record(InkHistory.Edit.of(InkHistory.Part.paperAdded(page, stroke)));
         historyChanged();

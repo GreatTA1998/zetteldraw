@@ -67,6 +67,8 @@ public final class CanvasActivity extends Activity {
     private static final String PREFS = "canvas";
     /** Pages created before this device first ran v10 may keep the old full-window height. */
     private static final String SHORT_PAGES_SINCE = "short_pages_since";
+    /** Last chosen pen color (ARGB int). Default black. */
+    private static final String PREF_PEN_COLOR = "pen_color";
 
     private BoardRepository repository;
     private String collectionId = SCRATCHPAD;
@@ -175,6 +177,7 @@ public final class CanvasActivity extends Activity {
             prefs.edit().putLong(SHORT_PAGES_SINCE, shortPagesSince).apply();
         }
         pageGap = dp(24);
+        // Restored after inkView is created below.
 
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.WHITE);
@@ -317,6 +320,7 @@ public final class CanvasActivity extends Activity {
         setContentView(root);
         repository.addRemoteChangeListener(remoteChanged);
         setTool(PageInkView.Tool.PEN);
+        inkView.setPenColor(prefs.getInt(PREF_PEN_COLOR, PenPalette.DEFAULT_COLOR));
         syncHistory();
         syncNav();
         inkView.setLive(true);
@@ -447,7 +451,13 @@ public final class CanvasActivity extends Activity {
                 showHint(getString(R.string.redo_nothing), true);
             }
         });
-        onTap(penButton, v -> setTool(PageInkView.Tool.PEN));
+        onTap(penButton, v -> {
+            if (inkView.tool() == PageInkView.Tool.PEN) {
+                showPenColorMenu();
+            } else {
+                setTool(PageInkView.Tool.PEN);
+            }
+        });
         onTap(eraserButton, v -> setTool(PageInkView.Tool.ERASER));
         onTap(lassoButton, v -> setTool(PageInkView.Tool.LASSO));
         settingsButton = iconButton(R.drawable.ic_settings, R.string.settings);
@@ -2253,6 +2263,106 @@ public final class CanvasActivity extends Activity {
             // Leaving Lasso dismisses the paste-only strip so writing stays clear.
             hideLassoBar();
         }
+    }
+
+    /**
+     * Boox Notes pattern: with Pen already selected, tap Pen again for the color
+     * menu (does not switch tools). Overlay hold + full-surface exclude keep the
+     * menu a stylus hole. Stroke stabilization is not exposed — TouchHelper has
+     * no public setter for it.
+     */
+    private void showPenColorMenu() {
+        LinearLayout box = panel();
+        box.setMinimumWidth(dp(288));
+        box.setPadding(dp(10), dp(8), dp(10), dp(10));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = panelText(getString(R.string.pen_colors), 15);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        header.addView(title, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView current = panelText(PenPalette.labelFor(inkView.penColor()), 12);
+        current.setGravity(Gravity.END);
+        header.addView(current, wrap());
+        box.addView(header, matchWrap());
+
+        LinearLayout grid = new LinearLayout(this);
+        grid.setOrientation(LinearLayout.VERTICAL);
+        grid.setPadding(0, dp(6), 0, 0);
+        int selected = inkView.penColor();
+        for (int row = 0; row < 2; row++) {
+            LinearLayout line = new LinearLayout(this);
+            line.setOrientation(LinearLayout.HORIZONTAL);
+            line.setGravity(Gravity.CENTER);
+            for (int col = 0; col < 8; col++) {
+                PenPalette.Swatch swatch = PenPalette.SWATCHES[row * 8 + col];
+                line.addView(colorSwatchButton(swatch, selected == swatch.color),
+                        new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            }
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            if (row > 0) {
+                rowLp.topMargin = dp(8);
+            }
+            grid.addView(line, rowLp);
+        }
+        box.addView(grid, matchWrap());
+
+        TextView note = panelText(getString(R.string.pen_stabilization_note), 11);
+        note.setTextColor(0xFF666666);
+        LinearLayout.LayoutParams noteLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        noteLp.topMargin = dp(6);
+        box.addView(note, noteLp);
+
+        showOverlay(box, anchoredLp(penButton, box), root);
+    }
+
+    private View colorSwatchButton(PenPalette.Swatch swatch, boolean selected) {
+        LinearLayout cell = new LinearLayout(this);
+        cell.setOrientation(LinearLayout.VERTICAL);
+        cell.setGravity(Gravity.CENTER_HORIZONTAL);
+        cell.setPadding(dp(2), dp(2), dp(2), dp(2));
+
+        TextView disc = new TextView(this);
+        int size = dp(28);
+        GradientDrawable fill = new GradientDrawable();
+        fill.setShape(GradientDrawable.OVAL);
+        fill.setColor(swatch.color);
+        fill.setStroke(dp(1), Color.BLACK);
+        disc.setBackground(fill);
+        disc.setGravity(Gravity.CENTER);
+        if (swatch.badge != null) {
+            disc.setText(swatch.badge);
+            disc.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9);
+            disc.setTypeface(Typeface.DEFAULT_BOLD);
+            boolean light = Color.luminance(swatch.color) > 0.6f;
+            disc.setTextColor(light ? Color.BLACK : Color.WHITE);
+        }
+        disc.setContentDescription(swatch.name);
+        cell.addView(disc, new LinearLayout.LayoutParams(size, size));
+
+        View marker = new View(this);
+        GradientDrawable dot = new GradientDrawable();
+        dot.setShape(GradientDrawable.OVAL);
+        dot.setColor(selected ? Color.BLACK : Color.TRANSPARENT);
+        marker.setBackground(dot);
+        LinearLayout.LayoutParams markerLp = new LinearLayout.LayoutParams(dp(6), dp(6));
+        markerLp.topMargin = dp(3);
+        cell.addView(marker, markerLp);
+
+        onTap(cell, v -> {
+            applyPenColor(swatch.color);
+            dismissOverlay();
+        });
+        return cell;
+    }
+
+    private void applyPenColor(int color) {
+        inkView.setPenColor(color);
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(PREF_PEN_COLOR, color).apply();
     }
 
     private void syncNav() {

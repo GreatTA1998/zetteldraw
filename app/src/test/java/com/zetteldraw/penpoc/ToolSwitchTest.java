@@ -99,6 +99,19 @@ public class ToolSwitchTest {
     }
 
     @Test
+    public void setPenColorReachesTouchHelperWhilePenIsSelected() {
+        PageInkView ink = show(laidOut(new Board("a", 1L)));
+        settle();
+        assertEquals(android.graphics.Color.BLACK, pen.strokeColor);
+        ink.setPenColor(0xFF9ED9C8);
+        settle();
+        assertEquals(0xFF9ED9C8, ink.penColor());
+        assertEquals(0xFF9ED9C8, pen.strokeColor);
+        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+        assertTrue(pen.brush);
+    }
+
+    @Test
     public void penToLassoAppliesEvenWhenThePenStyleIsCachedAndDrawingIsOff() {
         PageInkView ink = show(laidOut(new Board("a", 1L)));
         settle();
@@ -460,6 +473,7 @@ public class ToolSwitchTest {
         boolean brush;
         boolean render;
         int strokeStyle = -1;
+        int strokeColor = 0;
         private int seq;
         /** Sequence number of the last {@code setRawDrawingEnabled(true)}, or -1. */
         int lastEnable = -1;
@@ -489,6 +503,7 @@ public class ToolSwitchTest {
         @Override
         public void setStyle(SurfaceWorker.Style next) {
             strokeStyle = next.strokeStyle;
+            strokeColor = next.color;
             brush = next.brush;
             render = next.render;
             seq++;

@@ -49,20 +49,22 @@ class MemoryStore implements InkStorage, ObjectStore {
 }
 
 describe("ink codec", () => {
-  it.each([1, 2] as const)("round-trips version %i of the app's .zdi format", (version) => {
+  it.each([1, 2, 3] as const)("round-trips version %i of the app's .zdi format", (version) => {
     const strokes = [line(10, 20, 300, 40), line(50, 500, 60, 900, 3)];
     strokes[1][2].tiltX = -12;
-    const file = decodeInkFile(encodeInk(strokes, { version, ids }));
+    const colors = [0xffe53935, 0xff9ed9c8];
+    const file = decodeInkFile(encodeInk(strokes, { version, ids, colors }));
     expect(file.version).toBe(version);
-    expect(file.ids).toEqual(version === 2 ? ids : [null, null]);
+    expect(file.ids).toEqual(version >= 2 ? ids : [null, null]);
+    expect(file.colors).toEqual(version >= 3 ? colors : [0xff000000, 0xff000000]);
     const decoded = file.strokes;
     expect(decoded).toHaveLength(2);
     expect(decoded[1][2]).toEqual({ ...strokes[1][2], x: Math.fround(strokes[1][2].x), y: Math.fround(strokes[1][2].y) });
     expect(decoded[0][19].t - decoded[0][0].t).toBe(152);
   });
 
-  it("writes version 2 by default and needs an id per stroke for it", () => {
-    expect(encodeInk([line(0, 0, 10, 10)], { ids: [ids[0]] })[3]).toBe(2);
+  it("writes version 3 by default and needs an id per stroke for it", () => {
+    expect(encodeInk([line(0, 0, 10, 10)], { ids: [ids[0]] })[3]).toBe(3);
     expect(() => encodeInk([line(0, 0, 10, 10)])).toThrow(InkFormatError);
   });
 
@@ -88,7 +90,7 @@ describe("ink codec", () => {
 
   it("rejects other files", () => {
     expect(() => decodeInk(Buffer.from("nope"))).toThrow(InkFormatError);
-    expect(() => decodeInk(Buffer.from([0x5a, 0x44, 0x49, 3, 0]))).toThrow(/version 3/);
+    expect(() => decodeInk(Buffer.from([0x5a, 0x44, 0x49, 4, 0]))).toThrow(/version 4/);
   });
 
   it("tapers both ends like InkRenderer", () => {

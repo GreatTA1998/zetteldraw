@@ -1,5 +1,4 @@
-import { decodeInk } from "./ink.js";
-import { renderPng, type PageSize, DEFAULT_PAGE } from "./render.js";
+import { renderInkBytes, type PageSize, DEFAULT_PAGE } from "./render.js";
 import type { InkStorage, ObjectStore } from "./storage.js";
 
 export type ImageKind = "thumb" | "render";
@@ -42,7 +41,7 @@ export class Thumbnailer {
       if (!(await this.store.has(inkHash))) {
         return null;
       }
-      const png = renderPng(decodeInk(await this.store.get(inkHash)), IMAGE_WIDTH[kind], this.page);
+      const png = renderInkBytes(await this.store.get(inkHash), IMAGE_WIDTH[kind], this.page);
       await this.store.putObject(key, png, "image/png");
       return png;
     })().finally(() => this.inflight.delete(key));

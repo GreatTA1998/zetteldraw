@@ -812,7 +812,8 @@ public final class NotebookPaper {
                     id = UUID.randomUUID().toString();
                     result.newIds.add(id);
                 }
-                InkRenderer.InkStroke born = InkRenderer.strokeWithWidths(id, piece.points, piece.widths);
+                InkRenderer.InkStroke born = InkRenderer.strokeWithWidths(
+                        id, piece.points, piece.widths, stroke.color);
                 if (inside) {
                     result.taken.add(born);
                 } else {
@@ -952,7 +953,8 @@ public final class NotebookPaper {
                 } else {
                     id = cursor < newIds.size() ? newIds.get(cursor++) : UUID.randomUUID().toString();
                 }
-                InkRenderer.InkStroke born = InkRenderer.strokeWithWidths(id, piece.points, piece.widths);
+                InkRenderer.InkStroke born = InkRenderer.strokeWithWidths(
+                        id, piece.points, piece.widths, stroke.color);
                 if (!piece.inside) {
                     next.add(born);
                 }
@@ -1152,6 +1154,8 @@ public final class NotebookPaper {
                 out.writeInt((int) (p.timestamp - t0));
                 out.writeFloat(widths[i]);
             }
+            // Optional trailer: older readers ignore leftover payload bytes.
+            out.writeInt(stroke.color);
             out.flush();
         } catch (IOException e) {
             throw new IllegalStateException(e);
@@ -1176,7 +1180,11 @@ public final class NotebookPaper {
             widths[i] = in.getFloat();
             points.add(new TouchPoint(x, y, pressure, size, tiltX, tiltY, t));
         }
-        return InkRenderer.strokeWithWidths(id, points, widths);
+        int color = android.graphics.Color.BLACK;
+        if (in.remaining() >= 4) {
+            color = in.getInt();
+        }
+        return InkRenderer.strokeWithWidths(id, points, widths, color);
     }
 
     private static byte[] idsPayload(List<String> ids) {

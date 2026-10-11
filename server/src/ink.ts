@@ -6,7 +6,8 @@ import { deflateSync, inflateSync } from "node:zlib";
  *   "ZDI" u8 version
  *   zlib {
  *     i32 strokeCount
- *     per stroke: [v2+: i64 idMostSig, i64 idLeastSig] i32 pointCount, i64 firstTimestamp
+ *     per stroke: [v2+: i64 idMostSig, i64 idLeastSig] [v3+: i32 colorArgb]
+ *       i32 pointCount, i64 firstTimestamp
  *       per point: f32 x, f32 y, f32 pressure, f32 size, i16 tiltX, i16 tiltY, i32 dtMillis
  *   }
  *
@@ -14,11 +15,12 @@ import { deflateSync, inflateSync } from "node:zlib";
  * device pixels on a page the size of the device screen.
  */
 
-/** Version 1 has no stroke ids; version 2 adds a 128-bit id per stroke. Both are still on devices. */
-export const INK_VERSIONS = [1, 2] as const;
+/** Version 1 has no stroke ids; version 2 adds ids; version 3 adds per-stroke ARGB color. */
+export const INK_VERSIONS = [1, 2, 3] as const;
 export type InkVersion = (typeof INK_VERSIONS)[number];
-export const INK_VERSION: InkVersion = 2;
+export const INK_VERSION: InkVersion = 3;
 const POINT_BYTES = 4 * 4 + 2 * 2 + 4;
+const DEFAULT_COLOR = 0xff000000;
 
 export interface InkPoint {
   x: number;
@@ -36,6 +38,8 @@ export interface InkFile {
   version: InkVersion;
   /** Stroke ids in UUID form, null for version 1 files; parallel to `strokes`. */
   ids: Array<string | null>;
+  /** ARGB ints; black when the file predates version 3. Parallel to `strokes`. */
+  colors: number[];
   strokes: InkStroke[];
 }
 
@@ -67,6 +71,7 @@ export function decodeInkFile(data: Buffer): InkFile {
     throw new InkFormatError(`unsupported ink version ${data[3]}`);
   }
   const hasIds = version >= 2;
+  const hasColor = version >= 3;
   const body = inflateSync(data.subarray(4));
   let off = 0;
   const need = (n: number) => {
@@ -79,12 +84,19 @@ export function decodeInkFile(data: Buffer): InkFile {
   off += 4;
   const strokes: InkStroke[] = [];
   const ids: Array<string | null> = [];
+  const colors: number[] = [];
   for (let s = 0; s < strokeCount; s++) {
     let id: string | null = null;
     if (hasIds) {
       need(16);
       id = uuidFromBytes(body.subarray(off, off + 16));
       off += 16;
+    }
+    let color = DEFAULT_COLOR;
+    if (hasColor) {
+      need(4);
+      color = body.readInt32BE(off) >>> 0;
+      off += 4;
     }
     need(12);
     const n = body.readInt32BE(off);
@@ -110,27 +122,35 @@ export function decodeInkFile(data: Buffer): InkFile {
     if (n > 0) {
       strokes.push(points);
       ids.push(id);
+      colors.push(color);
     }
   }
-  return { version, ids, strokes };
+  return { version, ids, colors, strokes };
 }
 
-/** Writes version 2 unless asked for 1. Version 2 needs a UUID per stroke (`ids`, parallel to `strokes`). */
+/** Writes version 3 unless asked otherwise. Version 2+ needs a UUID per stroke; version 3 adds colors. */
 export function encodeInk(
   strokes: InkStroke[],
-  options: { version?: InkVersion; ids?: string[] } = {},
+  options: { version?: InkVersion; ids?: string[]; colors?: number[] } = {},
 ): Buffer {
   const version = options.version ?? INK_VERSION;
   const idBytes = version >= 2 ? 16 : 0;
+  const colorBytes = version >= 3 ? 4 : 0;
   if (idBytes && options.ids?.length !== strokes.length) {
-    throw new InkFormatError("version 2 needs one stroke id per stroke");
+    throw new InkFormatError("version 2+ needs one stroke id per stroke");
+  }
+  if (colorBytes && options.colors && options.colors.length !== strokes.length) {
+    throw new InkFormatError("version 3 colors must match stroke count");
   }
   const pointCount = strokes.reduce((sum, s) => sum + s.length, 0);
-  const body = Buffer.alloc(4 + strokes.length * (12 + idBytes) + pointCount * POINT_BYTES);
+  const body = Buffer.alloc(4 + strokes.length * (12 + idBytes + colorBytes) + pointCount * POINT_BYTES);
   let off = body.writeInt32BE(strokes.length, 0);
   for (const [i, stroke] of strokes.entries()) {
     if (idBytes) {
       off += uuidToBytes(options.ids![i]).copy(body, off);
+    }
+    if (colorBytes) {
+      off = body.writeInt32BE((options.colors?.[i] ?? DEFAULT_COLOR) | 0, off);
     }
     const t0 = stroke.length > 0 ? stroke[0].t : 0;
     off = body.writeInt32BE(stroke.length, off);

@@ -1,5 +1,5 @@
 import { createCanvas } from "@napi-rs/canvas";
-import { strokeWidths, type InkStroke } from "./ink.js";
+import { decodeInkFile, strokeWidths, type InkStroke } from "./ink.js";
 
 export interface PageSize {
   width: number;
@@ -29,6 +29,21 @@ export function pageBox(strokes: InkStroke[], page: PageSize = DEFAULT_PAGE): Pa
 
 /** Draws like InkRenderer.draw on the device: round-capped segments, width averaged per segment. */
 export function renderPng(strokes: InkStroke[], outWidth: number, page: PageSize = DEFAULT_PAGE): Buffer {
+  return renderPngColored(
+    strokes,
+    strokes.map(() => 0xff111111),
+    outWidth,
+    page,
+  );
+}
+
+/** Same as {@link renderPng} but honors per-stroke ARGB colors from ZDI v3. */
+export function renderPngColored(
+  strokes: InkStroke[],
+  colors: number[],
+  outWidth: number,
+  page: PageSize = DEFAULT_PAGE,
+): Buffer {
   const box = pageBox(strokes, page);
   const scale = outWidth / box.width;
   const outHeight = Math.round(box.height * scale);
@@ -37,13 +52,15 @@ export function renderPng(strokes: InkStroke[], outWidth: number, page: PageSize
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, outWidth, outHeight);
   ctx.scale(scale, scale);
-  ctx.strokeStyle = "#111111";
-  ctx.fillStyle = "#111111";
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   // Keep hairlines visible when a thumbnail shrinks the page several times over.
   const minWidth = 1.1 / scale;
-  for (const stroke of strokes) {
+  for (let s = 0; s < strokes.length; s++) {
+    const stroke = strokes[s];
+    const css = argbToCss(colors[s] ?? 0xff111111);
+    ctx.strokeStyle = css;
+    ctx.fillStyle = css;
     const widths = strokeWidths(stroke).map((w) => Math.max(w, minWidth));
     if (stroke.length === 1) {
       ctx.beginPath();
@@ -60,4 +77,21 @@ export function renderPng(strokes: InkStroke[], outWidth: number, page: PageSize
     }
   }
   return canvas.toBuffer("image/png");
+}
+
+function argbToCss(argb: number): string {
+  const a = ((argb >>> 24) & 0xff) / 255;
+  const r = (argb >>> 16) & 0xff;
+  const g = (argb >>> 8) & 0xff;
+  const b = argb & 0xff;
+  if (a >= 1) {
+    return `rgb(${r},${g},${b})`;
+  }
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+/** Decode a ZDI blob and render with its colors when present. */
+export function renderInkBytes(data: Buffer, outWidth: number, page: PageSize = DEFAULT_PAGE): Buffer {
+  const file = decodeInkFile(data);
+  return renderPngColored(file.strokes, file.colors, outWidth, page);
 }

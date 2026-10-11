@@ -1,5 +1,7 @@
 package com.zetteldraw.penpoc.data;
 
+import android.graphics.Color;
+
 import com.onyx.android.sdk.data.note.TouchPoint;
 import com.zetteldraw.penpoc.InkRenderer;
 
@@ -25,7 +27,8 @@ import java.util.zip.Inflater;
  * "ZDI" u8 version
  * deflate {
  *   i32 strokeCount
- *   per stroke: [v2+: i64 idMostSig, i64 idLeastSig] i32 pointCount, i64 firstTimestamp
+ *   per stroke: [v2+: i64 idMostSig, i64 idLeastSig] [v3+: i32 colorArgb]
+ *     i32 pointCount, i64 firstTimestamp
  *     per point: f32 x, f32 y, f32 pressure, f32 size, i16 tiltX, i16 tiltY, i32 dtMillis
  * }
  * </pre>
@@ -33,10 +36,12 @@ import java.util.zip.Inflater;
  * Widths are not stored; {@link InkRenderer#strokeFrom} recomputes them on load.
  * Version 1 files have no stroke ids; they get ids derived from the stroke's
  * index and points, so every device decoding the same file agrees on them.
+ * Version 2 adds ids. Version 3 adds per-stroke ARGB color (default black).
  */
 public final class InkCodec {
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
     private static final int VERSION_NO_IDS = 1;
+    private static final int VERSION_IDS = 2;
     private static final byte[] MAGIC = {'Z', 'D', 'I'};
     private static final int IO_BUFFER = 64 * 1024;
     private static final int POINT_BYTES = 24;
@@ -58,6 +63,7 @@ public final class InkCodec {
                 UUID id = uuidOf(stroke.id);
                 out.writeLong(id.getMostSignificantBits());
                 out.writeLong(id.getLeastSignificantBits());
+                out.writeInt(stroke.color);
                 List<TouchPoint> points = stroke.points;
                 out.writeInt(points.size());
                 long t0 = points.isEmpty() ? 0L : points.get(0).timestamp;
@@ -85,10 +91,11 @@ public final class InkCodec {
             throw new IOException("not a zetteldraw ink file");
         }
         int version = data[3];
-        if (version != VERSION && version != VERSION_NO_IDS) {
+        if (version != VERSION && version != VERSION_IDS && version != VERSION_NO_IDS) {
             throw new IOException("unsupported ink version " + version);
         }
-        boolean hasIds = version >= VERSION;
+        boolean hasIds = version >= VERSION_IDS;
+        boolean hasColor = version >= VERSION;
         // Inflated in one go and parsed from memory: reading field by field through an
         // unbuffered InflaterInputStream cost a native inflate call per byte, seconds per page.
         ByteBuffer in = ByteBuffer.wrap(inflate(data, 4));
@@ -100,6 +107,7 @@ public final class InkCodec {
             ArrayList<InkRenderer.InkStroke> strokes = new ArrayList<>(Math.min(strokeCount, 1 << 16));
             for (int s = 0; s < strokeCount; s++) {
                 String id = hasIds ? new UUID(in.getLong(), in.getLong()).toString() : null;
+                int color = hasColor ? in.getInt() : Color.BLACK;
                 int n = in.getInt();
                 long t0 = in.getLong();
                 if (n < 0 || (long) n * POINT_BYTES > in.remaining()) {
@@ -117,7 +125,8 @@ public final class InkCodec {
                     points.add(new TouchPoint(x, y, pressure, size, tiltX, tiltY, t));
                 }
                 if (!points.isEmpty()) {
-                    strokes.add(InkRenderer.strokeOwning(id != null ? id : legacyId(s, points), points));
+                    strokes.add(InkRenderer.strokeOwning(
+                            id != null ? id : legacyId(s, points), points, color));
                 }
             }
             return strokes;
