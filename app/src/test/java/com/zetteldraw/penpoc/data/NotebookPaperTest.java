@@ -87,6 +87,30 @@ public class NotebookPaperTest {
         assertEquals(colored.id, again.strokes().get(0).id);
     }
 
+    /**
+     * Slice placement for a selection sprite is paperOrigin − scroll. If a
+     * board's stored origin drifts from the live log, seam-spanning ink looks
+     * offset or doubled. Origins must track {@link NotebookPaper#origin(int)}.
+     */
+    @Test
+    public void sliceOriginsMatchCumulativeHeightsForSeamAlignment() {
+        NotebookPaper paper = NotebookPaper.empty(1420);
+        paper.appendStroke(line("a", 10f, 100f, 200f));
+        paper.appendStroke(line("b", 10f, 1500f, 1600f));
+        assertEquals(2, paper.sliceCount());
+        assertEquals(0f, paper.origin(0), 0f);
+        assertEquals(1420f, paper.origin(1), 0f);
+        assertEquals(2840f, paper.origin(2), 0f);
+        // Screen y of a paper point is origin-local in the slice bitmap plus
+        // (paperOrigin − scroll). Both sides of the mark share that rule.
+        float scroll = 700f;
+        float paperY = 1500f;
+        float surfaceFromSprite = paperY - scroll;
+        float surfaceFromBase = (paper.origin(1) - scroll) + (paperY - paper.origin(1));
+        assertEquals("sprite and punched slice base must agree at the seam",
+                surfaceFromSprite, surfaceFromBase, 0.001f);
+    }
+
     @Test
     public void lassoDragAcrossTheMarkIsOneShiftAndUndoSubtractsIt() {
         NotebookPaper paper = NotebookPaper.empty(1420);

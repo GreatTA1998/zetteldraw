@@ -757,13 +757,18 @@ final class PageInkView extends FrameLayout {
         int last = view.lastVisible(surfaceView.getHeight());
         boolean paperSelection = selection != null && selection.acrossPaper;
         for (int index = view.firstVisible(); index <= last && !view.isEmpty(); index++) {
-            float top = view.pageTop(index);
+            Board page = view.page(index);
+            // Paper ink is placed from paperOrigin so the selection sprite
+            // (paper coords − scroll) lines up with every slice base. Using
+            // layout.tops here when paperOrigin drifted made seam-spanning
+            // selections look offset / doubled above and below the mark.
+            float top = paperSurfaceTop(page, view);
             if (paperSelection) {
                 Selection sel = selection;
                 // Never fall back to bitmapFor while the selection is up: that
                 // re-renders the dense page on the UI thread every drag frame and
                 // draws the selected strokes twice (base + sprite).
-                Bitmap base = sel.sliceBases == null ? null : sel.sliceBases.get(view.page(index).id);
+                Bitmap base = sel.sliceBases == null ? null : sel.sliceBases.get(page.id);
                 if (base != null) {
                     layers.add(base);
                     lefts.add(0f);
@@ -782,7 +787,7 @@ final class PageInkView extends FrameLayout {
                 box = boxOnSurface(sel);
                 continue;
             }
-            Bitmap bitmap = bitmapFor(view.page(index), view.layout.heights[index]);
+            Bitmap bitmap = bitmapFor(page, view.layout.heights[index]);
             if (bitmap != null) {
                 layers.add(bitmap);
                 lefts.add(0f);
@@ -1351,6 +1356,7 @@ final class PageInkView extends FrameLayout {
         if (selection.acrossPaper) {
             ensureSliceBases(selection);
         }
+        selection.scrolled = true;
         if (listener != null) {
             listener.onSelectionScroll(next);
         }
@@ -1378,7 +1384,37 @@ final class PageInkView extends FrameLayout {
             dirty.union(s.drawnBox);
         }
         s.drawnBox = box;
-        requestFrame(false, dirty, UpdateMode.ANIMATION_MONO);
+        // After an edge-scroll the whole surface moved; a partial dirty leaves
+        // the old scroll's pixels on screen (ghost duplicate above/below the
+        // seam). Same when the selection already spans more than one slice.
+        if (s.acrossPaper && (s.scrolled || spansMultipleSlices(s))) {
+            requestFrame(true, null, UpdateMode.ANIMATION_MONO);
+        } else {
+            requestFrame(false, dirty, UpdateMode.ANIMATION_MONO);
+        }
+    }
+
+    /** True when the (possibly dragged) selection meets more than one page slice. */
+    private boolean spansMultipleSlices(Selection s) {
+        if (s == null || shown.isEmpty()) {
+            return false;
+        }
+        RectF paper = new RectF(s.bounds);
+        paper.offset(s.dx, s.dy);
+        int hits = 0;
+        for (int i = 0; i < shown.layout.size(); i++) {
+            Board slice = shown.page(i);
+            syncPaperOrigin(slice);
+            float top = slice.paperOrigin;
+            float bottom = top + shown.layout.heights[i];
+            if (paper.bottom >= top && paper.top < bottom) {
+                hits++;
+                if (hits > 1) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void commitSelection() {
@@ -1428,10 +1464,15 @@ final class PageInkView extends FrameLayout {
         }
         removeCallbacks(dragFrame);
         stopEdgeScroll();
+        boolean needFull = s.acrossPaper && (s.scrolled || spansMultipleSlices(s));
         RectF dirty = touchedArea(s);
         scheduleResume();
         endSelection();
-        requestFrame(false, dirty, UpdateMode.GC);
+        if (needFull) {
+            requestFrame(true, null, UpdateMode.GC);
+        } else {
+            requestFrame(false, dirty, UpdateMode.GC);
+        }
         if (listener != null) {
             listener.onLassoCancelled();
         }
@@ -1485,6 +1526,7 @@ final class PageInkView extends FrameLayout {
         }
         removeCallbacks(dragFrame);
         stopEdgeScroll();
+        boolean needFull = s.acrossPaper && (s.scrolled || spansMultipleSlices(s));
         RectF dirty = touchedArea(s);
         if (s.acrossPaper) {
             NotebookPaper paper = s.page.paper;
@@ -1492,7 +1534,7 @@ final class PageInkView extends FrameLayout {
             if (paper == null || removed.isEmpty()) {
                 scheduleResume();
                 endSelection();
-                requestFrame(false, dirty, UpdateMode.GC);
+                requestFrame(true, null, UpdateMode.GC);
                 if (listener != null) {
                     listener.onLassoCancelled();
                 }
@@ -1502,7 +1544,11 @@ final class PageInkView extends FrameLayout {
             invalidatePaperRegion(paper, new RectF(s.bounds));
             scheduleResume();
             endSelection();
-            requestFrame(false, dirty, UpdateMode.GC);
+            if (needFull) {
+                requestFrame(true, null, UpdateMode.GC);
+            } else {
+                requestFrame(false, dirty, UpdateMode.GC);
+            }
             history.record(InkHistory.Edit.of(InkHistory.Part.paperRemoved(s.page, removed)));
             historyChanged();
             notifyChanged(s.page);
@@ -1803,6 +1849,7 @@ final class PageInkView extends FrameLayout {
         moved.offset(s.dx, s.dy);
         for (int i = 0; i < shown.layout.size(); i++) {
             Board slice = shown.page(i);
+            syncPaperOrigin(slice);
             float top = slice.paperOrigin;
             float bottom = top + shown.layout.heights[i];
             boolean visible = i >= first && i <= last;
@@ -1818,18 +1865,40 @@ final class PageInkView extends FrameLayout {
         }
     }
 
+    /**
+     * Surface y of a page's top edge. For one-sheet pages this is paperOrigin
+     * minus scroll, matching the selection sprite's paper − scroll placement.
+     */
+    private static float paperSurfaceTop(Board page, InkViewport view) {
+        if (page.paper != null) {
+            syncPaperOrigin(page);
+            return page.paperOrigin - view.scrollY;
+        }
+        return view.pageTop(view.layout.indexOf(page.id));
+    }
+
+    /** Keep {@link Board#paperOrigin} equal to the live log after tear/extend. */
+    private static void syncPaperOrigin(Board page) {
+        if (page == null || page.paper == null || page.sliceIndex < 0) {
+            return;
+        }
+        page.paperOrigin = page.paper.origin(page.sliceIndex);
+    }
+
     private void commitPaperSelection(Selection s) {
         removeCallbacks(dragFrame);
         stopEdgeScroll();
-        RectF dirty = touchedArea(s);
         float dx = s.dx;
         float dy = s.dy;
+        boolean needFull = s.scrolled || spansMultipleSlices(s);
+        RectF dirty = touchedArea(s);
         NotebookPaper paper = s.page.paper;
         Set<String> ids = s.ids;
         if (paper == null || (dx == 0f && dy == 0f)) {
             scheduleResume();
             endSelection();
-            requestFrame(false, dirty, UpdateMode.GC);
+            // Full GC clears seam ghosts from the selection preview.
+            requestFrame(true, null, UpdateMode.GC);
             if (listener != null) {
                 listener.onLassoCancelled();
             }
@@ -1852,7 +1921,14 @@ final class PageInkView extends FrameLayout {
         invalidatePaperRegion(paper, touchedPaper);
         scheduleResume();
         endSelection();
-        requestFrame(false, dirty, UpdateMode.GC);
+        // Cross-page (or edge-scrolled) commits must repaint the whole surface:
+        // a partial dirty is still in pre-scroll surface coords and leaves a
+        // second copy of the selection near the dashed mark.
+        if (needFull) {
+            requestFrame(true, null, UpdateMode.GC);
+        } else {
+            requestFrame(false, dirty, UpdateMode.GC);
+        }
         history.record(InkHistory.Edit.of(InkHistory.Part.paperShifted(s.page, ids, dx, dy)));
         historyChanged();
         notifyChanged(s.page);
@@ -1896,6 +1972,7 @@ final class PageInkView extends FrameLayout {
             if (each.paper != paper) {
                 continue;
             }
+            syncPaperOrigin(each);
             float top = each.paperOrigin;
             float bottom = top + shown.layout.heights[i];
             if (paperBounds.bottom >= top && paperBounds.top < bottom) {
@@ -1912,6 +1989,7 @@ final class PageInkView extends FrameLayout {
         if (page.paper == null) {
             return bitmap;
         }
+        syncPaperOrigin(page);
         Canvas canvas = new Canvas(bitmap);
         canvas.save();
         canvas.clipRect(0, 0, width, height);
@@ -1946,6 +2024,8 @@ final class PageInkView extends FrameLayout {
         float downY;
         /** {@link InkViewport#scrollY} at ACTION_DOWN; edge scroll adds the delta to dy. */
         int scrollAtDown;
+        /** True after edge-scroll during this selection; forces full-surface redraws. */
+        boolean scrolled;
         RectF drawnBox;
 
         Selection(Board page, int index, Set<String> ids, RectF bounds, Bitmap base, Bitmap sprite) {
