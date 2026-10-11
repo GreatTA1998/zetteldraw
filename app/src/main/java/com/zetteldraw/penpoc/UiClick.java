@@ -10,34 +10,32 @@ import android.util.Log;
  * Short UI feedback on discrete presses (tools, tabs, menus, Confirm /
  * Cancel, page chrome). Not used for stylus ink samples or finger scroll.
  *
- * Experiment (v44): four bundled micro-sounds cycle in order on each
- * {@code ACTION_DOWN} — swish → scratch → droplet → chime → … — so they
- * are less likely to read as an echo of the physical screen/pen tap.
+ * Three soft paper/pencil scratch variants cycle on each {@code ACTION_DOWN}
+ * — soft → fine → dry → … — so Elton can A/B the family that worked in v44.
  * Skipped in silent mode or when media volume is zero. Never blocks the
  * main thread on decode after {@link #warm(Context)}.
  */
 public final class UiClick {
     private static final String TAG = "zd-click";
     /** Soft; blends under the physical screen contact. */
-    private static final float VOLUME = 0.18f;
+    private static final float VOLUME = 0.16f;
 
     private static final int[] RAW_IDS = {
-            R.raw.ui_swish,
-            R.raw.ui_scratch,
-            R.raw.ui_droplet,
-            R.raw.ui_chime,
+            R.raw.ui_scratch_soft,
+            R.raw.ui_scratch_fine,
+            R.raw.ui_scratch_dry,
     };
 
     private static SoundPool pool;
     private static final int[] soundIds = new int[RAW_IDS.length];
     private static int loadedCount;
     private static boolean loading;
-    /** Next slot in the 1→2→3→4 cycle (session memory). */
+    /** Next slot in the 1→2→3 cycle (session memory). */
     private static int nextIndex;
 
     private UiClick() {}
 
-    /** Prefetch all four ticks so the first tap is not a silent load. */
+    /** Prefetch all three scratches so the first tap is not a silent load. */
     public static void warm(Context context) {
         if (context == null) {
             return;
@@ -84,7 +82,7 @@ public final class UiClick {
         }
     }
 
-    /** Visible for tests: which slot plays next (0..3). */
+    /** Visible for tests: which slot plays next (0..2). */
     static int nextSlotForTest() {
         return nextIndex % RAW_IDS.length;
     }
@@ -105,7 +103,6 @@ public final class UiClick {
                     .build();
             loadedCount = 0;
             next.setOnLoadCompleteListener((p, id, status) -> {
-                // Real devices finish decode here; Robolectric often never fires.
                 if (status == 0) {
                     synchronized (UiClick.class) {
                         if (loadedCount < RAW_IDS.length) {
@@ -121,8 +118,6 @@ public final class UiClick {
                     ready++;
                 }
             }
-            // load() returning an id is enough to call play(); a too-early play
-            // is a no-op stream, and warm() usually finishes before the first tap.
             loadedCount = ready;
             pool = next;
         } catch (Throwable t) {

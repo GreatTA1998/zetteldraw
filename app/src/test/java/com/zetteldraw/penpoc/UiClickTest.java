@@ -55,19 +55,16 @@ public class UiClickTest {
     }
 
     @Test
-    public void cycleAdvancesFourSlots() {
+    public void cycleAdvancesThreeScratchSlots() {
         audio.setRingerMode(AudioManager.RINGER_MODE_NORMAL);
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, 7, 0);
         UiClick.warm(context);
-        // Allow SoundPool load callbacks.
         ShadowLooper.idleMainLooper(200, TimeUnit.MILLISECONDS);
         assertEquals(0, UiClick.nextSlotForTest());
         UiClick.play(context);
         assertEquals(1, UiClick.nextSlotForTest());
         UiClick.play(context);
         assertEquals(2, UiClick.nextSlotForTest());
-        UiClick.play(context);
-        assertEquals(3, UiClick.nextSlotForTest());
         UiClick.play(context);
         assertEquals(0, UiClick.nextSlotForTest());
     }
