@@ -426,6 +426,23 @@ final class SurfaceWorker {
 
         @Override
         public void open(Rect limitRect, List<Rect> excludes) {
+            // Kaleido: without Color CU, setStrokeColor for non-black is accepted but
+            // the live scribble overlay stays blank — ink only appears after freeze.
+            // Notes enables this for color devices; Boox Go 7 Color II needs it too.
+            call("enableColorCU", () -> {
+                try {
+                    EpdController.enableColorCU();
+                } catch (RuntimeException | LinkageError ignored) {
+                    // Mono Boox / non-Onyx: no Color CU.
+                }
+            });
+            call("setDisplayScheme", () -> {
+                try {
+                    EpdController.setDisplayScheme(EpdController.SCHEME_SCRIBBLE);
+                } catch (RuntimeException | LinkageError ignored) {
+                    // Not an Onyx device.
+                }
+            });
             call("openRawDrawing", () -> helper.setStrokeWidth(InkRenderer.BASE_WIDTH_PX)
                     .setStrokeColor(PenPalette.DEFAULT_COLOR)
                     .setLimitRect(limitRect, excludes)
@@ -439,6 +456,20 @@ final class SurfaceWorker {
         @Override
         public void close() {
             call("closeRawDrawing", helper::closeRawDrawing);
+            call("setDisplaySchemeNormal", () -> {
+                try {
+                    EpdController.setDisplayScheme(EpdController.SCHEME_NORMAL);
+                } catch (RuntimeException | LinkageError ignored) {
+                    // Not an Onyx device.
+                }
+            });
+            call("disableColorCU", () -> {
+                try {
+                    EpdController.disableColorCU();
+                } catch (RuntimeException | LinkageError ignored) {
+                    // Mono Boox / non-Onyx.
+                }
+            });
         }
 
         @Override
@@ -453,11 +484,19 @@ final class SurfaceWorker {
 
         @Override
         public void setStyle(Style st) {
+            // Order matches Boox-EinkDraw: style can reset width/color on the chip,
+            // so re-apply both after setStrokeStyle. Color CU (open) keeps non-black
+            // strokes visible in the live overlay on Kaleido.
             call("setStrokeStyle", () -> helper.setStrokeStyle(st.strokeStyle));
             call("setStrokeWidth", () -> helper.setStrokeWidth(st.width));
             call("setStrokeColor", () -> helper.setStrokeColor(st.color));
             call("setBrushRawDrawingEnabled", () -> helper.setBrushRawDrawingEnabled(st.brush));
             call("setRawDrawingRenderEnabled", () -> helper.setRawDrawingRenderEnabled(st.render));
+            // Non-black: re-assert color after render enable. Some Kaleido firmware
+            // paths only latch the CU stroke color once the scribble renderer is on.
+            if (st.color != PenPalette.DEFAULT_COLOR && st.render) {
+                call("setStrokeColor", () -> helper.setStrokeColor(st.color));
+            }
         }
 
         @Override

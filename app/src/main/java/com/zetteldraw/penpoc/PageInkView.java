@@ -1751,7 +1751,11 @@ final class PageInkView extends FrameLayout {
         paper.appendStroke(stroke, adopt);
         history.record(InkHistory.Edit.of(InkHistory.Part.paperAdded(page, stroke)));
         historyChanged();
-        invalidatePaper(drawnOn, paper);
+        // Paint into cached slice bitmaps (same as non-paper). Do not drop every
+        // visible slice — that forced a full-sheet rebuild on pen-up (~seconds on
+        // a dense notebook) and made color ink look delayed when live overlay
+        // was blank without Color CU.
+        paintStrokeOntoPaperCaches(drawnOn, paper, stroke);
         notifyChanged(page);
         if ((wasBlank || paper.sliceCount() > slicesBefore) && listener != null) {
             listener.onPageBecameNonEmpty(page);
@@ -1956,6 +1960,41 @@ final class PageInkView extends FrameLayout {
             if (each.paper == paper) {
                 invalidatePage(each.id);
             }
+        }
+    }
+
+    /**
+     * Draw one new stroke into every on-screen slice cache it meets. Slices
+     * without a cache are left alone; {@link #bitmapFor} rebuilds them on the
+     * next frame. Mirrors the non-paper {@link #addStroke} incremental path.
+     */
+    private void paintStrokeOntoPaperCaches(InkViewport view, NotebookPaper paper,
+            InkRenderer.InkStroke stroke) {
+        if (view == null || paper == null || stroke == null) {
+            return;
+        }
+        RectF bounds = stroke.bounds;
+        for (int i = 0; i < view.layout.size(); i++) {
+            Board each = view.page(i);
+            if (each.paper != paper) {
+                continue;
+            }
+            syncPaperOrigin(each);
+            float top = each.paperOrigin;
+            float bottom = top + view.layout.heights[i];
+            if (bounds.bottom < top || bounds.top >= bottom) {
+                continue;
+            }
+            Bitmap cached = bitmaps.get(each.id);
+            if (cached == null || cached.isRecycled()) {
+                continue;
+            }
+            Canvas canvas = new Canvas(cached);
+            canvas.save();
+            canvas.clipRect(0, 0, cached.getWidth(), cached.getHeight());
+            canvas.translate(0f, -each.paperOrigin);
+            InkRenderer.draw(canvas, paint, stroke);
+            canvas.restore();
         }
     }
 
