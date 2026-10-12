@@ -1504,6 +1504,28 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
+    @Override
+    public int queueNestedNotebooksForUpload() {
+        synchronized (lock) {
+            int[] added = {0};
+            db.runInTransaction(() -> {
+                for (NotebookEntity row : dao.liveNotebooks()) {
+                    if (row.parentId == null || row.deletedAt != null) {
+                        continue;
+                    }
+                    if (dao.outbox(OutboxEntry.NOTEBOOK, row.id) == null) {
+                        queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+                        added[0]++;
+                    }
+                }
+            });
+            if (added[0] > 0) {
+                LaunchLog.mark("queueNestedNotebooksForUpload added " + added[0] + " outbox rows");
+            }
+            return added[0];
+        }
+    }
+
     // endregion
 
     // region legacy import

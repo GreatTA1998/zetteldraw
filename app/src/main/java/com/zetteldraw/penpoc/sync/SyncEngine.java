@@ -64,6 +64,9 @@ public final class SyncEngine {
             if (neverSynced) {
                 store.queuePlaceholderSeedsForUpload();
             }
+            // Every pass: re-queue rev==0 rows whose outbox entry was lost.
+            // Nested parent_id repair (incl. rev>0 drift) is one-shot in SyncWorker.
+            store.ensureUnsyncedQueued();
             push(result);
             pull(result);
             // Only stamp last_ok_at when the outbox is empty. A sticky push

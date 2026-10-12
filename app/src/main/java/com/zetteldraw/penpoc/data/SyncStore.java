@@ -44,6 +44,18 @@ public interface SyncStore {
     }
 
     /**
+     * Re-queue every live nested notebook ({@code parent_id != null}) that is not
+     * already in the outbox. Heals cases where a child exists only on the device
+     * (or parent_id was placed locally) but never landed in Postgres — the web
+     * companion builds sub-bars from {@code parent_id} on {@code /web/notebooks}.
+     *
+     * @return how many new outbox rows were added
+     */
+    default int queueNestedNotebooksForUpload() {
+        return 0;
+    }
+
+    /**
      * After a restore pull on a never-synced device, queue untouched seed notebooks
      * that still have {@code rev == 0} (not present on the server) so a brand-new
      * account gets starter notebooks. No-op when seeds were already adopted from pull.

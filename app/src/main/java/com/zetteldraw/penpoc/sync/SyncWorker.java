@@ -35,9 +35,18 @@ public final class SyncWorker extends Worker {
         }
         LaunchLog.mark("sync started (attempt " + (getRunAttemptCount() + 1) + ")");
         long started = SystemClock.uptimeMillis();
+        com.zetteldraw.penpoc.data.SyncStore store = ZettelData.repository(getApplicationContext());
+        // Once per versionCode: push nested notebooks so web sub-bars match Boox
+        // (actions.life → home page / …). createNotebook already queues; this heals
+        // lost outbox rows and place-under parent_id that never left the device.
+        if (SyncConfig.needsNestingRepair(getApplicationContext())) {
+            int nested = store.queueNestedNotebooksForUpload();
+            SyncConfig.markNestingRepairDone(getApplicationContext());
+            LaunchLog.mark("nesting repair queued " + nested + " notebook(s)");
+        }
         SyncClient client = new SyncClient(config, ZettelDatabase.SCHEMA_VERSION);
         SyncEngine engine = new SyncEngine(
-                ZettelData.repository(getApplicationContext()),
+                store,
                 client,
                 config,
                 ZettelDatabase.SCHEMA_VERSION,

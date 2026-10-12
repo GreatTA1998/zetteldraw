@@ -22,6 +22,8 @@ public final class SyncConfig {
     private static final String KEY_SYNC_ON = "sync_on";
     private static final String KEY_DEVICE = "device_id";
     private static final String KEY_WRITER_BLOCK = "writer_block_msg";
+    /** Last app versionCode that ran {@code queueNestedNotebooksForUpload}. */
+    private static final String KEY_NESTING_REPAIR_CODE = "nesting_repair_code";
 
     public final String serverUrl;
     /** Legacy DEVICE_TOKENS bearer; used only when {@link #accessToken} is empty. */
@@ -150,6 +152,16 @@ public final class SyncConfig {
 
     public static void clearWriterBlockMessage(Context context) {
         prefs(context).edit().remove(KEY_WRITER_BLOCK).apply();
+    }
+
+    /** True until {@link #markNestingRepairDone} runs for this {@link BuildConfig#VERSION_CODE}. */
+    public static boolean needsNestingRepair(Context context) {
+        return prefs(context).getInt(KEY_NESTING_REPAIR_CODE, 0) < BuildConfig.VERSION_CODE;
+    }
+
+    /** Call after nested notebooks have been queued into the outbox for this version. */
+    public static void markNestingRepairDone(Context context) {
+        prefs(context).edit().putInt(KEY_NESTING_REPAIR_CODE, BuildConfig.VERSION_CODE).apply();
     }
 
     public static void signOut(Context context) {

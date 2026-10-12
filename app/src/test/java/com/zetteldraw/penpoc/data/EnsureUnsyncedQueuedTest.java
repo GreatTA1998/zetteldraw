@@ -65,6 +65,8 @@ public class EnsureUnsyncedQueuedTest {
 
     @Test
     public void markSyncedOnlyWhenOutboxEmpty() {
+        // Seeds are not queued; create a real notebook so the outbox is non-empty.
+        repo.createNotebook("pending-upload");
         assertTrue(repo.outboxSize() > 0);
         repo.markSynced(9_000L);
         assertEquals(9_000L, repo.lastSyncedAt());
@@ -73,5 +75,29 @@ public class EnsureUnsyncedQueuedTest {
         // ensureUnsyncedQueued is a no-op when everything is already queued.
         assertEquals(0, repo.ensureUnsyncedQueued());
         assertTrue(repo.outboxSize() > 0);
+    }
+
+    @Test
+    public void nestedNotebookRequeuedWhenOutboxDropped() {
+        BoardRepository.NotebookInfo parent = repo.createNotebook("actions.life-host");
+        BoardRepository.NotebookInfo child = repo.createNotebook("home page", parent.id);
+        assertTrue(device.db.dao().outbox(OutboxEntry.NOTEBOOK, child.id) != null);
+
+        // Simulate a lost outbox row while the child stays local (never pushed).
+        device.db.dao().deleteOutbox(OutboxEntry.NOTEBOOK, child.id);
+        assertEquals(0, device.db.dao().notebook(child.id).rev);
+        assertEquals(parent.id, device.db.dao().notebook(child.id).parentId);
+
+        assertTrue(repo.ensureUnsyncedQueued() >= 1);
+        assertTrue(device.db.dao().outbox(OutboxEntry.NOTEBOOK, child.id) != null);
+
+        device.db.dao().deleteOutbox(OutboxEntry.NOTEBOOK, child.id);
+        // Phantom rev>0 with parent_id still needs an explicit nesting repair.
+        com.zetteldraw.penpoc.data.db.NotebookEntity row = device.db.dao().notebook(child.id);
+        row.rev = 9;
+        device.db.dao().upsertNotebook(row);
+        assertEquals(0, repo.ensureUnsyncedQueued());
+        assertEquals(1, repo.queueNestedNotebooksForUpload());
+        assertTrue(device.db.dao().outbox(OutboxEntry.NOTEBOOK, child.id) != null);
     }
 }
