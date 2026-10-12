@@ -92,7 +92,7 @@ public class PageMoveScratchpadToSubNotebookTest {
         // save source (no longer on screen), place before trailing blank.
         repo.saveInk(destBlank);
         repo.saveInk(last);
-        repo.placePageBefore(movedId, destBlank.id);
+        assertTrue(repo.placePageBefore(movedId, destBlank.id, sub));
 
         List<Board> scratch = repo.pages(null);
         assertEquals(2, scratch.size());
@@ -107,6 +107,39 @@ public class PageMoveScratchpadToSubNotebookTest {
         assertTrue(dest.get(1).isBlank());
         assertNotNull("dest must show the drawing", dest.get(0).paper.stroke("elton-drawing"));
         assertEquals(0, dest.get(0).sliceIndex);
+    }
+
+    /**
+     * Elton v62 wild failure: snackbar said Place in "home page" (child of
+     * actions.life) but Confirm used a stale midline page still bound to the
+     * parent sheet — page left Scratchpad and landed on actions.life, so
+     * Scratchpad + home page both looked empty.
+     */
+    @Test
+    public void placeIntoHomePageChildIgnoresStaleParentMidlineTarget() {
+        String actions = repo.createNotebook("actions.life").id;
+        String home = repo.createNotebook("home page", actions).id;
+        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(actions, PAGE, PAGE, 0L);
+        repo.ensureSheet(home, PAGE, PAGE, 0L);
+
+        Board parentPage = inkNearBottom(actions, "parent-stay");
+        Board drawing = inkNearBottom(null, "second-loss");
+        String movedId = drawing.id;
+
+        // Stale target: parent page id, but explicit dest = home page (selected tab).
+        assertTrue(repo.placePageBefore(movedId, parentPage.id, home));
+
+        assertTrue("must leave Scratchpad",
+                repo.pages(null).stream().noneMatch(b -> movedId.equals(b.id)));
+        assertTrue("must NOT misfile onto actions.life parent",
+                repo.pages(actions).stream().noneMatch(b -> movedId.equals(b.id)));
+        assertNotNull("parent ink stays on actions.life",
+                find(repo.pages(actions), parentPage.id).paper.stroke("parent-stay"));
+        List<Board> homePages = repo.pages(home);
+        assertEquals(movedId, homePages.get(0).id);
+        assertNotNull(homePages.get(0).paper.stroke("second-loss"));
+        assertTrue(homePages.get(homePages.size() - 1).isBlank());
     }
 
     @Test
@@ -125,7 +158,7 @@ public class PageMoveScratchpadToSubNotebookTest {
         deferred.clear();
         repo.saveInk(destBlank);
         repo.saveInk(last);
-        repo.placePageBefore(movedId, destBlank.id);
+        assertTrue(repo.placePageBefore(movedId, destBlank.id, sub));
         assertTrue("confirmMoving queues flushes plus persist", deferred.size() >= 3);
 
         // Run only the pre-queued saveInk flushes — not the dest-first persist.
@@ -165,7 +198,7 @@ public class PageMoveScratchpadToSubNotebookTest {
 
         deferWriter = true;
         deferred.clear();
-        repo.placePageBefore(movedId, destBlank.id);
+        assertTrue(repo.placePageBefore(movedId, destBlank.id, sub));
         assertFalse("persist must be queued while writer is deferred", deferred.isEmpty());
 
         // Pretend dest is fully flushed after the compact rewrite so the
@@ -223,7 +256,7 @@ public class PageMoveScratchpadToSubNotebookTest {
         deferred.clear();
         repo.saveInk(destBlank);
         repo.saveInk(last);
-        repo.placePageBefore(movedId, destBlank.id);
+        assertTrue(repo.placePageBefore(movedId, destBlank.id, sub));
         ArrayList<Runnable> batch = new ArrayList<>(deferred);
         for (Runnable task : batch) {
             task.run();
@@ -238,6 +271,15 @@ public class PageMoveScratchpadToSubNotebookTest {
 
         assertFalse(hasPageWithStroke(null, movedId, "drained"));
         assertTrue(hasPageWithStroke(sub, movedId, "drained"));
+    }
+
+    private static Board find(List<Board> pages, String id) {
+        for (Board page : pages) {
+            if (page.id.equals(id)) {
+                return page;
+            }
+        }
+        throw new AssertionError("missing " + id);
     }
 
     private void openRepo(java.util.concurrent.Executor writer) {

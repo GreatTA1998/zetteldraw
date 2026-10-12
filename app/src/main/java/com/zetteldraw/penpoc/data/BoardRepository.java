@@ -56,13 +56,26 @@ public interface BoardRepository {
 
     /**
      * Place {@code boardId} immediately before {@code beforeBoardId}.
-     * Same notebook reorders; other notebook (or Scratchpad) tears the page
-     * across and inserts it before the target. When {@code beforeBoardId} is a
-     * trailing blank, the page is placed at the end of that list. Dense pages
-     * stay atomic. No-op when the source is missing, blank, or the same as
-     * the target.
+     * Destination notebook is inferred from the target page's sheet.
+     * Prefer {@link #placePageBefore(String, String, String)} with an explicit
+     * dest so a stale on-screen target cannot misfile into the wrong notebook.
+     *
+     * @return false when nothing changed
      */
-    void placePageBefore(String boardId, String beforeBoardId);
+    boolean placePageBefore(String boardId, String beforeBoardId);
+
+    /**
+     * Place {@code boardId} immediately before {@code beforeBoardId} in
+     * {@code destNotebookId} ({@code null} = Scratchpad).
+     * Same notebook reorders; other notebook tears the page across and inserts
+     * it before the target. When the target is a trailing blank <em>or</em>
+     * belongs to a different sheet than {@code destNotebookId}, the page is
+     * appended at the end of the destination (so a stale midline page from the
+     * notebook you just left cannot steal the move). Dense pages stay atomic.
+     *
+     * @return false when nothing changed (missing source/dest, blank source, etc.)
+     */
+    boolean placePageBefore(String boardId, String beforeBoardId, String destNotebookId);
 
     /** Clear one page's ink. */
     void wipePage(String boardId);
