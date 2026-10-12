@@ -140,7 +140,7 @@ function NeighborPeek({
   onClick: () => void;
 }) {
   if (!page) {
-    return <div className="hidden h-full w-[14%] max-w-48 shrink-0 sm:block" aria-hidden />;
+    return <div className="pointer-events-none hidden h-full w-[14%] max-w-48 shrink-0 sm:block" aria-hidden />;
   }
   return (
     <button
