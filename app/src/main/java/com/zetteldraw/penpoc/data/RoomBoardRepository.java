@@ -475,9 +475,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     @Override
-    public void placePageBefore(String boardId, String beforeBoardId) {
+    public boolean placePageBefore(String boardId, String beforeBoardId) {
+        Board before;
+        synchronized (lock) {
+            before = cache.get(beforeBoardId);
+        }
+        String dest = before == null ? null : notebookIdOfSheet(before.sheetId);
+        return placePageBefore(boardId, beforeBoardId, dest);
+    }
+
+    @Override
+    public boolean placePageBefore(String boardId, String beforeBoardId, String destNotebookId) {
         if (boardId == null || beforeBoardId == null || boardId.equals(beforeBoardId)) {
-            return;
+            return false;
         }
         Board moving;
         Board before;
@@ -485,76 +495,74 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             moving = cache.get(boardId);
             before = cache.get(beforeBoardId);
         }
-        if (moving == null || before == null || moving.paper == null || before.paper == null) {
-            return;
+        if (moving == null || before == null || moving.paper == null) {
+            LaunchLog.mark("place-before refused: missing source/target board or paper");
+            return false;
         }
-        if (moving.paper == before.paper
-                && java.util.Objects.equals(moving.sheetId, before.sheetId)) {
-            synchronized (lock) {
-                int sourceIndex = moving.paper.indexOfSliceId(boardId);
-                if (sourceIndex < 0 || !moving.paper.containsInk(sourceIndex)) {
-                    return;
-                }
-                boolean beforeIsTrailing = isTrailingBlankBoard(before, moving.paper);
-                int beforeIndex = beforeIsTrailing ? -1 : moving.paper.indexOfSliceId(beforeBoardId);
-                if (!beforeIsTrailing && beforeIndex < 0) {
-                    return;
-                }
-                try {
-                    if (beforeIsTrailing) {
-                        // Trailing blank: append at end (after the last inked slice).
-                        int last = moving.paper.sliceCount() - 1;
-                        if (last < 0 || sourceIndex == last) {
-                            return;
-                        }
-                        moving.paper.reorderAfter(sourceIndex, last);
-                    } else {
-                        moving.paper.reorderBefore(sourceIndex, beforeIndex);
-                    }
-                } catch (RuntimeException e) {
-                    Log.e(TAG, "place page reorder failed; left notebook unchanged", e);
-                    LaunchLog.mark("place-before reorder failed; left unchanged: " + e.getMessage());
-                    return;
-                }
-                syncSliceIndex(moving.paper, boardId);
-                String sheetId = moving.sheetId;
-                // Hold flushes so a queued saveInk cannot append a corrupt
-                // suffix of the rewritten log before rewriteSheet lands.
-                holdSheetFlush(sheetId);
-                writer.execute(() -> {
-                    try {
-                        rewriteSheet(sheetId);
-                    } finally {
-                        releaseSheetFlush(sheetId);
-                    }
-                });
-            }
-            return;
-        }
-        String destNotebookId = notebookIdOfSheet(before.sheetId);
+        String destSheetId = NotebookPaper.sheetId(destNotebookId);
         if (knownPageHeight > 0) {
             ensureSheet(destNotebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
         }
         synchronized (lock) {
-            OpenSheet dest = sheets.get(NotebookPaper.sheetId(destNotebookId));
+            OpenSheet dest = sheets.get(destSheetId);
             int sourceIndex = moving.paper.indexOfSliceId(boardId);
             if (dest == null || !dest.ready || sourceIndex < 0
                     || !moving.paper.containsInk(sourceIndex)) {
-                return;
+                LaunchLog.mark("place-before refused: dest not ready or source has no ink"
+                        + " destReady=" + (dest != null && dest.ready)
+                        + " sourceIndex=" + sourceIndex);
+                return false;
+            }
+            // Same notebook only when the source already lives on the *destination*
+            // sheet — never when a stale on-screen target shares the source paper.
+            if (moving.paper == dest.paper
+                    && java.util.Objects.equals(moving.sheetId, destSheetId)) {
+                boolean beforeIsTrailing = isTrailingBlankBoard(before, dest.paper);
+                int beforeIndex = beforeIsTrailing ? -1 : dest.paper.indexOfSliceId(beforeBoardId);
+                if (!beforeIsTrailing && beforeIndex < 0) {
+                    return false;
+                }
+                try {
+                    if (beforeIsTrailing) {
+                        int last = dest.paper.sliceCount() - 1;
+                        if (last < 0 || sourceIndex == last) {
+                            return false;
+                        }
+                        dest.paper.reorderAfter(sourceIndex, last);
+                    } else {
+                        dest.paper.reorderBefore(sourceIndex, beforeIndex);
+                    }
+                } catch (RuntimeException e) {
+                    Log.e(TAG, "place page reorder failed; left notebook unchanged", e);
+                    LaunchLog.mark("place-before reorder failed; left unchanged: " + e.getMessage());
+                    return false;
+                }
+                if (dest.paper.indexOfSliceId(boardId) < 0) {
+                    LaunchLog.mark("place-before reorder postflight: lost page " + boardId);
+                    return false;
+                }
+                syncSliceIndex(dest.paper, boardId);
+                holdSheetFlush(destSheetId);
+                writer.execute(() -> {
+                    try {
+                        rewriteSheet(destSheetId);
+                    } finally {
+                        releaseSheetFlush(destSheetId);
+                    }
+                });
+                return true;
             }
             String sourceSheetId = moving.sheetId;
-            String destSheetId = NotebookPaper.sheetId(destNotebookId);
-            boolean beforeIsTrailing = isTrailingBlankBoard(before, dest.paper)
-                    || before.paper != dest.paper;
+            // Target from another notebook (stale slots after nav) → append on dest.
+            boolean beforeIsTrailing = before.paper != dest.paper
+                    || isTrailingBlankBoard(before, dest.paper);
             int beforeIndex = beforeIsTrailing ? -1 : dest.paper.indexOfSliceId(beforeBoardId);
             if (!beforeIsTrailing && beforeIndex < 0) {
-                return;
+                return false;
             }
-            int sourceStrokes = moving.paper.strokes().size();
             int destStrokes = dest.paper.strokes().size();
             try {
                 if (beforeIsTrailing) {
-                    // Trailing blank / empty list: append as newest.
                     int afterSlice = dest.paper.sliceCount() - 1;
                     moving.paper.tearMoveAfter(sourceIndex, dest.paper, afterSlice);
                 } else {
@@ -563,23 +571,56 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             } catch (RuntimeException e) {
                 Log.e(TAG, "place page move failed; left both notebooks unchanged", e);
                 LaunchLog.mark("place-before move failed; both notebooks unchanged: " + e.getMessage());
-                return;
+                return false;
             }
             if (dest.paper.indexOfSliceId(boardId) < 0
                     || dest.paper.strokes().size() < destStrokes
                     || moving.paper.indexOfSliceId(boardId) >= 0) {
                 LaunchLog.mark("place-before postflight failed; refusing disk commit"
-                        + " srcStrokes=" + sourceStrokes + " destStrokes=" + dest.paper.strokes().size());
+                        + " destHas=" + (dest.paper.indexOfSliceId(boardId) >= 0)
+                        + " sourceStillHas=" + (moving.paper.indexOfSliceId(boardId) >= 0));
                 Log.e(TAG, "place page postflight failed; not persisting");
-                return;
+                // Memory may be torn; hold flushes and reload from disk.
+                holdSheetFlush(sourceSheetId);
+                holdSheetFlush(destSheetId);
+                writer.execute(() -> {
+                    reloadSheetFromDisk(sourceSheetId);
+                    reloadSheetFromDisk(destSheetId);
+                    releaseSheetFlush(destSheetId);
+                    releaseSheetFlush(sourceSheetId);
+                });
+                return false;
             }
             syncSliceIndex(dest.paper, boardId);
-            // Block incidental flushSheet (e.g. confirmMoving's saveInk) from
-            // appending the source tear before the dest rewrite commits.
             holdSheetFlush(sourceSheetId);
             holdSheetFlush(destSheetId);
-            // Dest rewrite must succeed before the source tear is flushed to disk.
-            writer.execute(() -> persistCrossNotebookPlace(destSheetId, sourceSheetId));
+            final String movedId = boardId;
+            final String destNb = destNotebookId;
+            final String sourceNb = notebookIdOfSheet(sourceSheetId);
+            writer.execute(() -> {
+                persistCrossNotebookPlace(destSheetId, sourceSheetId);
+                assertMoveLandedOrLog(movedId, destNb, sourceNb);
+            });
+            return true;
+        }
+    }
+
+    /**
+     * After dest-first persist: dest log must still name the page; source must not.
+     * Logs loudly if invariants break (does not throw on the writer thread).
+     */
+    private void assertMoveLandedOrLog(String pageId, String destNotebookId, String sourceNotebookId) {
+        synchronized (lock) {
+            OpenSheet dest = sheets.get(NotebookPaper.sheetId(destNotebookId));
+            OpenSheet source = sheets.get(NotebookPaper.sheetId(sourceNotebookId));
+            boolean onDest = dest != null && dest.ready && dest.paper.indexOfSliceId(pageId) >= 0;
+            boolean onSource = source != null && source.ready && source.paper.indexOfSliceId(pageId) >= 0;
+            if (!onDest || onSource) {
+                LaunchLog.mark("place-before INVARIANT BROKEN page=" + pageId
+                        + " onDest=" + onDest + " onSource=" + onSource);
+                Log.e(TAG, "place-before invariant broken page=" + pageId
+                        + " onDest=" + onDest + " onSource=" + onSource);
+            }
         }
     }
 

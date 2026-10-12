@@ -1589,6 +1589,12 @@ public final class CanvasActivity extends Activity {
             refreshModeBar();
             return;
         }
+        // Slots still show the previous notebook while a load runs. Confirm
+        // would label dest as collectionId but the midline page belongs elsewhere.
+        if (loading()) {
+            refreshModeBar();
+            return;
+        }
         if (!target.page.isBlank() && sameNotebookForMove(target) && isAlreadyBeforeTarget(target)) {
             refreshModeBar();
             return;
@@ -1598,6 +1604,8 @@ public final class CanvasActivity extends Activity {
             return;
         }
         String sourceId = moveSourceId;
+        // Destination is the open collection (snackbar name), not the target
+        // page's sheet — that page can be a stale slot from the parent notebook.
         String destNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
         // Flush any pending pen-up before the tear. Cross-notebook place holds
         // sheet flushes so these writer tasks cannot persist a source tear
@@ -1615,7 +1623,11 @@ public final class CanvasActivity extends Activity {
         if (source != null) {
             repository.saveInk(source);
         }
-        repository.placePageBefore(sourceId, target.page.id);
+        if (!repository.placePageBefore(sourceId, target.page.id, destNotebookId)) {
+            LaunchLog.mark("place-before Confirm refused; leave Move mode open");
+            refreshModeBar();
+            return;
+        }
         cancelMoving();
         openAfterMove(sourceId, destNotebookId);
     }
@@ -1762,7 +1774,10 @@ public final class CanvasActivity extends Activity {
         }
         if (moveSourceId != null && moveSourceRef != null) {
             PageSlot target = moveTargetSlot();
-            if (target == null || target.page.id.equals(moveSourceId)) {
+            if (loading()) {
+                modeText.setText(getString(R.string.moving, moveSourceRef));
+                setModeConfirmEnabled(false);
+            } else if (target == null || target.page.id.equals(moveSourceId)) {
                 modeText.setText(getString(R.string.moving, moveSourceRef));
                 setModeConfirmEnabled(false);
             } else if (!target.page.isBlank() && sameNotebookForMove(target)
