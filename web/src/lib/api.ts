@@ -3,10 +3,22 @@ export interface Notebook {
   kind: "scratchpad" | "notebook";
   title: string;
   position: string | null;
+  /** Null for Scratchpad and top-level notebooks. Absent on older servers. */
+  parent_id?: string | null;
   page_count: number;
   last_edited_at: number | null;
   updated_at: number | null;
   rev: number | null;
+}
+
+export interface PageLink {
+  id: string;
+  direction: "out" | "in";
+  other_id: string;
+  other_notebook_id: string;
+  other_notebook_title: string;
+  other_index: number;
+  other_count: number;
 }
 
 export interface Page {
@@ -20,6 +32,16 @@ export interface Page {
   rev: number;
   thumb_url: string | null;
   render_url: string | null;
+  /** Absent on older servers until /web pages enrichment ships. */
+  links?: PageLink[];
+}
+
+export interface PagePlace {
+  page_id: string;
+  notebook_id: string;
+  notebook_title: string;
+  index: number;
+  count: number;
 }
 
 export const SCRATCHPAD = "scratchpad";
@@ -78,6 +100,7 @@ export const api = {
   signOut: () => request<{ authenticated: boolean }>("/api/session", { method: "DELETE" }),
   notebooksKey: "/api/zd/notebooks",
   pagesKey: (notebookId: string) => `/api/zd/notebooks/${notebookId}/pages`,
+  placeKey: (pageId: string) => `/api/zd/pages/${pageId}/place`,
   backupStatusKey: "/api/zd/backup-status",
 };
 
@@ -89,4 +112,10 @@ export interface BackupStatus {
   logs_with_ink: number;
   missing: Array<{ table: "boards" | "notebook_logs"; id: string; ink_hash: string }>;
   note: string;
+}
+
+/** Android-style link label: "→ journal 3/12". */
+export function pageLinkLabel(link: PageLink): string {
+  const arrow = link.direction === "out" ? "→" : "←";
+  return `${arrow} ${link.other_notebook_title} ${link.other_index}/${link.other_count}`;
 }

@@ -23,10 +23,25 @@ export interface WebNotebook {
   kind: "scratchpad" | "notebook";
   title: string;
   position: string | null;
+  /** Null for Scratchpad and top-level notebooks. */
+  parent_id: string | null;
   page_count: number;
   last_edited_at: number | null;
   updated_at: number | null;
   rev: number | null;
+}
+
+/** One side of a page link, resolved like Android's → / ← chrome. */
+export interface WebPageLink {
+  id: string;
+  direction: "out" | "in";
+  other_id: string;
+  /** Scratchpad is `"scratchpad"`; otherwise a notebook UUID. */
+  other_notebook_id: string;
+  other_notebook_title: string;
+  /** 1-based index among live pages in that notebook. */
+  other_index: number;
+  other_count: number;
 }
 
 export interface WebPage {
@@ -40,6 +55,15 @@ export interface WebPage {
   rev: number;
   thumb_url: string | null;
   render_url: string | null;
+  links: WebPageLink[];
+}
+
+export interface PagePlace {
+  page_id: string;
+  notebook_id: string;
+  notebook_title: string;
+  index: number;
+  count: number;
 }
 
 const LIVE = "b.deleted_at IS NULL AND b.conflict_of IS NULL";
@@ -57,7 +81,7 @@ function scopeParams(scope: SyncScope): { sql: (table: "notebooks" | "boards", a
   };
 }
 
-function toPage(row: BoardRow): WebPage {
+function toPage(row: BoardRow, links: WebPageLink[] = []): WebPage {
   return {
     id: row.id,
     notebook_id: row.notebook_id,
@@ -69,7 +93,187 @@ function toPage(row: BoardRow): WebPage {
     rev: row.rev,
     thumb_url: row.ink_hash ? `/web/thumbs/${row.ink_hash}.png` : null,
     render_url: row.ink_hash ? `/web/renders/${row.ink_hash}.png` : null,
+    links,
   };
+}
+
+interface LinkRowLite {
+  id: string;
+  source_id: string;
+  target_id: string;
+}
+
+/**
+ * Resolve notebook + 1-based index/count for each live page id (Android pageRef).
+ * Missing / deleted / out-of-scope pages are omitted.
+ */
+export async function placesOf(
+  pool: pg.Pool | pg.PoolClient,
+  pageIds: string[],
+  scope: SyncScope,
+): Promise<Map<string, PagePlace>> {
+  const out = new Map<string, PagePlace>();
+  if (pageIds.length === 0) {
+    return out;
+  }
+  const { sql, params } = scopeParams(scope);
+  const bOwn = sql("boards", "b");
+  const nOwn = sql("notebooks", "n");
+  const boards = await pool.query<BoardRow>(
+    `SELECT b.* FROM boards b
+     WHERE ${LIVE} AND ${bOwn} AND b.id = ANY($${params.length + 1}::uuid[])`,
+    [...params, pageIds],
+  );
+  if (boards.rows.length === 0) {
+    return out;
+  }
+
+  const notebookIds = [
+    ...new Set(boards.rows.map((b) => b.notebook_id).filter((id): id is string => id !== null)),
+  ];
+  const titles = new Map<string, string>();
+  if (notebookIds.length > 0) {
+    const notebooks = await pool.query<{ id: string; title: string }>(
+      `SELECT n.id, n.title FROM notebooks n
+       WHERE n.deleted_at IS NULL AND ${nOwn} AND n.id = ANY($${params.length + 1}::uuid[])`,
+      [...params, notebookIds],
+    );
+    for (const n of notebooks.rows) {
+      titles.set(n.id, n.title);
+    }
+  }
+
+  // Pages whose notebook is missing/deleted/out of scope live in Scratchpad (same as listPages).
+  const inScratchpad = new Set<string>();
+  for (const row of boards.rows) {
+    if (row.notebook_id === null || !titles.has(row.notebook_id)) {
+      inScratchpad.add(row.id);
+    }
+  }
+
+  const scratchPages =
+    inScratchpad.size > 0 ? await pagesIn(pool, null, scope) : [];
+  const scratchIndex = new Map(scratchPages.map((p, i) => [p.id, i]));
+
+  const byNotebook = new Map<string, BoardRow[]>();
+  for (const row of boards.rows) {
+    if (inScratchpad.has(row.id)) {
+      const idx = scratchIndex.get(row.id);
+      if (idx === undefined) continue;
+      out.set(row.id, {
+        page_id: row.id,
+        notebook_id: SCRATCHPAD,
+        notebook_title: "Scratchpad",
+        index: idx + 1,
+        count: scratchPages.length,
+      });
+      continue;
+    }
+    const nb = row.notebook_id!;
+    const list = byNotebook.get(nb) ?? [];
+    list.push(row);
+    byNotebook.set(nb, list);
+  }
+
+  for (const [notebookId, needed] of byNotebook) {
+    const all = await pagesIn(pool, notebookId, scope);
+    const index = new Map(all.map((p, i) => [p.id, i]));
+    const title = titles.get(notebookId) ?? "";
+    for (const row of needed) {
+      const idx = index.get(row.id);
+      if (idx === undefined || title === "") continue;
+      out.set(row.id, {
+        page_id: row.id,
+        notebook_id: notebookId,
+        notebook_title: title,
+        index: idx + 1,
+        count: all.length,
+      });
+    }
+  }
+  return out;
+}
+
+async function linksForPages(
+  pool: pg.Pool | pg.PoolClient,
+  pageIds: string[],
+  scope: SyncScope,
+): Promise<Map<string, WebPageLink[]>> {
+  const byPage = new Map<string, WebPageLink[]>();
+  if (pageIds.length === 0) {
+    return byPage;
+  }
+  for (const id of pageIds) {
+    byPage.set(id, []);
+  }
+
+  const { sql, params } = scopeParams(scope);
+  // page_links ownership: same row_owners pattern as sync visibility.
+  const linkVis =
+    scope.kind === "user"
+      ? ownedByUser("page_links", "k", 1)
+      : `NOT EXISTS (SELECT 1 FROM row_owners o WHERE o.table_name = 'page_links' AND o.row_id = k.id)`;
+
+  const links = await pool.query<LinkRowLite>(
+    `SELECT k.id, k.source_id, k.target_id FROM page_links k
+     WHERE k.deleted_at IS NULL AND ${linkVis}
+       AND (k.source_id = ANY($${params.length + 1}::uuid[])
+         OR k.target_id = ANY($${params.length + 1}::uuid[]))`,
+    [...params, pageIds],
+  );
+  if (links.rows.length === 0) {
+    return byPage;
+  }
+
+  const otherIds = new Set<string>();
+  for (const link of links.rows) {
+    otherIds.add(link.source_id);
+    otherIds.add(link.target_id);
+  }
+  const places = await placesOf(pool, [...otherIds], scope);
+
+  for (const link of links.rows) {
+    if (pageIds.includes(link.source_id)) {
+      const place = places.get(link.target_id);
+      if (place) {
+        byPage.get(link.source_id)!.push({
+          id: link.id,
+          direction: "out",
+          other_id: link.target_id,
+          other_notebook_id: place.notebook_id,
+          other_notebook_title: place.notebook_title,
+          other_index: place.index,
+          other_count: place.count,
+        });
+      }
+    }
+    if (pageIds.includes(link.target_id)) {
+      const place = places.get(link.source_id);
+      if (place) {
+        byPage.get(link.target_id)!.push({
+          id: link.id,
+          direction: "in",
+          other_id: link.source_id,
+          other_notebook_id: place.notebook_id,
+          other_notebook_title: place.notebook_title,
+          other_index: place.index,
+          other_count: place.count,
+        });
+      }
+    }
+  }
+
+  // Outgoing first, then backlinks — same order as Android PageSlot.fill.
+  for (const [id, list] of byPage) {
+    list.sort((a, b) => {
+      if (a.direction !== b.direction) {
+        return a.direction === "out" ? -1 : 1;
+      }
+      return a.other_index - b.other_index;
+    });
+    byPage.set(id, list);
+  }
+  return byPage;
 }
 
 function notebookParam(raw: string): string | null {
@@ -110,6 +314,7 @@ export async function listNotebooks(pool: pg.Pool, scope: SyncScope): Promise<We
       kind: "scratchpad",
       title: "Scratchpad",
       position: null,
+      parent_id: null,
       page_count: scratch.rows[0].page_count,
       last_edited_at: scratch.rows[0].last_edited_at,
       updated_at: null,
@@ -120,6 +325,7 @@ export async function listNotebooks(pool: pg.Pool, scope: SyncScope): Promise<We
       kind: "notebook" as const,
       title: n.title,
       position: n.position,
+      parent_id: n.parent_id,
       page_count: n.page_count,
       last_edited_at: n.last_edited_at,
       updated_at: n.updated_at,
@@ -165,7 +371,30 @@ export async function listPages(pool: pg.Pool, rawNotebookId: string, scope: Syn
   if (notebookId !== null) {
     await liveNotebook(pool, notebookId, scope);
   }
-  return (await pagesIn(pool, notebookId, scope)).map(toPage);
+  const rows = await pagesIn(pool, notebookId, scope);
+  const links = await linksForPages(
+    pool,
+    rows.map((r) => r.id),
+    scope,
+  );
+  return rows.map((row) => toPage(row, links.get(row.id) ?? []));
+}
+
+/** Locate a live page for web navigation (page links). */
+export async function placeOfPage(
+  pool: pg.Pool,
+  pageId: string,
+  scope: SyncScope,
+): Promise<PagePlace> {
+  if (!UUID.test(pageId)) {
+    throw new NotFound("page not found");
+  }
+  const places = await placesOf(pool, [pageId.toLowerCase()], scope);
+  const place = places.get(pageId.toLowerCase());
+  if (!place) {
+    throw new NotFound("page not found");
+  }
+  return place;
 }
 
 export interface BackupMissing {
@@ -257,6 +486,10 @@ export function registerWebRoutes(
     notebook_id: req.params.id,
     pages: await listPages(pool, req.params.id, scopeOf(req)),
   }));
+
+  app.get<{ Params: { id: string } }>("/web/pages/:id/place", async (req) =>
+    placeOfPage(pool, req.params.id, scopeOf(req)),
+  );
 
   if (storage) {
     app.get("/web/backup-status", async (req) => backupStatus(pool, storage, scopeOf(req)));

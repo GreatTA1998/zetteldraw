@@ -1,15 +1,14 @@
 "use client";
 
-import { AlertCircle, Grid2x2, Grid3x3, Loader2, Menu, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { AlertCircle, Grid2x2, Grid3x3, Loader2, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { NotebookSidebar } from "@/components/notebook-sidebar";
+import { NotebookNav } from "@/components/notebook-nav";
 import { gridStyle, PageCard, PageGridSkeleton } from "@/components/page-grid";
 import { PageViewer } from "@/components/page-viewer";
 import { SignIn } from "@/components/sign-in";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -20,8 +19,9 @@ import {
   type BackupStatus,
   type Notebook,
   type Page,
+  type PageLink,
 } from "@/lib/api";
-import { pagesLabel, relativeTime } from "@/lib/format";
+import { relativeTime } from "@/lib/format";
 
 const MIN_COLUMNS = 2;
 const MAX_COLUMNS = 16;
@@ -106,19 +106,36 @@ export function Overview({ googleClientId }: { googleClientId: string | null }) 
 function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void; canSignOut?: boolean }) {
   const [selectedId, setSelectedId] = usePersistent<string>("zd.notebook", SCRATCHPAD);
   const [columns, setColumns] = usePersistent<number>("zd.columns", 8);
-  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  /** Open by index in the current notebook, or by page id while a notebook switch settles. */
+  const [viewerTarget, setViewerTarget] = useState<
+    { kind: "index"; index: number } | { kind: "page"; pageId: string } | null
+  >(null);
 
-  const paused = viewerIndex !== null;
-  const swrOptions = { refreshInterval: paused ? 0 : REFRESH_MS, keepPreviousData: true };
-
-  const notebooksRes = useSWR<NotebooksResponse>(api.notebooksKey, fetcher, swrOptions);
+  const notebooksRes = useSWR<NotebooksResponse>(api.notebooksKey, fetcher, {
+    refreshInterval: viewerTarget !== null ? 0 : REFRESH_MS,
+    keepPreviousData: true,
+  });
   const notebooks = notebooksRes.data?.notebooks;
   const selected = notebooks?.find((n) => n.id === selectedId) ?? notebooks?.[0];
   const pagesKey = selected ? api.pagesKey(selected.id) : null;
-  const pagesRes = useSWR<PagesResponse>(pagesKey, fetcher, swrOptions);
+  const pagesRes = useSWR<PagesResponse>(pagesKey, fetcher, {
+    refreshInterval: viewerTarget !== null ? 0 : REFRESH_MS,
+    keepPreviousData: true,
+  });
   const pages = pagesRes.data?.notebook_id === selected?.id ? pagesRes.data?.pages : undefined;
-  const backupRes = useSWR<BackupStatus>(api.backupStatusKey, fetcher, swrOptions);
+  const backupRes = useSWR<BackupStatus>(api.backupStatusKey, fetcher, {
+    refreshInterval: viewerTarget !== null ? 0 : REFRESH_MS,
+    keepPreviousData: true,
+  });
+
+  const viewerIndex = useMemo(() => {
+    if (!viewerTarget || !pages) return null;
+    if (viewerTarget.kind === "index") {
+      return viewerTarget.index >= 0 && viewerTarget.index < pages.length ? viewerTarget.index : null;
+    }
+    const i = pages.findIndex((p) => p.id === viewerTarget.pageId);
+    return i >= 0 ? i : null;
+  }, [viewerTarget, pages]);
 
   const unauthorized = [notebooksRes.error, pagesRes.error, backupRes.error].some(
     (e) => e instanceof ApiError && e.status === 401,
@@ -141,11 +158,14 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
   const select = useCallback(
     (id: string) => {
       setSelectedId(id);
-      setViewerIndex(null);
-      setSidebarOpen(false);
+      setViewerTarget(null);
     },
     [setSelectedId],
   );
+
+  const openAt = useCallback((index: number) => {
+    setViewerTarget({ kind: "index", index });
+  }, []);
 
   const refreshAll = useCallback(() => {
     notebooksRes.mutate();
@@ -158,51 +178,45 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
     onSignedOut();
   }
 
+  const followLink = useCallback(
+    (link: PageLink) => {
+      const targetNotebook = link.other_notebook_id;
+      if (selected?.id === targetNotebook && pages) {
+        const i = pages.findIndex((p) => p.id === link.other_id);
+        if (i >= 0) {
+          setViewerTarget({ kind: "index", index: i });
+          return;
+        }
+      }
+      setSelectedId(targetNotebook);
+      setViewerTarget({ kind: "page", pageId: link.other_id });
+    },
+    [pages, selected?.id, setSelectedId],
+  );
+
   const libraryEmpty = notebooks !== undefined && notebooks.every((n) => n.page_count === 0);
   const refreshing = notebooksRes.isValidating || pagesRes.isValidating;
 
-  const sidebar = (
-    <NotebookSidebar
-      notebooks={notebooks}
-      selectedId={selected?.id}
-      onSelect={select}
-      onSignOut={canSignOut ? signOut : undefined}
-    />
-  );
-
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
-      <aside className="hidden w-60 shrink-0 border-r bg-sidebar lg:block xl:w-64">{sidebar}</aside>
-      <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
-        <SheetContent side="left" className="w-72 p-0" showCloseButton={false}>
-          <SheetTitle className="sr-only">Notebooks</SheetTitle>
-          {sidebar}
-        </SheetContent>
-      </Sheet>
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
+      <NotebookNav
+        notebooks={notebooks}
+        selectedId={selected?.id}
+        onSelect={select}
+        onSignOut={canSignOut ? signOut : undefined}
+      />
 
-      <main className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-5">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="lg:hidden"
-            aria-label="Show notebooks"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <Menu />
-          </Button>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <header className="flex h-11 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-4">
           <div className="min-w-0 flex-1">
             {selected ? (
-              <div className="flex items-baseline gap-2">
-                <h1 className="truncate text-base font-semibold tracking-tight sm:text-lg">{selected.title}</h1>
-                <span className="hidden shrink-0 text-sm text-muted-foreground sm:inline">
-                  {pagesLabel(selected.page_count)}
-                  {selected.last_edited_at !== null && ` · edited ${relativeTime(selected.last_edited_at)}`}
-                  {" · read-only"}
-                </span>
-              </div>
+              <p className="truncate text-xs text-muted-foreground sm:text-sm">
+                {selected.last_edited_at !== null && `Edited ${relativeTime(selected.last_edited_at)}`}
+                {selected.last_edited_at !== null && " · "}
+                read-only
+              </p>
             ) : (
-              <Skeleton className="h-5 w-48" />
+              <Skeleton className="h-4 w-40" />
             )}
           </div>
           <Button
@@ -214,7 +228,7 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
           >
             <RefreshCw className={refreshing ? "animate-spin" : undefined} />
           </Button>
-          <div className="flex w-36 items-center gap-2 sm:w-56" title="Columns (− / = keys)">
+          <div className="flex w-36 items-center gap-2 sm:w-52" title="Page size (− / = keys)">
             <Grid2x2 className="size-4 shrink-0 text-muted-foreground" aria-hidden />
             <Slider
               aria-label="Columns"
@@ -229,11 +243,11 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
           </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto bg-muted/50 p-3 sm:p-5">
+        <div className="flex-1 overflow-y-auto bg-muted/40 p-2 sm:p-3">
           {backupRes.data ? (
             <Alert
               variant={backupRes.data.ready_for_device_restore ? "default" : "destructive"}
-              className="mb-3 sm:mb-4"
+              className="mb-3"
             >
               <AlertCircle />
               <AlertTitle>
@@ -265,18 +279,26 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
           ) : (
             <div className="grid" style={gridStyle(columns)}>
               {pages.map((page, i) => (
-                <PageCard key={page.id} page={page} index={i} compact={columns >= 10} onOpen={setViewerIndex} />
+                <PageCard
+                  key={page.id}
+                  page={page}
+                  index={i}
+                  total={pages.length}
+                  compact={columns >= 10}
+                  onOpen={openAt}
+                />
               ))}
             </div>
           )}
         </div>
-      </main>
+      </div>
 
       <PageViewer
         pages={pages ?? []}
         index={viewerIndex}
         notebookTitle={selected?.title ?? ""}
-        onIndexChange={setViewerIndex}
+        onIndexChange={(i) => setViewerTarget(i === null ? null : { kind: "index", index: i })}
+        onFollowLink={followLink}
       />
     </div>
   );
