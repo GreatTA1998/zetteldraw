@@ -43,19 +43,23 @@ final class ToolController {
     }
 
     /**
-     * The only entry that changes the active tool. Updates button chrome from
-     * {@link PageInkView#tool()} after the ink view records {@code next}, then
-     * runs host side effects (hints / paste bar).
+     * The only entry that changes the active tool, underline chrome, and
+     * TouchHelper stroke style (via {@link PageInkView#setTool}). Do not style
+     * tool buttons or call {@link PageInkView#setTool} from elsewhere.
+     *
+     * <p>Order: ink enum → chrome from that enum → host side effects → chrome
+     * again so a hint/menu callback cannot leave the underline stale.
      */
     void setTool(PageInkView.Tool next) {
         ink.setTool(next);
         syncChrome();
         host.onAfterToolChanged(tool());
+        syncChrome();
     }
 
     /**
      * Re-push the current tool to TouchHelper without changing selection.
-     * Used when Pen is re-tapped for the color menu so a stuck lasso dash cannot linger.
+     * Used when Pen is re-tapped so a stuck lasso dash cannot linger.
      */
     void reassert() {
         ink.setTool(tool());
@@ -83,6 +87,7 @@ final class ToolController {
         lassoButton.invalidate();
         if (toolbar != null) {
             toolbar.invalidate();
+            toolbar.postInvalidate();
         }
     }
 }

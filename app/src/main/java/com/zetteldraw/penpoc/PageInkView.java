@@ -454,6 +454,10 @@ final class PageInkView extends FrameLayout {
         updateExcludeRects();
     }
 
+    /**
+     * Records the selected tool and schedules the TouchHelper style write.
+     * Call only from {@link ToolController} so underline chrome stays in lockstep.
+     */
     void setTool(Tool next) {
         if (selection != null && next != Tool.LASSO) {
             cancelSelection();
@@ -1091,7 +1095,9 @@ final class PageInkView extends FrameLayout {
     }
 
     void finishLasso(List<TouchPoint> outline, InkViewport drawnOn) {
-        Tool mode = strokeTool != null ? strokeTool : tool;
+        // Prefer the in-flight stroke, then what TouchHelper is drawing — not
+        // toolbar chrome. A chrome/ink desync must not drop a finished outline.
+        Tool mode = strokeTool != null ? strokeTool : firmwareTool;
         if (mode != Tool.LASSO || selection != null || outline.size() < 3) {
             reportLasso(0);
             return;
@@ -1107,7 +1113,17 @@ final class PageInkView extends FrameLayout {
         }
         Board page = drawnOn.page(index);
         List<TouchPoint> local = drawnOn.toPage(outline, index);
-        main.post(() -> selectOnPage(page, local));
+        // Already on the main thread from the pen callback path; selecting
+        // synchronously avoids a posted race with tool/viewport changes (v56).
+        runSelect(() -> selectOnPage(page, local));
+    }
+
+    private void runSelect(Runnable select) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            select.run();
+        } else {
+            main.post(select);
+        }
     }
 
     private void selectOnPage(Board page, List<TouchPoint> outline) {
@@ -1711,7 +1727,7 @@ final class PageInkView extends FrameLayout {
     private void finishPaperLasso(List<TouchPoint> outline, InkViewport drawnOn) {
         List<TouchPoint> paperOutline = toPaper(outline, drawnOn.scrollY);
         NotebookPaper paper = drawnOn.page(0).paper;
-        main.post(() -> selectOnPaper(paper, paperOutline));
+        runSelect(() -> selectOnPaper(paper, paperOutline));
     }
 
     private void selectOnPaper(NotebookPaper paper, List<TouchPoint> outline) {

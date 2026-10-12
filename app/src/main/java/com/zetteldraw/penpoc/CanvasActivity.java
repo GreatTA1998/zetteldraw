@@ -277,7 +277,8 @@ public final class CanvasActivity extends Activity {
             public void onLassoMoved(Lasso.Move move) {
                 showHint("", false);
                 hideLassoMenu();
-                tools.setTool(PageInkView.Tool.PEN);
+                // Stay on Lasso after commit (Boox Notes). Do not force Pen —
+                // a secondary setTool here was a chrome/ink footgun.
             }
 
             @Override
@@ -2435,16 +2436,33 @@ public final class CanvasActivity extends Activity {
         return lp;
     }
 
-    /** {@code host} is {@link #drawingArea} for page menus, {@link #root} for top-bar menus. */
+    /**
+     * {@code host} is {@link #drawingArea} for page menus, {@link #root} for
+     * top-bar menus. A root-level scrim never covers the tool row: tapping
+     * Pen/Eraser/Lasso must reach {@link ToolController#setTool}, not only
+     * dismiss (v53 color-menu desync class of bug).
+     */
     private void showOverlay(View content, FrameLayout.LayoutParams lp, FrameLayout host) {
         dismissOverlay();
+        FrameLayout.LayoutParams contentLp = new FrameLayout.LayoutParams(lp);
+        FrameLayout.LayoutParams scrimLp = matchMatch();
+        if (host == root && drawingArea != null && drawingArea.getHeight() > 0) {
+            int[] rootLoc = new int[2];
+            int[] areaLoc = new int[2];
+            root.getLocationOnScreen(rootLoc);
+            drawingArea.getLocationOnScreen(areaLoc);
+            int inset = Math.max(0, areaLoc[1] - rootLoc[1]);
+            scrimLp.topMargin = inset;
+            // Content was measured in full-root coordinates; shift into the inset scrim.
+            contentLp.topMargin = Math.max(0, contentLp.topMargin - inset);
+        }
         FrameLayout scrim = new FrameLayout(this);
         scrim.setClickable(true);
         onTap(scrim, v -> dismissOverlay());
-        scrim.addView(content, lp);
+        scrim.addView(content, contentLp);
         overlay = scrim;
         inkView.hold(PageInkView.Hold.OVERLAY);
-        host.addView(scrim, matchMatch());
+        host.addView(scrim, scrimLp);
         updateExcludeRects();
     }
 
@@ -2936,7 +2954,11 @@ public final class CanvasActivity extends Activity {
         button.setTypeface(Typeface.DEFAULT, primary ? Typeface.BOLD : Typeface.NORMAL);
     }
 
-    /** A black bar along the bottom edge when selected; empty otherwise (clears e-ink ghosts). */
+    /**
+     * A black bar along the bottom edge when selected. When not selected, paints
+     * the same slot white so e-ink clears the previous mark (drawing nothing
+     * left a stuck Pen underline while Lasso was active).
+     */
     private static final class Underline extends Drawable {
         private final Paint paint = new Paint();
         private final int thickness;
@@ -2951,15 +2973,12 @@ public final class CanvasActivity extends Activity {
             this.thickness = thickness;
             this.inset = inset;
             this.selected = selected;
-            paint.setColor(Color.BLACK);
         }
 
         @Override
         public void draw(Canvas canvas) {
-            if (!selected) {
-                return;
-            }
             Rect b = getBounds();
+            paint.setColor(selected ? Color.BLACK : Color.WHITE);
             canvas.drawRect(b.left + inset, b.bottom - thickness, b.right - inset, b.bottom, paint);
         }
 

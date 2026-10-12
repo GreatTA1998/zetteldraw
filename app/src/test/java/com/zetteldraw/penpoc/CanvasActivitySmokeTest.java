@@ -423,7 +423,8 @@ public class CanvasActivitySmokeTest {
         idle();
 
         assertFalse(ink.hasSelection());
-        assertEquals("back to Pen after one move", PageInkView.Tool.PEN, ink.tool());
+        assertEquals("stays on Lasso after one move (Notes)", PageInkView.Tool.LASSO, ink.tool());
+        assertTrue(byDescription(root, "Lasso").get(0).isSelected());
         InkRenderer.InkStroke moved = page.paper.stroke(original.id);
         assertEquals(original.id, moved.id);
         assertEquals(original.points.get(0).x + 100f, moved.points.get(0).x, 0.001f);

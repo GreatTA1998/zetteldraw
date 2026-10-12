@@ -16,12 +16,14 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
+import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
 
 import com.onyx.android.sdk.data.note.TouchPoint;
 import com.onyx.android.sdk.pen.TouchHelper;
 import com.onyx.android.sdk.pen.data.TouchPointList;
+import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
 import com.zetteldraw.penpoc.data.ZettelData;
 
@@ -130,7 +132,7 @@ public class ToolSwitchTest {
     }
 
     @Test
-    public void finishingALassoWritesThePenStyleLast() {
+    public void finishingALassoMoveKeepsLassoToolAndDash() {
         Board page = new Board("a", 1L);
         page.strokes.add(TestStrokes.stroke(200f, 200f));
         PageInkView ink = show(laidOut(page));
@@ -149,7 +151,7 @@ public class ToolSwitchTest {
 
             @Override
             public void onLassoMoved(Lasso.Move move) {
-                ink.setTool(PageInkView.Tool.PEN);
+                // Activity no longer forces Pen after a move (Boox Notes).
             }
 
             @Override
@@ -169,8 +171,6 @@ public class ToolSwitchTest {
         ink.finishLasso(outlineAround(200f, 200f));
         ShadowLooper.idleMainLooper();
         assertTrue("the outline selects the stroke", ink.hasSelection());
-        // The selection's full repaint holds the pen. On the device it paints
-        // before the drag; settle here so that hold is not still outstanding.
         settle();
 
         touch(ink, MotionEvent.ACTION_DOWN, 210f, 205f);
@@ -178,19 +178,36 @@ public class ToolSwitchTest {
         touch(ink, MotionEvent.ACTION_UP, 310f, 285f);
         settle();
 
-        assertEquals(PageInkView.Tool.PEN, ink.tool());
-        assertFalse(ink.penOn());
-        assertEquals("leaving the lasso replaces the dash before the next stroke",
-                TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
-        assertFalse(pen.render);
+        assertEquals("after a lasso move the tool stays LASSO", PageInkView.Tool.LASSO, ink.tool());
+        assertFalse(ink.hasSelection());
+        assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
 
         ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS);
         settle();
-        assertTrue("drawing resumes as the pen", ink.penOn());
+        assertTrue("drawing resumes as the lasso", ink.penOn());
         assertTrue(pen.raw);
         assertTrue(pen.brush);
         assertTrue(pen.render);
-        assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+        assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+    }
+
+    @Test
+    public void leavingLassoForPenWritesFountainLast() {
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(200f, 200f));
+        PageInkView ink = show(laidOut(page));
+        settle();
+        ink.setTool(PageInkView.Tool.LASSO);
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+
+        ink.setTool(PageInkView.Tool.PEN);
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertEquals(PageInkView.Tool.PEN, ink.tool());
+        assertEquals("leaving the lasso replaces the dash before the next stroke",
+                TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
         assertTrue("raw drawing coming back on must not restore the lasso dash",
                 pen.lastStyle > pen.lastEnable);
     }
@@ -426,6 +443,7 @@ public class ToolSwitchTest {
         buttons[0] = new ImageButton(context);
         buttons[1] = new ImageButton(context);
         buttons[2] = new ImageButton(context);
+        final int[] afterCalls = {0};
         ToolController tools = new ToolController(ink, new ToolController.Host() {
             @Override
             public void styleToolButton(ImageButton button, boolean selected) {
@@ -434,6 +452,12 @@ public class ToolSwitchTest {
 
             @Override
             public void onAfterToolChanged(PageInkView.Tool tool) {
+                afterCalls[0]++;
+                // Host must not be able to leave chrome pointing at a different tool.
+                if (tool == PageInkView.Tool.LASSO) {
+                    buttons[0].setSelected(true);
+                    buttons[2].setSelected(false);
+                }
             }
         });
         tools.bind(buttons[0], buttons[1], buttons[2], null);
@@ -441,9 +465,10 @@ public class ToolSwitchTest {
         tools.setTool(PageInkView.Tool.LASSO);
         ShadowLooper.idleMainLooper();
         settle();
+        assertEquals(1, afterCalls[0]);
         assertEquals(PageInkView.Tool.LASSO, tools.tool());
         assertEquals(PageInkView.Tool.LASSO, ink.tool());
-        assertFalse(buttons[0].isSelected());
+        assertFalse("setTool re-syncs chrome after host side effects", buttons[0].isSelected());
         assertFalse(buttons[1].isSelected());
         assertTrue(buttons[2].isSelected());
         assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
@@ -456,6 +481,63 @@ public class ToolSwitchTest {
         assertTrue(buttons[0].isSelected());
         assertFalse(buttons[2].isSelected());
         assertEquals(TouchHelper.STROKE_STYLE_FOUNTAIN, pen.strokeStyle);
+    }
+
+    /**
+     * Regression (Elton 2026-10-12): after a lasso move the tool stays LASSO
+     * (chrome + enum + DASH), matching Boox Notes — not an auto-switch to Pen.
+     */
+    @Test
+    public void afterLassoMoveToolRemainsLassoInActivity() {
+        ZettelData.resetForTest();
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        Board page = repo.scratchpadPages().get(0);
+        page.strokes.add(TestStrokes.stroke(200f, 200f));
+        repo.saveInk(page);
+        BoardRepository.NotebookInfo notebook = repo.createNotebook("stay-lasso");
+        repo.movePageToNotebook(page.id, notebook.id);
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        settle();
+        TextView tab = findText(root, "stay-lasso");
+        assertNotNull(tab);
+        assertTrue(tab.performClick());
+        settle();
+
+        View penButton = byDescription(root, "Pen").get(0);
+        View lassoButton = byDescription(root, "Lasso").get(0);
+        PageInkView ink = findInk(root);
+        assertNotNull(ink);
+        ink.onSurface(true);
+        ink.dispatchWindowVisibilityChanged(View.VISIBLE);
+        settle();
+
+        assertTrue(lassoButton.performClick());
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertTrue(lassoButton.isSelected());
+        assertFalse(penButton.isSelected());
+        assertEquals(PageInkView.Tool.LASSO, ink.tool());
+
+        ink.finishLasso(outlineAround(200f, 200f));
+        ShadowLooper.idleMainLooper();
+        settle();
+        assertTrue(ink.hasSelection());
+
+        touch(ink, MotionEvent.ACTION_DOWN, 210f, 205f);
+        touch(ink, MotionEvent.ACTION_MOVE, 260f, 235f);
+        touch(ink, MotionEvent.ACTION_UP, 310f, 285f);
+        settle();
+
+        assertFalse(ink.hasSelection());
+        assertEquals(PageInkView.Tool.LASSO, ink.tool());
+        assertTrue("underline stays on Lasso after move", lassoButton.isSelected());
+        assertFalse(penButton.isSelected());
+        assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+
+        controller.pause().stop().destroy();
     }
 
     private PageInkView laidOut(Board... pages) {
@@ -538,6 +620,25 @@ public class ToolSwitchTest {
                 collect(group.getChildAt(i), description, out);
             }
         }
+    }
+
+    private static TextView findText(View view, String text) {
+        if (view.getVisibility() != View.VISIBLE) {
+            return null;
+        }
+        if (view instanceof TextView && text.contentEquals(((TextView) view).getText())) {
+            return (TextView) view;
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                TextView found = findText(group.getChildAt(i), text);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     private static PageInkView findInk(View view) {
