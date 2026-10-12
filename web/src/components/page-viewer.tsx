@@ -7,7 +7,6 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { proxied, type Page, type PageLink } from "@/lib/api";
 import { dateTime } from "@/lib/format";
 import { PAGE_ASPECT, PageImage } from "@/components/page-grid";
-import { cn } from "@/lib/utils";
 
 interface Props {
   pages: Page[];
@@ -83,44 +82,48 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
             </header>
 
             {/*
-              Neighbor peeks: same aspect ratio as the center page, no forced
-              width/height stretch. Tight gap; slight opacity only — no
-              perspective / scale tricks.
+              One tight row of content-sized pages (aspect locked). Neighbors are
+              slightly shorter/dimmer — no % width stretch, no perspective.
             */}
             <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-3">
               <div className="flex h-full max-h-full items-center justify-center gap-1">
-                <NeighborPeek
-                  page={prev}
-                  side="left"
-                  label={prev ? String(index) : undefined}
-                  onClick={() => onIndexChange(index - 1)}
-                />
-                <div className="relative z-10 flex h-full min-w-0 items-center justify-center">
-                  <div className="relative h-full max-w-[min(100vw-2rem,720px)]">
-                    <FullPage key={page.id} page={page} />
-                    {(page.links?.length ?? 0) > 0 && (
-                      <div className="absolute bottom-3 left-3 z-20 flex max-w-[85%] flex-col items-start gap-0.5">
-                        {(page.links ?? []).map((link) => (
-                          <button
-                            key={`${link.id}-${link.direction}`}
-                            type="button"
-                            onClick={() => onFollowLink(link)}
-                            className="rounded-sm bg-white/95 px-2 py-1 text-left text-sm text-neutral-900 shadow-sm ring-1 ring-black/10 transition hover:bg-white"
-                          >
-                            <span className="font-bold">{link.direction === "out" ? "→" : "←"}</span>{" "}
-                            {link.other_notebook_title} {link.other_index}/{link.other_count}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                {prev ? (
+                  <NeighborPeek
+                    page={prev}
+                    label={String(index)}
+                    ariaLabel="Previous page"
+                    onClick={() => onIndexChange(index - 1)}
+                  />
+                ) : null}
+                <div
+                  className="relative h-full max-h-full shrink-0"
+                  style={{ aspectRatio: PAGE_ASPECT }}
+                >
+                  <FullPage key={page.id} page={page} />
+                  {(page.links?.length ?? 0) > 0 && (
+                    <div className="absolute bottom-3 left-3 z-20 flex max-w-[85%] flex-col items-start gap-0.5">
+                      {(page.links ?? []).map((link) => (
+                        <button
+                          key={`${link.id}-${link.direction}`}
+                          type="button"
+                          onClick={() => onFollowLink(link)}
+                          className="rounded-sm bg-white/95 px-2 py-1 text-left text-sm text-neutral-900 shadow-sm ring-1 ring-black/10 transition hover:bg-white"
+                        >
+                          <span className="font-bold">{link.direction === "out" ? "→" : "←"}</span>{" "}
+                          {link.other_notebook_title} {link.other_index}/{link.other_count}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <NeighborPeek
-                  page={next}
-                  side="right"
-                  label={next ? String(index + 2) : undefined}
-                  onClick={() => onIndexChange(index + 1)}
-                />
+                {next ? (
+                  <NeighborPeek
+                    page={next}
+                    label={String(index + 2)}
+                    ariaLabel="Next page"
+                    onClick={() => onIndexChange(index + 1)}
+                  />
+                ) : null}
               </div>
               <NavButton side="left" disabled={!prev} onClick={() => onIndexChange(index - 1)} />
               <NavButton side="right" disabled={!next} onClick={() => onIndexChange(index + 1)} />
@@ -134,32 +137,25 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
 
 function NeighborPeek({
   page,
-  side,
   label,
+  ariaLabel,
   onClick,
 }: {
-  page: Page | null;
-  side: "left" | "right";
-  label?: string;
+  page: Page;
+  label: string;
+  ariaLabel: string;
   onClick: () => void;
 }) {
-  if (!page) {
-    return null;
-  }
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={side === "left" ? "Previous page" : "Next page"}
-      className={cn(
-        "relative hidden h-[85%] shrink-0 overflow-hidden rounded-sm bg-white opacity-70 shadow-md transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:block",
-      )}
+      aria-label={ariaLabel}
+      className="relative hidden h-[88%] max-h-full shrink-0 overflow-hidden rounded-sm bg-white opacity-65 shadow-md transition hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:block"
       style={{ aspectRatio: PAGE_ASPECT }}
     >
       <PageImage page={page} />
-      {label && (
-        <span className="absolute top-1 left-1.5 text-[0.65rem] tabular-nums text-neutral-500">{label}</span>
-      )}
+      <span className="absolute top-1 left-1.5 text-[0.65rem] tabular-nums text-neutral-500">{label}</span>
     </button>
   );
 }
@@ -170,10 +166,7 @@ function FullPage({ page }: { page: Page }) {
   const thumb = proxied(page.thumb_url);
   const full = proxied(page.render_url);
   return (
-    <div
-      className="relative h-full max-w-full overflow-hidden rounded-sm bg-white shadow-2xl"
-      style={{ aspectRatio: PAGE_ASPECT }}
-    >
+    <div className="relative size-full overflow-hidden rounded-sm bg-white shadow-2xl">
       {thumb && !failed && (
         // eslint-disable-next-line @next/next/no-img-element -- auth-proxied PNG
         <img src={thumb} alt="" aria-hidden className="absolute inset-0 size-full object-contain" />
