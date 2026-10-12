@@ -219,11 +219,20 @@ export function resolveNotebook(
   if (row.parent_id === undefined) {
     row.parent_id = existing?.parent_id ?? null;
   }
-  if (existing === null || incoming.base_rev === existing.rev) {
+  if (existing === null) {
     return { status: "applied", write: row, restamp: false, copy: null };
   }
   if (sameNotebook(existing, row)) {
     return { status: "applied", write: null, restamp: false, copy: null };
+  }
+  // Untouched install placeholders (updated_at === 0) must never overwrite a
+  // server notebook. Fresh devices seed Comedy/Journal locally and used to
+  // push them before pull with base_rev matching a never-edited server seed.
+  if (row.updated_at === 0) {
+    return { status: "conflict_lost", write: null, restamp: true, copy: null };
+  }
+  if (incoming.base_rev === existing.rev) {
+    return { status: "applied", write: row, restamp: false, copy: null };
   }
   return row.updated_at > existing.updated_at
     ? { status: "conflict_won", write: row, restamp: false, copy: null }

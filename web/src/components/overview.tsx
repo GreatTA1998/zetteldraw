@@ -262,7 +262,9 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
                 {backupRes.data.missing.length > 0
                   ? `; ${backupRes.data.missing.length} missing from storage.`
                   : "."}{" "}
-                Seeing page titles or thumbnails alone is not enough for a Play cutover.
+                Restore contract: cloud seeds the new Boox once, then that device is the live
+                source of truth (offline drawing wins). Seeing page titles or thumbnails alone is
+                not enough for a Play cutover.
               </AlertDescription>
             </Alert>
           ) : null}

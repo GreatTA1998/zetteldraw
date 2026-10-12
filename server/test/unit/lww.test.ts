@@ -184,6 +184,21 @@ describe("resolveNotebook", () => {
     expect(won.write?.parent_id).toBe(parent);
     expect(won.write?.title).toBe("jokes");
   });
+
+  it("rejects untouched seed placeholders that would clobber a server notebook", () => {
+    const stored = { ...nb, rev: 0, updated_at: 0, position: "a0" };
+    const seed = {
+      ...stored,
+      position: "a0V",
+      updated_at: 0,
+      base_rev: 0,
+    };
+    expect(resolveNotebook(stored, seed)).toMatchObject({
+      status: "conflict_lost",
+      restamp: true,
+      write: null,
+    });
+  });
 });
 
 describe("resolveLink", () => {

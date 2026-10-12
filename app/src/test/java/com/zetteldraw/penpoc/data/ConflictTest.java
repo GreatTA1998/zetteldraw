@@ -127,6 +127,7 @@ public class ConflictTest {
 
     @Test
     public void pushResultsAdvanceRevAndClearOutboxUnlessEditedMidFlight() {
+        repo.queuePlaceholderSeedsForUpload();
         SyncStore.PushBatch batch = repo.pendingPush(50);
         assertEquals(4, batch.notebooks.size());
         assertEquals(1, batch.boards.size());

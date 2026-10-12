@@ -43,6 +43,14 @@ public interface SyncStore {
         return 0;
     }
 
+    /**
+     * After a restore pull on a never-synced device, queue untouched seed notebooks
+     * that still have {@code rev == 0} (not present on the server) so a brand-new
+     * account gets starter notebooks. No-op when seeds were already adopted from pull.
+     */
+    default void queuePlaceholderSeedsForUpload() {
+    }
+
     /** Pulls between begin and end reach the UI as one refresh when the outermost batch ends. */
     default void beginRemoteBatch() {
     }

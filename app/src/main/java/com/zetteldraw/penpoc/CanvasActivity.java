@@ -2245,6 +2245,12 @@ public final class CanvasActivity extends Activity {
                 12);
         box.addView(lastSync);
 
+        if (config.enabled() && lastOk <= 0) {
+            box.addView(panelText(getString(R.string.settings_restoring), 12));
+        } else if (config.hasGoogleAccount()) {
+            box.addView(panelText(getString(R.string.settings_restore_contract), 11));
+        }
+
         TextView statusLine = panelText("", 13);
         statusLine.setVisibility(View.GONE);
         box.addView(statusLine);
@@ -2270,8 +2276,8 @@ public final class CanvasActivity extends Activity {
                         } else {
                             msg = getString(R.string.settings_signed_in_as, email);
                         }
-                        showHint(msg, true);
-                        // Queue any local-only rows that somehow missed the outbox, then push.
+                        showHint(msg + "\n" + getString(R.string.settings_restore_started), true);
+                        // Local-only ink (not untouched seeds) → outbox; first sync pulls cloud first.
                         ZettelData.repository(CanvasActivity.this).ensureUnsyncedQueued();
                         SyncScheduler.syncNow(CanvasActivity.this);
                     }

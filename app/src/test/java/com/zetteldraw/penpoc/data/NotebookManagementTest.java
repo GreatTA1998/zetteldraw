@@ -64,6 +64,7 @@ public class NotebookManagementTest {
 
     @Test
     public void renameBumpsUpdatedAtAndRequeues() {
+        repo.queuePlaceholderSeedsForUpload();
         SyncStore.PushBatch batch = repo.pendingPush(50);
         List<SyncStore.PushResult> results = new ArrayList<>();
         for (NotebookEntity n : batch.notebooks) {

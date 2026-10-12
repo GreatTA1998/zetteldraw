@@ -91,4 +91,7 @@
     <string name="settings_sync_last">Last full sync: %1$s</string>
     <string name="settings_sync_now">Sync now</string>
     <string name="settings_sync_started">Sync started…</string>
+    <string name="settings_restore_contract">Restore: cloud seeds this device first, then this Boox becomes the live source of truth. Day to day, offline drawing on this device wins.</string>
+    <string name="settings_restoring">Restoring library from cloud… Wait until sync is caught up before drawing as the live device.</string>
+    <string name="settings_restore_started">Restoring from cloud… This device becomes the live copy after sync finishes.</string>
 </resources>

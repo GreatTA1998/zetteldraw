@@ -1399,11 +1399,32 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     @Override
+    public void queuePlaceholderSeedsForUpload() {
+        synchronized (lock) {
+            db.runInTransaction(() -> {
+                for (Notebook notebook : Notebook.values()) {
+                    NotebookEntity row = dao.notebook(notebook.uuid);
+                    if (row == null || !isUntouchedSeed(row)) {
+                        continue;
+                    }
+                    if (dao.outbox(OutboxEntry.NOTEBOOK, row.id) == null) {
+                        queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+                    }
+                }
+            });
+        }
+    }
+
+    @Override
     public int ensureUnsyncedQueued() {
         synchronized (lock) {
             int[] added = {0};
             db.runInTransaction(() -> {
                 for (NotebookEntity row : dao.liveNotebooks()) {
+                    // Skip untouched install seeds — restore pull must win first.
+                    if (isUntouchedSeed(row)) {
+                        continue;
+                    }
                     if (row.rev == 0 && dao.outbox(OutboxEntry.NOTEBOOK, row.id) == null) {
                         queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
                         added[0]++;
@@ -1617,8 +1638,23 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             // device is never undone by a fresh install re-seeding the same id.
             row.updatedAt = 0;
             dao.upsertNotebook(row);
-            queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+            // Do not queue seeds into the outbox. A fresh install used to push
+            // these before pull and could overwrite never-edited server seeds
+            // when base_rev matched. Cloud restore pulls first; see
+            // {@link #queuePlaceholderSeedsForUpload()}.
         }
+    }
+
+    private static boolean isUntouchedSeed(NotebookEntity row) {
+        if (row == null || row.updatedAt != 0L || row.rev != 0L || row.deletedAt != null) {
+            return false;
+        }
+        for (Notebook notebook : Notebook.values()) {
+            if (notebook.uuid.equals(row.id)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static String listKey(String notebookId) {

@@ -32,12 +32,22 @@ public final class SyncEngine {
         public int pushed;
         public int pulledBoards;
         public int pulledNotebooks;
+        /** True when this pass pulled before pushing (cloud seeded a new device). */
+        public boolean restoredFromCloud;
     }
 
     public Result run() throws IOException {
         Result result = new Result();
         store.beginRemoteBatch();
         try {
+            // First sync on a device: cloud is the seed. Pull before push so
+            // empty local seed notebooks cannot clobber the server library.
+            boolean neverSynced = store.lastSyncedAt() == 0L && store.pullCursor() == 0L;
+            if (neverSynced) {
+                pull(result);
+                result.restoredFromCloud = true;
+                store.queuePlaceholderSeedsForUpload();
+            }
             push(result);
             pull(result);
             // Only stamp last_ok_at when the outbox is empty. A sticky push
