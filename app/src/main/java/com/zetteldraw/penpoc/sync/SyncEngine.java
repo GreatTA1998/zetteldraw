@@ -40,7 +40,11 @@ public final class SyncEngine {
         try {
             push(result);
             pull(result);
-            store.markSynced(clock.getAsLong());
+            // Only stamp last_ok_at when the outbox is empty. A sticky push
+            // (forbidden / missing blob) must not look like "sync complete".
+            if (store.outboxSize() == 0) {
+                store.markSynced(clock.getAsLong());
+            }
         } finally {
             store.endRemoteBatch();
         }

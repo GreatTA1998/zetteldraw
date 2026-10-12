@@ -27,6 +27,22 @@ public interface SyncStore {
 
     int outboxSize();
 
+    /** Epoch millis of the last sync pass that drained the outbox; 0 if never. */
+    default long lastSyncedAt() {
+        return 0L;
+    }
+
+    /**
+     * Defensive: queue every live local row that has never been pushed ({@code rev == 0})
+     * and is not already in the outbox. Used on first Google Sign-In so local-only notes
+     * upload even if an earlier path skipped {@code queueLocked}.
+     *
+     * @return how many new outbox rows were added
+     */
+    default int ensureUnsyncedQueued() {
+        return 0;
+    }
+
     /** Pulls between begin and end reach the UI as one refresh when the outermost batch ends. */
     default void beginRemoteBatch() {
     }

@@ -43,12 +43,15 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import com.zetteldraw.penpoc.data.BoardRepository;
+import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.ZettelData;
 import com.zetteldraw.penpoc.sync.GoogleAuth;
 import com.zetteldraw.penpoc.sync.SyncConfig;
 import com.zetteldraw.penpoc.sync.SyncScheduler;
 
+import java.text.DateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -2223,6 +2226,22 @@ public final class CanvasActivity extends Activity {
                 13);
         box.addView(syncStatus);
 
+        RoomBoardRepository syncStore = ZettelData.repository(this);
+        int pending = syncStore.outboxSize();
+        long lastOk = syncStore.lastSyncedAt();
+        TextView progress = panelText(
+                pending > 0
+                        ? getString(R.string.settings_sync_pending, pending)
+                        : getString(R.string.settings_sync_caught_up),
+                13);
+        box.addView(progress);
+        TextView lastSync = panelText(
+                lastOk <= 0
+                        ? getString(R.string.settings_sync_never)
+                        : getString(R.string.settings_sync_last, formatSyncTime(lastOk)),
+                12);
+        box.addView(lastSync);
+
         TextView statusLine = panelText("", 13);
         statusLine.setVisibility(View.GONE);
         box.addView(statusLine);
@@ -2249,6 +2268,8 @@ public final class CanvasActivity extends Activity {
                             msg = getString(R.string.settings_signed_in_as, email);
                         }
                         showHint(msg, true);
+                        // Queue any local-only rows that somehow missed the outbox, then push.
+                        ZettelData.repository(CanvasActivity.this).ensureUnsyncedQueued();
                         SyncScheduler.syncNow(CanvasActivity.this);
                     }
 
@@ -2273,6 +2294,7 @@ public final class CanvasActivity extends Activity {
             onTap(toggle, v -> {
                 SyncConfig.setSyncOn(this, !config.syncOn);
                 if (!config.syncOn) {
+                    ZettelData.repository(this).ensureUnsyncedQueued();
                     SyncScheduler.syncNow(this);
                 }
                 dismissOverlay();
@@ -2282,6 +2304,20 @@ public final class CanvasActivity extends Activity {
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
             toggleLp.topMargin = dp(8);
             box.addView(toggle, toggleLp);
+
+            if (config.enabled()) {
+                Button syncNow = tinyButton(getString(R.string.settings_sync_now), 15);
+                styleButton(syncNow, true);
+                onTap(syncNow, v -> {
+                    ZettelData.repository(this).ensureUnsyncedQueued();
+                    SyncScheduler.syncNow(this);
+                    showHint(getString(R.string.settings_sync_started), true);
+                    dismissOverlay();
+                    showSettings();
+                });
+                box.addView(syncNow, new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+            }
 
             Button signOut = tinyButton(getString(R.string.settings_sign_out), 15);
             onTap(signOut, v -> {
@@ -2321,6 +2357,11 @@ public final class CanvasActivity extends Activity {
         box.addView(actions, actionsLp);
 
         showOverlay(box, anchoredLp(settingsButton, box), root);
+    }
+
+    private static String formatSyncTime(long epochMillis) {
+        return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+                .format(new Date(epochMillis));
     }
 
     private void openUrl(String url) {

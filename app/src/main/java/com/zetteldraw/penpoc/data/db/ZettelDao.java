@@ -28,6 +28,9 @@ public interface ZettelDao {
     @Query("SELECT * FROM notebook_logs WHERE id = :id")
     NotebookLogEntity notebookLog(String id);
 
+    @Query("SELECT * FROM notebook_logs WHERE deleted_at IS NULL AND conflict_of IS NULL")
+    List<NotebookLogEntity> liveNotebookLogs();
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertNotebookLog(NotebookLogEntity log);
 

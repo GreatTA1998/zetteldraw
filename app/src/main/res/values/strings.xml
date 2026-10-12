@@ -85,4 +85,10 @@
     <string name="settings_claim_yours">This account already owns the server library.</string>
     <string name="settings_claim_taken">Another Google account already claimed the shared library.</string>
     <string name="settings_signing_in">Signing in…</string>
+    <string name="settings_sync_pending">Sync pending: %1$d change(s) waiting to upload</string>
+    <string name="settings_sync_caught_up">Sync caught up (nothing waiting to upload)</string>
+    <string name="settings_sync_never">No successful sync yet on this device</string>
+    <string name="settings_sync_last">Last full sync: %1$s</string>
+    <string name="settings_sync_now">Sync now</string>
+    <string name="settings_sync_started">Sync started…</string>
 </resources>

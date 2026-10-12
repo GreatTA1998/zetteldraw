@@ -1324,6 +1324,58 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
+    @Override
+    public long lastSyncedAt() {
+        synchronized (lock) {
+            SyncState state = dao.syncState();
+            return state == null || state.lastOkAt == null ? 0L : state.lastOkAt;
+        }
+    }
+
+    @Override
+    public int ensureUnsyncedQueued() {
+        synchronized (lock) {
+            int[] added = {0};
+            db.runInTransaction(() -> {
+                for (NotebookEntity row : dao.liveNotebooks()) {
+                    if (row.rev == 0 && dao.outbox(OutboxEntry.NOTEBOOK, row.id) == null) {
+                        queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+                        added[0]++;
+                    }
+                }
+                for (BoardEntity row : dao.liveBoardsForIndex()) {
+                    if (row.rev != 0 || row.conflictOf != null || row.inkHash == null) {
+                        continue;
+                    }
+                    if (isTrailingBlankLocked(row)) {
+                        continue;
+                    }
+                    if (dao.outbox(OutboxEntry.BOARD, row.id) == null) {
+                        queueLocked(OutboxEntry.BOARD, row.id, OutboxEntry.UPSERT);
+                        added[0]++;
+                    }
+                }
+                for (NotebookLogEntity row : dao.liveNotebookLogs()) {
+                    if (row.rev == 0 && row.inkHash != null
+                            && dao.outbox(OutboxEntry.LOG, row.id) == null) {
+                        queueLocked(OutboxEntry.LOG, row.id, OutboxEntry.UPSERT);
+                        added[0]++;
+                    }
+                }
+                for (PageLinkEntity row : dao.livePageLinks()) {
+                    if (row.rev == 0 && dao.outbox(OutboxEntry.LINK, row.id) == null) {
+                        queueLocked(OutboxEntry.LINK, row.id, OutboxEntry.UPSERT);
+                        added[0]++;
+                    }
+                }
+            });
+            if (added[0] > 0) {
+                LaunchLog.mark("ensureUnsyncedQueued added " + added[0] + " outbox rows");
+            }
+            return added[0];
+        }
+    }
+
     // endregion
 
     // region legacy import
