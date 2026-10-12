@@ -180,7 +180,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           ? { kind: "google", user: { id: req.principal.user.id, email: req.principal.user.email } }
           : { kind: "device" },
     }));
-    registerWebRoutes(app, deps.pool, deps.thumbs, (req) => scopeOf(req.principal));
+    registerWebRoutes(app, deps.pool, deps.thumbs, (req) => scopeOf(req.principal), deps.storage);
   }
 
   return app;

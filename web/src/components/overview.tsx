@@ -12,7 +12,15 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
-import { api, ApiError, fetcher, SCRATCHPAD, type Notebook, type Page } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  fetcher,
+  SCRATCHPAD,
+  type BackupStatus,
+  type Notebook,
+  type Page,
+} from "@/lib/api";
 import { pagesLabel, relativeTime } from "@/lib/format";
 
 const MIN_COLUMNS = 2;
@@ -110,8 +118,11 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
   const pagesKey = selected ? api.pagesKey(selected.id) : null;
   const pagesRes = useSWR<PagesResponse>(pagesKey, fetcher, swrOptions);
   const pages = pagesRes.data?.notebook_id === selected?.id ? pagesRes.data?.pages : undefined;
+  const backupRes = useSWR<BackupStatus>(api.backupStatusKey, fetcher, swrOptions);
 
-  const unauthorized = [notebooksRes.error, pagesRes.error].some((e) => e instanceof ApiError && e.status === 401);
+  const unauthorized = [notebooksRes.error, pagesRes.error, backupRes.error].some(
+    (e) => e instanceof ApiError && e.status === 401,
+  );
   useEffect(() => {
     if (unauthorized) onSignedOut();
   }, [unauthorized, onSignedOut]);
@@ -139,7 +150,8 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
   const refreshAll = useCallback(() => {
     notebooksRes.mutate();
     pagesRes.mutate();
-  }, [notebooksRes, pagesRes]);
+    backupRes.mutate();
+  }, [notebooksRes, pagesRes, backupRes]);
 
   async function signOut() {
     await api.signOut().catch(() => {});
@@ -218,6 +230,28 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
         </header>
 
         <div className="flex-1 overflow-y-auto bg-muted/50 p-3 sm:p-5">
+          {backupRes.data ? (
+            <Alert
+              variant={backupRes.data.ready_for_device_restore ? "default" : "destructive"}
+              className="mb-3 sm:mb-4"
+            >
+              <AlertCircle />
+              <AlertTitle>
+                {backupRes.data.ready_for_device_restore
+                  ? "Cloud backup ready for a fresh device restore"
+                  : "Cloud backup incomplete — do not uninstall the Boox"}
+              </AlertTitle>
+              <AlertDescription>
+                {backupRes.data.note}{" "}
+                {backupRes.data.logs_with_ink} notebook log(s), {backupRes.data.boards_with_ink} page
+                blob(s)
+                {backupRes.data.missing.length > 0
+                  ? `; ${backupRes.data.missing.length} missing from storage.`
+                  : "."}{" "}
+                Seeing page titles or thumbnails alone is not enough for a Play cutover.
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {notebooksRes.error && !unauthorized ? (
             <LoadError error={notebooksRes.error} onRetry={() => refreshAll()} />
           ) : pagesRes.error && !unauthorized ? (

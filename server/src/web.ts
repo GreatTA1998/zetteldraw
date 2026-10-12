@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type pg from "pg";
-import { isUnowned, ownedByUser } from "./accounts.js";
+import { isUnowned, ownedByUser, type OwnerTable } from "./accounts.js";
 import { InkFormatError } from "./ink.js";
 import type { BoardRow, NotebookRow } from "./lww.js";
 import type { SyncScope } from "./sync.js";
+import type { InkStorage } from "./storage.js";
 import type { ImageKind, Thumbnailer } from "./thumbs.js";
 /**
  * Read endpoints for the web overview. Mutations (rename/move) are refused —
@@ -167,11 +168,88 @@ export async function listPages(pool: pg.Pool, rawNotebookId: string, scope: Syn
   return (await pagesIn(pool, notebookId, scope)).map(toPage);
 }
 
+export interface BackupMissing {
+  table: "boards" | "notebook_logs";
+  id: string;
+  ink_hash: string;
+}
+
+/**
+ * Whether every owned live ink blob is present in object storage.
+ * Notebook list / page thumbs on the web can look fine while a notebook_log
+ * (the Boox source of truth after v20) is missing from S3 — this check catches that.
+ */
+export interface BackupStatus {
+  ok: boolean;
+  ready_for_device_restore: boolean;
+  notebooks: number;
+  boards_with_ink: number;
+  logs_with_ink: number;
+  missing: BackupMissing[];
+  note: string;
+}
+
+export async function backupStatus(
+  pool: pg.Pool,
+  storage: InkStorage,
+  scope: SyncScope,
+): Promise<BackupStatus> {
+  const { sql, params } = scopeParams(scope);
+  const nOwn = sql("notebooks", "n");
+  const bOwn = sql("boards", "b");
+  // notebook_logs / row_owners use table_name 'notebook_logs'
+  const logOwn =
+    scope.kind === "user"
+      ? ownedByUser("notebook_logs" as OwnerTable, "l", 1)
+      : `NOT EXISTS (SELECT 1 FROM row_owners o WHERE o.table_name = 'notebook_logs' AND o.row_id = l.id)`;
+
+  const notebooks = await pool.query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM notebooks n WHERE n.deleted_at IS NULL AND ${nOwn}`,
+    params,
+  );
+  const boards = await pool.query<{ id: string; ink_hash: string }>(
+    `SELECT b.id, b.ink_hash FROM boards b
+     WHERE ${LIVE} AND ${bOwn} AND b.ink_hash IS NOT NULL`,
+    params,
+  );
+  const logs = await pool.query<{ id: string; ink_hash: string }>(
+    `SELECT l.id, l.ink_hash FROM notebook_logs l
+     WHERE l.deleted_at IS NULL AND l.conflict_of IS NULL AND l.ink_hash IS NOT NULL AND ${logOwn}`,
+    params,
+  );
+
+  const missing: BackupMissing[] = [];
+  for (const row of boards.rows) {
+    if (!(await storage.has(row.ink_hash))) {
+      missing.push({ table: "boards", id: row.id, ink_hash: row.ink_hash });
+    }
+  }
+  for (const row of logs.rows) {
+    if (!(await storage.has(row.ink_hash))) {
+      missing.push({ table: "notebook_logs", id: row.id, ink_hash: row.ink_hash });
+    }
+  }
+
+  const ok = missing.length === 0;
+  return {
+    ok,
+    ready_for_device_restore: ok,
+    notebooks: notebooks.rows[0]?.n ?? 0,
+    boards_with_ink: boards.rows.length,
+    logs_with_ink: logs.rows.length,
+    missing,
+    note: ok
+      ? "All owned ink blobs are in object storage. A fresh signed-in device can pull them."
+      : "Some ink hashes are in Postgres but missing from object storage. Do not uninstall the Boox until sync re-uploads them.",
+  };
+}
+
 export function registerWebRoutes(
   app: FastifyInstance,
   pool: pg.Pool,
   thumbs: Thumbnailer,
   scopeOf: (req: { principal?: import("./auth.js").AuthPrincipal }) => SyncScope,
+  storage?: InkStorage,
 ): void {
   app.get("/web/notebooks", async (req) => ({ notebooks: await listNotebooks(pool, scopeOf(req)) }));
 
@@ -179,6 +257,10 @@ export function registerWebRoutes(
     notebook_id: req.params.id,
     pages: await listPages(pool, req.params.id, scopeOf(req)),
   }));
+
+  if (storage) {
+    app.get("/web/backup-status", async (req) => backupStatus(pool, storage, scopeOf(req)));
+  }
 
   app.patch("/web/notebooks/:id", async (_req, reply) =>
     reply.code(405).send({ error: "read_only", message: "The web companion cannot rename notebooks." }),

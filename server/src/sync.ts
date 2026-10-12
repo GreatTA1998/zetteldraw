@@ -359,14 +359,27 @@ export async function pull(
     : [];
 
   const blobs: Record<string, string> = {};
+  const loadBlob = async (hash: string, kind: string, id: string) => {
+    if (hash in blobs) {
+      return;
+    }
+    if (!(await storage.has(hash))) {
+      // Fail the whole pull page so the client does not advance its cursor past
+      // unrehydratable rows. Prefer a clear 400 over a raw S3 NoSuchKey 500.
+      throw new BadRequest(
+        `missing ink blob ${hash} for ${kind} ${id}; re-sync from a device that still has the file`,
+      );
+    }
+    blobs[hash] = (await storage.get(hash)).toString("base64");
+  };
   for (const board of boards) {
-    if (board.ink_hash && board.deleted_at === null && !(board.ink_hash in blobs)) {
-      blobs[board.ink_hash] = (await storage.get(board.ink_hash)).toString("base64");
+    if (board.ink_hash && board.deleted_at === null) {
+      await loadBlob(board.ink_hash, "board", board.id);
     }
   }
   for (const log of logs) {
-    if (log.ink_hash && log.deleted_at === null && !(log.ink_hash in blobs)) {
-      blobs[log.ink_hash] = (await storage.get(log.ink_hash)).toString("base64");
+    if (log.ink_hash && log.deleted_at === null) {
+      await loadBlob(log.ink_hash, "notebook_log", log.id);
     }
   }
   return { schema_version: schemaVersion, cursor, has_more: hasMore, notebooks, boards, logs, links, blobs };

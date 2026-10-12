@@ -78,4 +78,15 @@ export const api = {
   signOut: () => request<{ authenticated: boolean }>("/api/session", { method: "DELETE" }),
   notebooksKey: "/api/zd/notebooks",
   pagesKey: (notebookId: string) => `/api/zd/notebooks/${notebookId}/pages`,
+  backupStatusKey: "/api/zd/backup-status",
 };
+
+export interface BackupStatus {
+  ok: boolean;
+  ready_for_device_restore: boolean;
+  notebooks: number;
+  boards_with_ink: number;
+  logs_with_ink: number;
+  missing: Array<{ table: "boards" | "notebook_logs"; id: string; ink_hash: string }>;
+  note: string;
+}
