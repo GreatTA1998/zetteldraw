@@ -85,9 +85,11 @@ export function NotebookNav({ notebooks, selectedId, onSelect, onSignOut }: Prop
               <Settings className="size-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuLabel className="font-normal text-muted-foreground">
-                Read-only companion
-              </DropdownMenuLabel>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="font-normal text-muted-foreground">
+                  Read-only companion
+                </DropdownMenuLabel>
+              </DropdownMenuGroup>
               <DropdownMenuSeparator />
               {onSignOut ? (
                 <DropdownMenuItem onClick={onSignOut}>Sign out</DropdownMenuItem>

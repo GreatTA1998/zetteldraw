@@ -64,9 +64,7 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
               <div className="min-w-0 flex-1">
                 <DialogTitle className="truncate text-sm font-medium text-neutral-100">
                   {notebookTitle}{" "}
-                  <span className="text-neutral-400">
-                    · {index + 1}/{pages.length}
-                  </span>
+                  <span className="text-neutral-400">· {index + 1}</span>
                 </DialogTitle>
                 <DialogDescription className="text-xs text-neutral-400">
                   Edited {dateTime(page.updated_at)}
@@ -90,7 +88,7 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
                 <NeighborPeek
                   page={prev}
                   side="left"
-                  label={prev ? `${index}/${pages.length}` : undefined}
+                  label={prev ? String(index) : undefined}
                   onClick={() => onIndexChange(index - 1)}
                 />
                 <div className="relative z-10 flex h-full min-w-0 flex-[1.35] flex-col items-center justify-center">
@@ -114,7 +112,7 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
                 <NeighborPeek
                   page={next}
                   side="right"
-                  label={next ? `${index + 2}/${pages.length}` : undefined}
+                  label={next ? String(index + 2) : undefined}
                   onClick={() => onIndexChange(index + 1)}
                 />
               </div>

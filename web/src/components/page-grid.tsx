@@ -70,10 +70,10 @@ export const PageCard = memo(function PageCard({ page, index, total, compact, on
       aria-label={`Open page ${index + 1} of ${total}`}
     >
       <PageImage page={page} />
-      {/* Android-like page chrome: gray k/n, no charcoal badge */}
+      {/* Subtle page chrome: bare number only (no /total denominator) */}
       {!compact && (
         <span className="pointer-events-none absolute top-1 left-1.5 text-[0.65rem] tabular-nums text-neutral-500/90">
-          {index + 1}/{total}
+          {index + 1}
         </span>
       )}
       {!compact && links.length > 0 && (
