@@ -1599,6 +1599,9 @@ public final class CanvasActivity extends Activity {
         }
         String sourceId = moveSourceId;
         String destNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
+        // Flush any pending pen-up before the tear. Cross-notebook place holds
+        // sheet flushes so these writer tasks cannot persist a source tear
+        // before the destination rewrite (see RoomBoardRepository holdFlush).
         repository.saveInk(target.page);
         Board source = pageOnScreen(sourceId);
         if (source == null) {

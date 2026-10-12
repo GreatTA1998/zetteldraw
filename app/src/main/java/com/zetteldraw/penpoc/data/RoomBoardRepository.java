@@ -565,6 +565,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 return;
             }
             syncSliceIndex(dest.paper, boardId);
+            // Block incidental flushSheet (e.g. confirmMoving's saveInk) from
+            // appending the source tear before the dest rewrite commits.
+            holdSheetFlush(sourceSheetId);
+            holdSheetFlush(destSheetId);
             // Dest rewrite must succeed before the source tear is flushed to disk.
             writer.execute(() -> persistCrossNotebookPlace(destSheetId, sourceSheetId));
         }
@@ -606,14 +610,65 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * Writer thread: rewrite destination first; only then append the source tear.
      * If dest rewrite fails, the source tear stays in memory but not on disk so a
      * restart still has the page on the origin notebook.
+     *
+     * <p>{@link #holdSheetFlush} must already be set on both sheets so a
+     * previously queued {@link #saveInk} flush cannot append the source tear
+     * (or a corrupt dest suffix) before this runs. On dest failure the holds
+     * stay so a later incidental flush cannot tear the source alone.
      */
     private void persistCrossNotebookPlace(String destSheetId, String sourceSheetId) {
         if (!rewriteSheetOrFalse(destSheetId)) {
             LaunchLog.mark("place-before dest rewrite failed; source not torn on disk");
             Log.e(TAG, "place-before dest rewrite failed; source not torn on disk");
+            // Memory was torn; disk still has the pre-move logs. Reload both so
+            // UI/cache match disk, then release holds so pen-up can flush again.
+            reloadSheetFromDisk(sourceSheetId);
+            reloadSheetFromDisk(destSheetId);
+            releaseSheetFlush(destSheetId);
+            releaseSheetFlush(sourceSheetId);
             return;
         }
+        releaseSheetFlush(destSheetId);
+        releaseSheetFlush(sourceSheetId);
         flushSheet(sourceSheetId);
+    }
+
+    /**
+     * Replace an open sheet's in-memory paper with the on-disk log. Used when a
+     * cross-notebook dest write fails after an in-memory tear: disk still has
+     * the page on the source, so prefer that over a stuck holdFlush.
+     */
+    private void reloadSheetFromDisk(String sheetId) {
+        if (sheetId == null) {
+            return;
+        }
+        byte[] existing;
+        try {
+            existing = ink.readLog(sheetId);
+        } catch (IOException e) {
+            Log.e(TAG, "reload sheet failed " + sheetId, e);
+            return;
+        }
+        synchronized (lock) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null) {
+                return;
+            }
+            try {
+                if (existing == null || existing.length == 0) {
+                    open.paper = NotebookPaper.empty(
+                            open.paper != null && open.paper.sliceHeight > 0
+                                    ? open.paper.sliceHeight
+                                    : Math.max(1, knownPageHeight));
+                    open.flushed = open.paper.bytes().length;
+                } else {
+                    open.paper = NotebookPaper.replay(existing);
+                    open.flushed = existing.length;
+                }
+            } catch (IOException e) {
+                Log.e(TAG, "reload sheet replay failed " + sheetId, e);
+            }
+        }
     }
 
     /** Notebook id for a sheet id ({@code null} = Scratchpad). */
@@ -659,6 +714,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     // Destination first: only flush source after dest write succeeds.
                     String destSheetId = NotebookPaper.sheetId(notebookId);
                     String sourceSheetId = moving.sheetId;
+                    holdSheetFlush(sourceSheetId);
+                    holdSheetFlush(destSheetId);
                     writer.execute(() -> persistCrossNotebookAppend(destSheetId, sourceSheetId));
                 }
             }
@@ -2300,17 +2357,48 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     /** Append-style cross-notebook move: dest flush, then source tear flush. */
     private void persistCrossNotebookAppend(String destSheetId, String sourceSheetId) {
+        // Holds blocked incidental flushes; release dest first so this flush can run.
+        releaseSheetFlush(destSheetId);
         if (!flushSheetOrFalse(destSheetId)) {
             LaunchLog.mark("tearMove dest flush failed; source not torn on disk");
             Log.e(TAG, "tearMove dest flush failed; source not torn on disk");
+            reloadSheetFromDisk(sourceSheetId);
+            reloadSheetFromDisk(destSheetId);
+            releaseSheetFlush(sourceSheetId);
             return;
         }
+        releaseSheetFlush(sourceSheetId);
         flushSheet(sourceSheetId);
     }
 
     /** Writer thread. Appends the new tail of the log; it does not rewrite the prefix. */
     private void flushSheet(String sheetId) {
         flushSheetOrFalse(sheetId);
+    }
+
+    /** Prevent {@link #flushSheet} from writing until a cross-notebook persist releases it. */
+    private void holdSheetFlush(String sheetId) {
+        if (sheetId == null) {
+            return;
+        }
+        synchronized (lock) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open != null) {
+                open.holdFlush = true;
+            }
+        }
+    }
+
+    private void releaseSheetFlush(String sheetId) {
+        if (sheetId == null) {
+            return;
+        }
+        synchronized (lock) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open != null) {
+                open.holdFlush = false;
+            }
+        }
     }
 
     /** @return false when an append was needed and failed. */
@@ -2324,6 +2412,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             OpenSheet open = sheets.get(sheetId);
             if (open == null || !open.ready) {
                 return false;
+            }
+            if (open.holdFlush) {
+                // Cross-notebook place/move is in flight: do not append a torn
+                // source (or a rewritten dest suffix) ahead of dest-first persist.
+                return true;
             }
             byte[] all = open.paper.bytes();
             if (all.length <= open.flushed) {
@@ -2398,6 +2491,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         NotebookPaper paper;
         int flushed;
         boolean ready;
+        /**
+         * When true, {@link #flushSheetOrFalse} is a no-op. Set around
+         * cross-notebook tear so a queued {@code saveInk} cannot persist the
+         * source tear before the destination commit.
+         */
+        boolean holdFlush;
 
         OpenSheet(String sheetId, String notebookId, NotebookPaper paper, int flushed) {
             this.notebookId = notebookId;
