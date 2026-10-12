@@ -1,8 +1,49 @@
-# Boox Pen POC
+# Zetteldraw
 
-Smallest Android proof that a third-party app can draw on a **Boox Go 7 Color II** with stylus latency comparable to native Notes.
+Handwriting-first notes on Boox. Proven on a **Go 7 Color II**: a third-party app can match Notes-like stylus latency via the **Onyx Pen SDK `TouchHelper` raw/scribble path** (live ink by the e-ink controller, not Android `View` drawing).
 
-Standard `View` / `onTouch` drawing is too delayed on Boox. This app uses the **Onyx Pen SDK `TouchHelper` raw/scribble path**: live ink is rendered by the e-ink controller, not by Android's view drawing.
+Tip APK: [https://zetteldraw.com/apk](https://zetteldraw.com/apk). Full correctness argument: [docs/CORRECTNESS.md](docs/CORRECTNESS.md).
+
+---
+
+## The only three irreversible bugs
+
+UI bugs are recoverable. These three are not — they permanently lose or corrupt notes. Everything we ship for data safety is aimed at them.
+
+| # | Irreversible bug | Why it matters |
+| --- | --- | --- |
+| **1** | **Corrupted data** | Wrong-page strokes, torn logs, half-applied merges: the ink the user drew is gone or lies. |
+| **2** | **Lost data from pages** | Move / reorder / tear that drops a page or files it into the wrong notebook so it looks gone. |
+| **3** | **Lost data from bad sync / restore** | Empty seeds clobbering cloud, two writers racing, Play cutover without a complete backup. |
+
+### Core guarantees (enforced)
+
+**Single device, Confirm enabled (Move / ink):**
+
+- Strokes bind to the viewport at pen-down (`InkViewport` + navigation fence). Scroll/tab cannot rebind them.
+- One write-behind writer: UI never waits on encode/`fsync`; pull skips unflushed edits; push sends only ink on disk.
+- Move resolves by **page id**; cross-notebook **dest disk before source tear**; `holdFlush` blocks queued `saveInk` and sync **pull** mid-tear (v46 / v61 / v62).
+- Move destination is the **open collection**, not the midline page’s sheet; Confirm disabled while lists load; stale parent midline → append on dest (v63).
+
+**Google account + sync (v64):**
+
+- **One live writer** per account. Second Boox gets `403 not_live_writer` on push until web **Hand off** + claim.
+- Hand off refused until `/web/backup-status` ready (every board + `notebook_log` ink in S3).
+- Never-synced device: **pull before push**; untouched seeds (`updated_at === 0`) are not queued first and cannot clobber server notebooks.
+- `markSynced` only when outbox is empty. Missing S3 ink fails the pull clearly (cursor does not skip past it).
+
+### Explicit non-guarantees
+
+- **Multi-device concurrent edit of one notebook** without Hand off: whole-log LWW (loser → hidden conflict copy), not stroke CRDT merge.
+- **Kill** after dest rewrite / before source flush (brief duplicate), or in the write-behind window (newest unflushed snapshot may be lost).
+- **Web titles/thumbs ≠ restore-safe.** Postgres metadata and cached PNGs do not prove `notebook_logs` are in S3.
+- Partial outbox + uninstall; missing S3 objects; Documents mirror is not auto-imported after uninstall.
+- Intentional Wipe / Delete / Lasso Cut (by design). Pre-v63 wrong-dest Moves already synced.
+
+Tests that lock the guarantees (names encode the claim):  
+`InkNavigationTest.*`, `WriteBehindTest.aPullNeverOverwritesAnEditStillBeingWritten`, `PageMoveSafetyTest.staleSliceIndexStillMovesTheRequestedPageNotItsNeighbor`, `PageMoveScratchpadToSubNotebookTest.syncPullDuringHeldCrossNotebookMoveCannotDropPage`, `…placeIntoHomePageChildIgnoresStaleParentMidlineTarget`, `EnsureUnsyncedQueuedTest.markSyncedOnlyWhenOutboxEmpty`, server `writer.test.ts` / `backup-status.test.ts` / `lww.test.ts` (`rejects untouched seed placeholders…`). Details and concurrency model: [docs/CORRECTNESS.md](docs/CORRECTNESS.md).
+
+---
 
 ## What it does
 
@@ -35,15 +76,16 @@ Completed strokes freeze to a per-page bitmap on pen-up. Eraser deletes whole st
 
 ## Storage and sync
 
-Local-first, as designed in the project's storage design doc:
+Local-first. Day to day the live Boox is the source of truth; cloud is backup + restore seed. See [docs/CORRECTNESS.md](docs/CORRECTNESS.md) for the irreversible-bug argument.
 
-- **SQLite (Room)** is the source of truth on the device. A pen-up appends one stroke to the notebook's in-memory log and returns. One writer thread appends only that tail to `files/ink/<notebook-id>.zdl` and then updates the log row. It does not rewrite the notebook on every pen-up. The UI thread never waits on ink writes, sync or the network.
+- **SQLite (Room)** holds the library on device. A pen-up appends one stroke to the notebook's in-memory log and returns. One writer thread appends only that tail to `files/ink/<notebook-id>.zdl` and then updates the log row. It does not rewrite the notebook on every pen-up. The UI thread never waits on ink writes, sync or the network.
 - **Strokes and navigation**: the Onyx SDK posts pen callbacks to the main thread, so each stroke is converted with the page layout and scroll that were on screen when it was drawn (`InkViewport`), and scrolls or page-list changes apply only after strokes already queued. Debug builds log main-thread I/O (StrictMode) and stalls (`adb logcat -s zd-stall zd-repo`).
 - **Ink files**: the notebook log is `files/ink/<notebook-id>.zdl` (magic `ZDL`). The pre-migration page files `files/ink/<board-id>.zdi` are left in place so installing v19 over v20 still opens the ink that existed before the switch. v19 does not read `.zdl`, so strokes created after migration are visible only to v20. Format version 2 `.zdi` stores a stable id per stroke (layout in `data/InkCodec`). The log's layout is `data/NotebookPaper`.
-- Tables `notebooks`, `boards`, `notebook_logs`, and `page_links` match Postgres column for column (`server/migrations/`). A page link is the two page ids. It syncs as its own row and copies no ink. Deleting either page tombstones the link. A unit test fails if they drift. `notebook_logs` is one append-only ink log per notebook. Two devices editing one notebook are editing that one object. Last-write-wins shelves the other log whole as a hidden conflict copy. A pull replaces the log and cannot leave half a stroke. The old per-page blobs stay. There are also device-only tables: `outbox` (rows still to push) and `sync_state` (the pull cursor).
+- Tables `notebooks`, `boards`, `notebook_logs`, and `page_links` match Postgres column for column (`server/migrations/`). A page link is the two page ids. It syncs as its own row and copies no ink. Deleting either page tombstones the link. A unit test fails if they drift. `notebook_logs` is one append-only ink log per notebook. Two devices editing one notebook without Hand off are editing that one object under whole-log LWW: the loser is shelved as a hidden conflict copy (ink not silently deleted; not a merged CRDT). A pull replaces the log and cannot leave half a stroke. The old per-page blobs stay. Device-only tables: `outbox` (rows still to push) and `sync_state` (the pull cursor).
+- **Google accounts (v64):** one **live writer** per account. `POST /sync/push` is gated by `assertCanPush`; cutover uses web Settings → **Hand off** → new device `POST /sync/claim-writer`. Never-synced devices **pull before push**; untouched seeds are not uploaded until after restore.
 - Ids are client UUIDs. Order uses fractional `position` keys (`a0`, `a0V`, …), so appending as newest or moving a page touches one row.
 - Deletes are tombstones (`deleted_at`). Conflicts are last-write-wins per row. A losing board with different ink is kept as a hidden conflict copy (`conflict_of`), so ink is never dropped.
-- **Backup without a server**: ink files plus `index.json` are mirrored to `Documents/zetteldraw/`, which survives an uninstall.
+- **Backup without a server**: ink files plus `index.json` are mirrored to `Documents/zetteldraw/`, which survives an uninstall (not auto-imported after reinstall).
 - **First launch migration**: an existing `files/zetteldraw-boards.json` (v4/v5) is imported with the same board ids and order. It is then renamed to `zetteldraw-boards.json.migrated` and kept as a fallback.
 
 **Sync is off until a server URL is set.** Build with one:
@@ -56,7 +98,7 @@ With a URL set, WorkManager syncs every 15 minutes when the network is up, and a
 
 ## Sync server (`server/`)
 
-TypeScript on Node 22 (Fastify, `pg`, AWS S3 client). Metadata goes in Postgres; ink blobs go in S3-compatible storage (MinIO locally) at `ink/<sha256>`. Auth is a bearer device token. See [server/README.md](server/README.md) for the protocol.
+TypeScript on Node 22 (Fastify, `pg`, AWS S3 client). Metadata goes in Postgres; ink blobs go in S3-compatible storage (MinIO locally) at `ink/<sha256>`. Auth is Google (or a legacy device token until claim). Push for Google users requires the live-writer lease. See [server/README.md](server/README.md) for the protocol.
 
 ```bash
 cd server
@@ -76,9 +118,9 @@ Tested target: Boox Go 7 Color II (Android 13, Kaleido 3, optional InkSense styl
 
 ## Web overview (`web/`)
 
-A read-mostly view of the whole library for a big monitor: a notebooks sidebar, a dense thumbnail grid with a column slider (2–16 columns, or the `−` / `=` keys), and a full-size viewer (click a page; arrow keys flip, Esc closes). There is no drawing. You can drag to reorder pages, drag a page onto a notebook in the sidebar (or use its ⋯ menu) to move it, and rename notebooks. Edits go through the server as ordinary synced changes (a fractional `position` / `notebook_id` or `title`, a fresh `rev`, a newer `updated_at`), so the Boox picks them up on its next pull.
+A read-only companion for a big monitor: notebooks sidebar, dense thumbnail grid (column slider / `−` / `=`), full-size viewer (click a page; arrows flip, Esc closes). **No drawing and no library edits from the browser** — rename/move/reorder are refused. The one intentional web write is the lease ceremony: Settings → **Move to a new device** → **Hand off** / Cancel (blocked until backup-status is ready). Notebook titles and thumbs are not a hydrate proof; use the backup banner before Play cutover.
 
-Next.js 16 + TypeScript + Tailwind + shadcn/ui. Sign in with the device token (the same `DEVICE_TOKENS` value the Boox uses). The token is kept in an httpOnly cookie, and the Next server proxies `/api/zd/*` to the sync server's `/web/*`, so the browser never talks to the sync server directly.
+Next.js 16 + TypeScript + Tailwind + shadcn/ui. Sign in with Google (or a local device token for demos). The token is kept in an httpOnly cookie, and the Next server proxies `/api/zd/*` to the sync server's `/web/*`, so the browser never talks to the sync server directly.
 
 Run everything with Docker and load the demo library, which is fake notebooks and pages so you do not need a Boox:
 
@@ -112,8 +154,8 @@ Web endpoints (bearer device token, no schema header):
 | `GET /web/notebooks` | Scratchpad first (`id: "scratchpad"`), then notebooks by `position`, with page counts |
 | `GET /web/notebooks/:id/pages` | Live pages in `position` order with `thumb_url` / `render_url` (null for blank pages) |
 | `GET /web/thumbs/<ink_hash>.png`, `GET /web/renders/<ink_hash>.png` | PNGs, immutable cache headers |
-| `POST /web/pages/:id/move` | `{"notebook_id": "<id>" \| "scratchpad", "after_id": "<page id>" \| null}`. Omitting `after_id` appends, `null` puts the page first. Only the moved row changes. |
-| `PATCH /web/notebooks/:id` | `{"title": "…"}` |
+| `GET /web/backup-status` | Ready only when every owned board + `notebook_log` ink blob exists in S3 |
+| `GET /web/writer`, `POST /web/writer/hand-off`, `POST /web/writer/cancel` | Live-writer status and Hand off ceremony (Hand off requires backup ready) |
 
 ## Build
 
@@ -153,7 +195,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 Sideload without adb: copy the APK to internal storage and open it in **Storage**. Allow install from that source if prompted.
 
-4. Open **Zetteldraw**. You land on the last blank Scratchpad page. Draw with the stylus; finger-scroll through pages. **Move** on a page, then a notebook name, files it as that notebook's newest inked page (before its trailing blank). A dense page Moves in one step: either both notebooks update, or neither does — ink is not dropped mid-move. **Eraser** deletes strokes; a page's **⋯** wipes or deletes it.
+4. Open **Zetteldraw**. You land on the last blank Scratchpad page. Draw with the stylus; finger-scroll through pages. **Move** opens a bottom snackbar; navigate with the notebook bars and scroll, then Confirm places the page before the midline target (or appends on a trailing blank) in the **open** collection. A dense page Moves in one step: either both notebooks update, or neither does — ink is not dropped mid-move. **Eraser** deletes strokes; a page's **⋯** wipes or deletes it.
 
 If the screen stays white and nothing appears under the pen:
 
@@ -182,6 +224,7 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 - `InkRenderer` — pressure + end-taper freeze strokes and eraser hit-tests.
 - `data/BoardRepository` — what the UI calls: one `pages(notebookId)` list for the Scratchpad (`null`) and each notebook, always ending with a blank page; save ink, move, wipe, delete pages, and create / rename / delete notebooks. `RoomBoardRepository` implements it with Room, ink files and the Documents mirror.
 - `data/LegacyBoardImporter` — one-time import of the old `zetteldraw-boards.json`.
-- `sync/` — `SyncEngine` (push the outbox, then pull until caught up), `SyncClient` (HTTP), `SyncWorker` / `SyncScheduler` (WorkManager), `SyncConfig`.
-- `server/` — sync service, shared SQL migrations, thumbnail rendering, web endpoints, docker-compose.
-- `web/` — Next.js overview of all notebooks and pages.
+- `sync/` — `SyncEngine` (on a never-synced device: pull, claim live writer, then push; otherwise claim → push → pull), `SyncClient` (HTTP, including `/sync/claim-writer`), `SyncWorker` / `SyncScheduler` (WorkManager), `SyncConfig`.
+- `server/` — sync service, shared SQL migrations, live-writer lease, thumbnail rendering, web endpoints, docker-compose.
+- `web/` — Next.js read-only overview + Hand off Settings ceremony.
+- `docs/CORRECTNESS.md` — invariants, concurrency model, tests, and non-guarantees for the three irreversible bugs.
