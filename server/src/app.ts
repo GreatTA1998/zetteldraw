@@ -13,6 +13,7 @@ import { pull, push, type SyncScope } from "./sync.js";
 import type { Thumbnailer } from "./thumbs.js";
 import { BadRequest, parsePushBody } from "./validate.js";
 import { Forbidden, NotFound, registerWebRoutes } from "./web.js";
+import { assertCanPush, claimWriter, NotLiveWriter } from "./writer.js";
 
 export const SCHEMA_HEADER = "x-zetteldraw-schema";
 
@@ -122,6 +123,9 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (err instanceof Forbidden) {
       return reply.code(403).send({ error: "forbidden", message: err.message });
     }
+    if (err instanceof NotLiveWriter) {
+      return reply.code(403).send({ error: "not_live_writer", message: err.message });
+    }
     if (err instanceof BadRequest) {
       return reply.code(400).send({ error: "bad_request", message: err.message });
     }
@@ -133,12 +137,26 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return reply.code(500).send({ error: "internal" });
   });
 
+  app.post<{ Body: { device_id?: unknown; device_label?: unknown } }>("/sync/claim-writer", async (req) => {
+    if (req.principal?.kind !== "google") {
+      throw new Forbidden("Google sign-in required to claim the live writer");
+    }
+    const deviceId = typeof req.body?.device_id === "string" ? req.body.device_id.trim() : "";
+    const deviceLabel = typeof req.body?.device_label === "string" ? req.body.device_label.trim() : "";
+    if (!deviceId) {
+      throw new BadRequest("device_id is required");
+    }
+    const result = await claimWriter(deps.pool, req.principal.user.id, deviceId, deviceLabel);
+    return { ok: true, ...result };
+  });
+
   app.post("/sync/push", async (req) => {
     const body = parsePushBody(req.body);
     if (body.schema_version !== deps.schemaVersion) {
       throw new BadRequest(`schema_version ${body.schema_version} != ${deps.schemaVersion}`);
     }
     const scope = scopeOf(req.principal);
+    await assertCanPush(deps.pool, scope, body.device_id);
     const results = await push(deps.pool, deps.storage, body, scope);
     if (deps.thumbs) {
       const stored = new Set(results.filter((r) => r.entity === "board" && r.status !== "missing_blob").map((r) => r.id));

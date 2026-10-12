@@ -1,5 +1,7 @@
 package com.zetteldraw.penpoc.sync;
 
+import android.os.Build;
+
 import com.zetteldraw.penpoc.data.SyncStore;
 
 import org.json.JSONException;
@@ -34,6 +36,12 @@ public final class SyncEngine {
         public int pulledNotebooks;
         /** True when this pass pulled before pushing (cloud seeded a new device). */
         public boolean restoredFromCloud;
+        /**
+         * True when the server refused write access because another Boox is the
+         * live writer (or Hand off is waiting for a different device).
+         */
+        public boolean blockedAsNonWriter;
+        public String writerBlockMessage;
     }
 
     public Result run() throws IOException {
@@ -46,6 +54,14 @@ public final class SyncEngine {
             if (neverSynced) {
                 pull(result);
                 result.restoredFromCloud = true;
+            }
+            if (!claimLiveWriter(result)) {
+                if (!neverSynced) {
+                    pull(result);
+                }
+                return result;
+            }
+            if (neverSynced) {
                 store.queuePlaceholderSeedsForUpload();
             }
             push(result);
@@ -59,6 +75,27 @@ public final class SyncEngine {
             store.endRemoteBatch();
         }
         return result;
+    }
+
+    /** Google accounts must hold the live-writer lease before any push. */
+    private boolean claimLiveWriter(Result result) throws IOException {
+        if (config.accessToken == null || config.accessToken.isEmpty()) {
+            // Legacy device-token sync: server skips the lease.
+            return true;
+        }
+        try {
+            client.claimWriter(config.deviceId, deviceLabel());
+            return true;
+        } catch (SyncClient.NotLiveWriter e) {
+            result.blockedAsNonWriter = true;
+            result.writerBlockMessage = e.serverMessage;
+            return false;
+        }
+    }
+
+    private static String deviceLabel() {
+        String model = Build.MODEL;
+        return model == null || model.isEmpty() ? "Boox" : model;
     }
 
     private void push(Result result) throws IOException {

@@ -21,6 +21,7 @@ public final class SyncConfig {
     private static final String KEY_SUB = "google_sub";
     private static final String KEY_SYNC_ON = "sync_on";
     private static final String KEY_DEVICE = "device_id";
+    private static final String KEY_WRITER_BLOCK = "writer_block_msg";
 
     public final String serverUrl;
     /** Legacy DEVICE_TOKENS bearer; used only when {@link #accessToken} is empty. */
@@ -138,12 +139,26 @@ public final class SyncConfig {
         SyncScheduler.schedule(context);
     }
 
+    /** Last server message when push was blocked (not live writer). Empty when clear. */
+    public static String writerBlockMessage(Context context) {
+        return prefs(context).getString(KEY_WRITER_BLOCK, "");
+    }
+
+    public static void setWriterBlockMessage(Context context, String message) {
+        prefs(context).edit().putString(KEY_WRITER_BLOCK, message == null ? "" : message).apply();
+    }
+
+    public static void clearWriterBlockMessage(Context context) {
+        prefs(context).edit().remove(KEY_WRITER_BLOCK).apply();
+    }
+
     public static void signOut(Context context) {
         prefs(context).edit()
                 .putString(KEY_ACCESS, "")
                 .putString(KEY_EMAIL, "")
                 .putString(KEY_SUB, "")
                 .putBoolean(KEY_SYNC_ON, false)
+                .remove(KEY_WRITER_BLOCK)
                 .apply();
         SyncScheduler.schedule(context);
     }

@@ -44,6 +44,13 @@ public final class SyncWorker extends Worker {
                 System::currentTimeMillis);
         try {
             SyncEngine.Result r = engine.run();
+            if (r.blockedAsNonWriter) {
+                Log.w(TAG, "not live writer: " + r.writerBlockMessage);
+                SyncConfig.setWriterBlockMessage(getApplicationContext(), r.writerBlockMessage);
+                LaunchLog.mark("sync pull-only: not live writer — " + r.writerBlockMessage);
+                return Result.success();
+            }
+            SyncConfig.clearWriterBlockMessage(getApplicationContext());
             Log.i(TAG, "sync ok: pushed " + r.pushed + ", pulled " + r.pulledBoards + " boards"
                     + (r.restoredFromCloud ? " (restored from cloud first)" : ""));
             LaunchLog.mark("sync ok in " + (SystemClock.uptimeMillis() - started) + " ms: pushed " + r.pushed
@@ -59,6 +66,11 @@ public final class SyncWorker extends Worker {
             Log.w(TAG, "device token rejected");
             LaunchLog.mark("sync stopped: device token rejected");
             return Result.failure();
+        } catch (SyncClient.NotLiveWriter e) {
+            Log.w(TAG, "not live writer: " + e.serverMessage);
+            SyncConfig.setWriterBlockMessage(getApplicationContext(), e.serverMessage);
+            LaunchLog.mark("sync stopped: not live writer — " + e.serverMessage);
+            return Result.success();
         } catch (IOException | RuntimeException e) {
             Log.w(TAG, "sync failed, will retry", e);
             LaunchLog.mark("sync failed after " + (SystemClock.uptimeMillis() - started) + " ms, will retry: " + e);

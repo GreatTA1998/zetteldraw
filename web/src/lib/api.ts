@@ -102,6 +102,9 @@ export const api = {
   pagesKey: (notebookId: string) => `/api/zd/notebooks/${notebookId}/pages`,
   placeKey: (pageId: string) => `/api/zd/pages/${pageId}/place`,
   backupStatusKey: "/api/zd/backup-status",
+  writerKey: "/api/zd/writer",
+  handOffWriter: () => request<WriterStatus>("/api/writer/hand-off", { method: "POST", body: "{}" }),
+  cancelHandOff: () => request<WriterStatus>("/api/writer/cancel", { method: "POST", body: "{}" }),
 };
 
 export interface BackupStatus {
@@ -111,6 +114,20 @@ export interface BackupStatus {
   boards_with_ink: number;
   logs_with_ink: number;
   missing: Array<{ table: "boards" | "notebook_logs"; id: string; ink_hash: string }>;
+  note: string;
+}
+
+/** Live-writer (source of truth) lease for Play / new-device cutover. */
+export interface WriterStatus {
+  state: "live" | "handoff_open" | "none";
+  device_id: string | null;
+  device_label: string;
+  claimed_at: number | null;
+  last_seen_at: number | null;
+  handoff_until: number | null;
+  handoff_open: boolean;
+  can_hand_off: boolean;
+  backup_ready: boolean;
   note: string;
 }
 

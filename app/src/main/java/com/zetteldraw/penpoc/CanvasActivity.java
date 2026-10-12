@@ -2260,7 +2260,10 @@ public final class CanvasActivity extends Activity {
                 12);
         box.addView(lastSync);
 
-        if (config.enabled() && lastOk <= 0) {
+        String writerBlock = SyncConfig.writerBlockMessage(this);
+        if (!writerBlock.isEmpty()) {
+            box.addView(panelText(getString(R.string.settings_not_live_writer), 12));
+        } else if (config.enabled() && lastOk <= 0) {
             box.addView(panelText(getString(R.string.settings_restoring), 12));
         } else if (config.hasGoogleAccount()) {
             box.addView(panelText(getString(R.string.settings_restore_contract), 11));

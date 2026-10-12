@@ -42,8 +42,35 @@ public final class SyncClient {
         }
     }
 
+    /**
+     * This Google account already has a live Boox writer (or Hand off is open for a
+     * different device). Pull may still work; push is blocked until Hand off + claim.
+     */
+    public static final class NotLiveWriter extends IOException {
+        public final String serverMessage;
+
+        NotLiveWriter(String serverMessage) {
+            super(serverMessage == null || serverMessage.isEmpty()
+                    ? "not the live writer — Hand off on the web companion first"
+                    : serverMessage);
+            this.serverMessage = getMessage();
+        }
+    }
+
     JSONObject push(JSONObject body) throws IOException {
         return request("POST", "/sync/push", body.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Claim (or refresh) live-writer status before pushing. */
+    JSONObject claimWriter(String deviceId, String deviceLabel) throws IOException {
+        try {
+            JSONObject body = new JSONObject()
+                    .put("device_id", deviceId)
+                    .put("device_label", deviceLabel == null ? "" : deviceLabel);
+            return request("POST", "/sync/claim-writer", body.toString().getBytes(StandardCharsets.UTF_8));
+        } catch (JSONException e) {
+            throw new IOException("claim-writer body", e);
+        }
     }
 
     /** The on-device launch log, so it can be read from the server. */
@@ -75,6 +102,17 @@ public final class SyncClient {
             int code = conn.getResponseCode();
             String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
             if (code == 401 || code == 403) {
+                String err = "";
+                String message = "";
+                try {
+                    JSONObject errBody = new JSONObject(text);
+                    err = errBody.optString("error", "");
+                    message = errBody.optString("message", "");
+                } catch (JSONException ignored) {
+                }
+                if ("not_live_writer".equals(err)) {
+                    throw new NotLiveWriter(message);
+                }
                 throw new Unauthorized();
             }
             if (code == 409) {
