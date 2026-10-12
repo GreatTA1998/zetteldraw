@@ -14,6 +14,7 @@ import androidx.test.core.app.ApplicationProvider;
 import com.onyx.android.sdk.data.note.TouchPoint;
 import com.zetteldraw.penpoc.Board;
 import com.zetteldraw.penpoc.InkRenderer;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 
 import org.junit.After;
@@ -147,6 +148,63 @@ public class PageMoveScratchpadToSubNotebookTest {
                 onScratch || onSub);
         assertFalse("must not be duplicated across both notebooks after partial flush",
                 onScratch && onSub);
+    }
+
+    @Test
+    public void syncPullDuringHeldCrossNotebookMoveCannotDropPage() throws Exception {
+        String actions = repo.createNotebook("actions.life").id;
+        String sub = repo.createNotebook("pull-race", actions).id;
+        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+
+        Board last = inkNearBottom(null, "pull-ink");
+        String movedId = last.id;
+        Board destBlank = repo.pages(sub).get(repo.pages(sub).size() - 1);
+        // Seed a local dest log row so LWW/rev checks run.
+        repo.saveInk(destBlank);
+
+        deferWriter = true;
+        deferred.clear();
+        repo.placePageBefore(movedId, destBlank.id);
+        assertFalse("persist must be queued while writer is deferred", deferred.isEmpty());
+
+        // Pretend dest is fully flushed after the compact rewrite so the
+        // unflushed-bytes skip does not fire — only holdFlush should block pull.
+        repo.markSheetFlushedForTest(sub);
+
+        NotebookLogEntity local = db.dao().notebookLog(sub);
+        assertNotNull(local);
+        byte[] emptyRemote = NotebookPaper.empty(PAGE).bytes();
+        NotebookLogEntity remote = local.copy();
+        remote.inkHash = InkFileStore.sha256(emptyRemote);
+        remote.inkBytes = emptyRemote.length;
+        remote.rev = local.rev + 10;
+        remote.updatedAt = local.updatedAt + 60_000;
+        SyncStore.PullPage pull = new SyncStore.PullPage();
+        pull.logs.add(remote);
+        pull.blobs.put(remote.inkHash, emptyRemote);
+        pull.cursor = remote.rev;
+        repo.applyPull(pull);
+
+        ArrayList<Runnable> batch = new ArrayList<>(deferred);
+        for (Runnable task : batch) {
+            task.run();
+        }
+        deferred.clear();
+        deferWriter = false;
+
+        db.close();
+        openRepo(Runnable::run);
+        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+
+        boolean onScratch = hasPageWithStroke(null, movedId, "pull-ink");
+        boolean onSub = hasPageWithStroke(sub, movedId, "pull-ink");
+        assertTrue("page must survive a sync pull mid cross-notebook place"
+                        + " (scratch=" + onScratch + " sub=" + onSub + ")",
+                onScratch || onSub);
+        assertTrue("after full persist the page should be on the sub-notebook", onSub);
+        assertFalse(onScratch);
     }
 
     @Test
