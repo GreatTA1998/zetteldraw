@@ -2695,9 +2695,11 @@ public final class CanvasActivity extends Activity {
             moreButton.setMinimumWidth(dp(48));
             moreButton.setMinHeight(dp(48));
             moreButton.setMinWidth(dp(48));
+            // Optical: END-align ⋮ in the 48dp hit box (not centered). With rightMargin 4
+            // and padRight 10, edge→ink is 14dp — same as Link (leftMargin 10 + pad 4).
             moreButton.setPadding(dp(10), 0, dp(10), 0);
             moreButton.setIncludeFontPadding(false);
-            moreButton.setGravity(Gravity.CENTER);
+            moreButton.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
             moreButton.setContentDescription(getString(R.string.page_options));
             onTap(linkButton, v -> startLinking(this));
             onTap(moveButton, v -> startMoving(this));
@@ -2723,7 +2725,9 @@ public final class CanvasActivity extends Activity {
             leftLp.bottomMargin = chromeBottom;
             addView(left, leftLp);
 
-            // Right: Move and ⋮ share one chrome row, centered on the same inset.
+            // Right: Move and ⋮ share one chrome row. rightMargin is tighter than Link's
+            // leftMargin so ⋮ ink (END-aligned inside the 48dp target) optically matches
+            // Link's edge→ink gutter; Move stays grouped with ⋮.
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
             actions.setGravity(Gravity.CENTER_VERTICAL);
@@ -2736,7 +2740,7 @@ public final class CanvasActivity extends Activity {
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
             actionsLp.gravity = Gravity.BOTTOM | Gravity.END;
-            actionsLp.rightMargin = dp(10);
+            actionsLp.rightMargin = dp(4);
             actionsLp.bottomMargin = chromeBottom;
             addView(actions, actionsLp);
 
