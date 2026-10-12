@@ -55,7 +55,7 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
       <DialogContent
         showCloseButton={false}
         onKeyDown={onKeyDown}
-        className="flex h-dvh w-screen max-w-none flex-col gap-0 rounded-none bg-neutral-850 p-0 text-neutral-100 ring-0 sm:max-w-none"
+        className="flex h-dvh w-screen max-w-none flex-col gap-0 rounded-none p-0 text-neutral-100 ring-0 sm:max-w-none"
         style={{ backgroundColor: "#1a1a1a" }}
       >
         {page && index !== null && (
@@ -82,32 +82,38 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
               </Button>
             </header>
 
-            {/* Neighbor peeks: partial prev/next beside the current page (Android continuous-scroll mental model). */}
-            <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-1 pb-3 sm:px-4">
-              <div className="flex h-full w-full max-w-[1600px] items-center justify-center gap-2 sm:gap-3">
+            {/*
+              Neighbor peeks: same aspect ratio as the center page, no forced
+              width/height stretch. Tight gap; slight opacity only — no
+              perspective / scale tricks.
+            */}
+            <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-3">
+              <div className="flex h-full max-h-full items-center justify-center gap-1">
                 <NeighborPeek
                   page={prev}
                   side="left"
                   label={prev ? String(index) : undefined}
                   onClick={() => onIndexChange(index - 1)}
                 />
-                <div className="relative z-10 flex h-full min-w-0 flex-[1.35] flex-col items-center justify-center">
-                  <FullPage key={page.id} page={page} />
-                  {(page.links?.length ?? 0) > 0 && (
-                    <div className="absolute bottom-3 left-3 z-20 flex max-w-[70%] flex-col items-start gap-0.5">
-                      {(page.links ?? []).map((link) => (
-                        <button
-                          key={`${link.id}-${link.direction}`}
-                          type="button"
-                          onClick={() => onFollowLink(link)}
-                          className="rounded-sm bg-white/95 px-2 py-1 text-left text-sm text-neutral-900 shadow-sm ring-1 ring-black/10 transition hover:bg-white"
-                        >
-                          <span className="font-bold">{link.direction === "out" ? "→" : "←"}</span>{" "}
-                          {link.other_notebook_title} {link.other_index}/{link.other_count}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                <div className="relative z-10 flex h-full min-w-0 items-center justify-center">
+                  <div className="relative h-full max-w-[min(100vw-2rem,720px)]">
+                    <FullPage key={page.id} page={page} />
+                    {(page.links?.length ?? 0) > 0 && (
+                      <div className="absolute bottom-3 left-3 z-20 flex max-w-[85%] flex-col items-start gap-0.5">
+                        {(page.links ?? []).map((link) => (
+                          <button
+                            key={`${link.id}-${link.direction}`}
+                            type="button"
+                            onClick={() => onFollowLink(link)}
+                            className="rounded-sm bg-white/95 px-2 py-1 text-left text-sm text-neutral-900 shadow-sm ring-1 ring-black/10 transition hover:bg-white"
+                          >
+                            <span className="font-bold">{link.direction === "out" ? "→" : "←"}</span>{" "}
+                            {link.other_notebook_title} {link.other_index}/{link.other_count}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <NeighborPeek
                   page={next}
@@ -138,7 +144,7 @@ function NeighborPeek({
   onClick: () => void;
 }) {
   if (!page) {
-    return <div className="pointer-events-none hidden h-full w-[14%] max-w-48 shrink-0 sm:block" aria-hidden />;
+    return null;
   }
   return (
     <button
@@ -146,21 +152,14 @@ function NeighborPeek({
       onClick={onClick}
       aria-label={side === "left" ? "Previous page" : "Next page"}
       className={cn(
-        "relative hidden h-[78%] w-[16%] max-w-52 shrink-0 overflow-hidden rounded-sm bg-white shadow-lg transition hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:block",
-        side === "left" ? "origin-right" : "origin-left",
+        "relative hidden h-[85%] shrink-0 overflow-hidden rounded-sm bg-white opacity-70 shadow-md transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:block",
       )}
+      style={{ aspectRatio: PAGE_ASPECT }}
     >
-      <PageImage page={page} className="opacity-80" />
+      <PageImage page={page} />
       {label && (
         <span className="absolute top-1 left-1.5 text-[0.65rem] tabular-nums text-neutral-500">{label}</span>
       )}
-      <span
-        className={cn(
-          "pointer-events-none absolute inset-y-0 w-1/3 from-neutral-900/40 to-transparent",
-          side === "left" ? "right-0 bg-gradient-to-l" : "left-0 bg-gradient-to-r",
-        )}
-        aria-hidden
-      />
     </button>
   );
 }

@@ -146,7 +146,7 @@ function NavBar({
     <div
       className={cn(
         "flex items-center gap-1 px-2 sm:px-3",
-        nested ? "h-10 border-t border-border/70 bg-muted/30" : "h-11",
+        nested ? "h-10 border-t border-foreground/15 bg-muted/50" : "h-11",
       )}
     >
       <nav aria-label={ariaLabel} className="min-w-0 flex-1 overflow-x-auto">
