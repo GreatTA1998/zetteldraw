@@ -9,7 +9,6 @@ import { PageViewer } from "@/components/page-viewer";
 import { SignIn } from "@/components/sign-in";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Slider } from "@/components/ui/slider";
 import {
   api,
@@ -21,7 +20,6 @@ import {
   type Page,
   type PageLink,
 } from "@/lib/api";
-import { relativeTime } from "@/lib/format";
 
 const MIN_COLUMNS = 2;
 const MAX_COLUMNS = 16;
@@ -207,18 +205,7 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
       />
 
       <div className="flex min-h-0 flex-1 flex-col">
-        <header className="flex h-11 shrink-0 items-center gap-2 border-b px-3 sm:gap-3 sm:px-4">
-          <div className="min-w-0 flex-1">
-            {selected ? (
-              <p className="truncate text-xs text-muted-foreground sm:text-sm">
-                {selected.last_edited_at !== null && `Edited ${relativeTime(selected.last_edited_at)}`}
-                {selected.last_edited_at !== null && " · "}
-                read-only
-              </p>
-            ) : (
-              <Skeleton className="h-4 w-40" />
-            )}
-          </div>
+        <header className="flex h-11 shrink-0 items-center justify-end gap-2 border-b px-3 sm:gap-3 sm:px-4">
           <Button
             variant="ghost"
             size="icon-sm"
