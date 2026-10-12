@@ -518,7 +518,16 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 }
                 syncSliceIndex(moving.paper, boardId);
                 String sheetId = moving.sheetId;
-                writer.execute(() -> rewriteSheet(sheetId));
+                // Hold flushes so a queued saveInk cannot append a corrupt
+                // suffix of the rewritten log before rewriteSheet lands.
+                holdSheetFlush(sheetId);
+                writer.execute(() -> {
+                    try {
+                        rewriteSheet(sheetId);
+                    } finally {
+                        releaseSheetFlush(sheetId);
+                    }
+                });
             }
             return;
         }
@@ -1821,6 +1830,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (remote.rev <= local.rev) {
                 return;
             }
+            // Cross-notebook place/move holds flushes while memory is torn but
+            // disk is not. Dest rewrite often shrinks the log below flushed, so
+            // the unflushed-bytes check alone would not skip — and a pull that
+            // replaced dest here would let persist tear the source with no page
+            // on dest.
+            if (open != null && open.ready && open.holdFlush) {
+                return;
+            }
             if (open != null && open.ready && open.paper.bytes().length > open.flushed) {
                 return;
             }
@@ -2098,6 +2115,20 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     public void forgetSheetForTest(String notebookId) {
         synchronized (lock) {
             sheets.remove(NotebookPaper.sheetId(notebookId));
+        }
+    }
+
+    /**
+     * Test hook: pretend the open sheet is fully flushed even when memory was
+     * rewritten shorter (as after tearMoveInsert). Used to exercise the
+     * holdFlush pull guard.
+     */
+    public void markSheetFlushedForTest(String notebookId) {
+        synchronized (lock) {
+            OpenSheet open = sheets.get(NotebookPaper.sheetId(notebookId));
+            if (open != null && open.ready && open.paper != null) {
+                open.flushed = open.paper.bytes().length;
+            }
         }
     }
 
