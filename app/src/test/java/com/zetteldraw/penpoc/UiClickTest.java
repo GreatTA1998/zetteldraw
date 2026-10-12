@@ -55,16 +55,16 @@ public class UiClickTest {
     }
 
     @Test
-    public void cycleAdvancesThreeScratchSlots() {
+    public void cycleAdvancesFiveAmbientSlots() {
         audio.setRingerMode(AudioManager.RINGER_MODE_NORMAL);
         audio.setStreamVolume(AudioManager.STREAM_MUSIC, 7, 0);
         UiClick.warm(context);
         ShadowLooper.idleMainLooper(200, TimeUnit.MILLISECONDS);
         assertEquals(0, UiClick.nextSlotForTest());
-        UiClick.play(context);
-        assertEquals(1, UiClick.nextSlotForTest());
-        UiClick.play(context);
-        assertEquals(2, UiClick.nextSlotForTest());
+        for (int i = 1; i <= 4; i++) {
+            UiClick.play(context);
+            assertEquals(i, UiClick.nextSlotForTest());
+        }
         UiClick.play(context);
         assertEquals(0, UiClick.nextSlotForTest());
     }

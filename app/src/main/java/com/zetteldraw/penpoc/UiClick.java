@@ -10,32 +10,35 @@ import android.util.Log;
  * Short UI feedback on discrete presses (tools, tabs, menus, Confirm /
  * Cancel, page chrome). Not used for stylus ink samples or finger scroll.
  *
- * Three soft paper/pencil scratch variants cycle on each {@code ACTION_DOWN}
- * — soft → fine → dry → … — so Elton can A/B the family that worked in v44.
- * Skipped in silent mode or when media volume is zero. Never blocks the
- * main thread on decode after {@link #warm(Context)}.
+ * Five quiet ambient micro-sounds cycle on each {@code ACTION_DOWN} —
+ * leaf → water → wood → fabric → pebble → … — understated so they sit
+ * under the physical stylus tap instead of echoing it. Skipped in silent
+ * mode or when media volume is zero. Never blocks the main thread on
+ * decode after {@link #warm(Context)}.
  */
 public final class UiClick {
     private static final String TAG = "zd-click";
-    /** Soft; blends under the physical screen contact. */
-    private static final float VOLUME = 0.16f;
+    /** Barely perceptible; delight after the physical tap, not a competing click. */
+    private static final float VOLUME = 0.11f;
 
     private static final int[] RAW_IDS = {
-            R.raw.ui_scratch_soft,
-            R.raw.ui_scratch_fine,
-            R.raw.ui_scratch_dry,
+            R.raw.ui_leaf,
+            R.raw.ui_water,
+            R.raw.ui_wood,
+            R.raw.ui_fabric,
+            R.raw.ui_pebble,
     };
 
     private static SoundPool pool;
     private static final int[] soundIds = new int[RAW_IDS.length];
     private static int loadedCount;
     private static boolean loading;
-    /** Next slot in the 1→2→3 cycle (session memory). */
+    /** Next slot in the 1→2→3→4→5 cycle (session memory). */
     private static int nextIndex;
 
     private UiClick() {}
 
-    /** Prefetch all three scratches so the first tap is not a silent load. */
+    /** Prefetch all five so the first tap is not a silent load. */
     public static void warm(Context context) {
         if (context == null) {
             return;
@@ -82,7 +85,7 @@ public final class UiClick {
         }
     }
 
-    /** Visible for tests: which slot plays next (0..2). */
+    /** Visible for tests: which slot plays next (0..4). */
     static int nextSlotForTest() {
         return nextIndex % RAW_IDS.length;
     }
