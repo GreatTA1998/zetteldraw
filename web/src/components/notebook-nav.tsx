@@ -6,6 +6,7 @@ import { HandOffDialog } from "@/components/hand-off-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -85,19 +86,12 @@ export function NotebookNav({ notebooks, selectedId, onSelect, onSignOut }: Prop
             >
               <Settings className="size-4" />
             </DropdownMenuTrigger>
-<<<<<<< HEAD
-            <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuGroup>
                 <DropdownMenuLabel className="font-normal text-muted-foreground">
                   Read-only companion
                 </DropdownMenuLabel>
               </DropdownMenuGroup>
-=======
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel className="font-normal text-muted-foreground">
-                Read-only companion
-              </DropdownMenuLabel>
->>>>>>> 52b7b1b (v64: live-writer Hand off ceremony for Play cutover)
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setHandOffOpen(true)}>
                 Move to a new device…
