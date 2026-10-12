@@ -69,16 +69,8 @@ final class PageInkView extends FrameLayout {
         void onHistoryChanged();
 
         /**
-         * The ink surface scrolled while a selection is up (edge scroll). The
-         * page column should match {@code scrollY} without calling
-         * {@link #setContentScrollY} again.
-         */
-        default void onSelectionScroll(int scrollY) {
-        }
-
-        /**
-         * The dashed selection box moved (drag or edge scroll). Reposition any
-         * UI anchored to {@link #selectionBoundsOnSurface()}.
+         * The dashed selection box moved (drag). Reposition any UI anchored to
+         * {@link #selectionBoundsOnSurface()}.
          */
         default void onSelectionBoundsChanged() {
         }
@@ -93,11 +85,6 @@ final class PageInkView extends FrameLayout {
     /** Stock-app resume delay after a lasso on colour devices; shorter ones drop the first stroke. */
     private static final long LASSO_RESUME_MS = 500;
     private static final long DRAG_FRAME_MS = 40;
-    /** Top/bottom band (dp) that auto-scrolls while a selection is active. */
-    private static final float EDGE_ZONE_DP = 56f;
-    /** Paper px per tick; modest for Kaleido so the stack stays readable. */
-    private static final int EDGE_SCROLL_STEP_PX = 36;
-    private static final long EDGE_SCROLL_MS = 50;
 
     private final SurfaceView surfaceView;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -164,25 +151,10 @@ final class PageInkView extends FrameLayout {
     private long lastFrameAt;
     private final Runnable resumeAfterLasso = this::onResumeAfterLasso;
     private final Runnable dragFrame = this::drawDragFrame;
-    private final Runnable edgeScrollTick = this::onEdgeScrollTick;
-    /** Pointer in the surface while a selection gesture is down; NaN when idle. */
-    private float edgePointerX = Float.NaN;
-    private float edgePointerY = Float.NaN;
-    /**
-     * True while {@link #edgeScrollTick} is posted. MOVE must not remove/repost
-     * it — stylus streams continuous MOVE events on Boox, which used to reset
-     * the 50 ms delay forever so the notebook never edge-scrolled.
-     */
-    private boolean edgeScrollScheduled;
     /** Deep copies of strokes in paper (or page) coordinates for paste. */
     private ArrayList<InkRenderer.InkStroke> clipboard = new ArrayList<>();
     /** True when the clipboard came from a one-sheet paper selection. */
     private boolean clipboardAcrossPaper;
-    /**
-     * When true and there is no selection, a finger tap on the scroller pastes
-     * at that point (Notes “Tap anywhere to paste”).
-     */
-    private boolean pasteArmed;
 
     PageInkView(Context context) {
         super(context);
@@ -546,16 +518,6 @@ final class PageInkView extends FrameLayout {
         return selection != null;
     }
 
-    /** Arm finger-tap paste when the top instructional bar is showing. */
-    void setPasteArmed(boolean armed) {
-        pasteArmed = armed;
-    }
-
-    /** Finger tap should paste (no selection; clipboard + instructional bar). */
-    boolean wantsPasteTap() {
-        return pasteArmed && selection == null && !clipboard.isEmpty();
-    }
-
     /**
      * Dashed selection box in surface / drawing-area coordinates, or null when
      * nothing is selected.
@@ -563,11 +525,6 @@ final class PageInkView extends FrameLayout {
     RectF selectionBoundsOnSurface() {
         Selection s = selection;
         return s == null ? null : new RectF(boxOnSurface(s));
-    }
-
-    /** Current ink viewport scroll (paper y of the top of the surface). */
-    int contentScrollY() {
-        return shown.scrollY;
     }
 
     boolean canUndo() {
@@ -682,7 +639,6 @@ final class PageInkView extends FrameLayout {
     void close() {
         main.removeCallbacks(resumeAfterLasso);
         removeCallbacks(dragFrame);
-        stopEdgeScroll();
         main.removeCallbacks(applyViewport);
         main.removeCallbacks(applyDespiteStuckPen);
         applyPosted = false;
@@ -1256,38 +1212,21 @@ final class PageInkView extends FrameLayout {
                 s.downY = y;
                 s.scrollAtDown = shown.scrollY;
                 s.drawnBox = boxOnSurface(s);
-                edgePointerX = x;
-                edgePointerY = y;
-                if (s.dragging) {
-                    armEdgeScroll();
-                }
                 break;
             }
             case MotionEvent.ACTION_MOVE:
-                edgePointerX = x;
-                edgePointerY = y;
                 if (s.dragging) {
                     applySelectionDrag(s, x, y);
-                    armEdgeScroll();
                 }
                 break;
             case MotionEvent.ACTION_UP:
-                stopEdgeScroll();
                 if (s.dragging) {
                     commitSelection();
-                } else if (!clipboard.isEmpty()) {
-                    // Notes: tap outside the box pastes at the tap (clipboard stays).
-                    dismissSelectionForPaste();
-                    if (listener != null) {
-                        listener.onLassoCancelled();
-                    }
-                    pasteClipboardAt(x, y);
                 } else {
                     cancelSelection();
                 }
                 break;
             case MotionEvent.ACTION_CANCEL:
-                stopEdgeScroll();
                 cancelSelection();
                 break;
             default:
@@ -1296,18 +1235,18 @@ final class PageInkView extends FrameLayout {
     }
 
     /**
-     * Finger delta in surface space, plus any edge-scroll since pen-down, so the
-     * sprite stays under the pointer while the paper moves.
+     * Finger delta in surface space. Paper selections stay inside the visible
+     * viewport — cross-page transport is Copy / long-press Paste, not edge scroll.
      */
     private void applySelectionDrag(Selection s, float x, float y) {
         float rawDx = x - s.downX;
         float rawDy = y - s.downY + (shown.scrollY - s.scrollAtDown);
         float[] offset;
         if (s.acrossPaper) {
-            // Clamp to the whole sheet (including the trailing blank), not the
-            // viewport — edge scroll is what brings other pages into view.
+            float viewTop = shown.scrollY;
+            float viewBottom = shown.scrollY + surfaceView.getHeight();
             offset = Lasso.clampIntoAllowingOverflow(s.bounds, rawDx, rawDy,
-                    0f, 0f, surfaceView.getWidth(), paperBottom());
+                    0f, viewTop, surfaceView.getWidth(), viewBottom);
         } else {
             offset = Lasso.clampOffset(s.bounds, rawDx, rawDy,
                     surfaceView.getWidth(), shown.layout.heights[s.index]);
@@ -1316,94 +1255,6 @@ final class PageInkView extends FrameLayout {
         s.dy = offset[1];
         scheduleDragFrame();
         if (listener != null) {
-            listener.onSelectionBoundsChanged();
-        }
-    }
-
-    private float paperBottom() {
-        if (shown.isEmpty()) {
-            return surfaceView.getHeight();
-        }
-        int last = shown.layout.size() - 1;
-        return shown.layout.tops[last] + shown.layout.heights[last];
-    }
-
-    private int maxScrollY() {
-        int surfaceH = surfaceView.getHeight();
-        if (surfaceH <= 0) {
-            return 0;
-        }
-        return Math.max(0, Math.round(paperBottom()) - surfaceH);
-    }
-
-    private void armEdgeScroll() {
-        if (selection == null || Float.isNaN(edgePointerY) || edgeScrollScheduled) {
-            return;
-        }
-        edgeScrollScheduled = true;
-        postDelayed(edgeScrollTick, EDGE_SCROLL_MS);
-    }
-
-    private void stopEdgeScroll() {
-        removeCallbacks(edgeScrollTick);
-        edgeScrollScheduled = false;
-        edgePointerX = Float.NaN;
-        edgePointerY = Float.NaN;
-    }
-
-    private void onEdgeScrollTick() {
-        Selection s = selection;
-        if (s == null || Float.isNaN(edgePointerX) || Float.isNaN(edgePointerY) || !s.dragging) {
-            edgeScrollScheduled = false;
-            return;
-        }
-        float density = getResources().getDisplayMetrics().density;
-        float zone = EDGE_ZONE_DP * density;
-        int surfaceH = surfaceView.getHeight();
-        if (surfaceH <= 0) {
-            edgeScrollScheduled = false;
-            return;
-        }
-        int step = 0;
-        if (edgePointerY <= zone) {
-            step = -EDGE_SCROLL_STEP_PX;
-        } else if (edgePointerY >= surfaceH - zone) {
-            step = EDGE_SCROLL_STEP_PX;
-        }
-        if (step != 0) {
-            scrollSelectionBy(step);
-            applySelectionDrag(s, edgePointerX, edgePointerY);
-            // Stay on the metronome while the pointer remains in the band.
-            postDelayed(edgeScrollTick, EDGE_SCROLL_MS);
-        } else {
-            // Left the band — next MOVE that re-enters will arm again.
-            edgeScrollScheduled = false;
-        }
-    }
-
-    /**
-     * Moves the viewport while a selection is up without ending it or pausing
-     * raw drawing (already off). Rebuilds missing slice bases for newly visible
-     * pages so a cross-page drag does not paint blank paper under the sprite.
-     */
-    private void scrollSelectionBy(int deltaY) {
-        if (selection == null || deltaY == 0 || shown.isEmpty()) {
-            return;
-        }
-        int next = Math.max(0, Math.min(maxScrollY(), shown.scrollY + deltaY));
-        if (next == shown.scrollY) {
-            return;
-        }
-        shown = shown.withScroll(next);
-        if (requested != null && requested.layout == shown.layout) {
-            requested = shown;
-        }
-        if (selection.acrossPaper) {
-            ensureSliceBases(selection);
-        }
-        selection.scrolled = true;
-        if (listener != null) {
-            listener.onSelectionScroll(next);
             listener.onSelectionBoundsChanged();
         }
     }
@@ -1430,10 +1281,9 @@ final class PageInkView extends FrameLayout {
             dirty.union(s.drawnBox);
         }
         s.drawnBox = box;
-        // After an edge-scroll the whole surface moved; a partial dirty leaves
-        // the old scroll's pixels on screen (ghost duplicate above/below the
-        // seam). Same when the selection already spans more than one slice.
-        if (s.acrossPaper && (s.scrolled || spansMultipleSlices(s))) {
+        // Multi-slice selections need a full surface redraw so punched bases
+        // stay aligned with the sprite (v43 seam/ghost).
+        if (s.acrossPaper && spansMultipleSlices(s)) {
             requestFrame(true, null, UpdateMode.ANIMATION_MONO);
         } else {
             requestFrame(false, dirty, UpdateMode.ANIMATION_MONO);
@@ -1470,7 +1320,6 @@ final class PageInkView extends FrameLayout {
             return;
         }
         removeCallbacks(dragFrame);
-        stopEdgeScroll();
         RectF dirty = touchedArea(s);
         Lasso.Move move = Lasso.move(s.page, s.ids, s.dx, s.dy);
         // Hold the pen off before dropping the selection, so this cannot turn
@@ -1513,18 +1362,14 @@ final class PageInkView extends FrameLayout {
         }
     }
 
-    /**
-     * Ends the selection and repaints. Caller fires {@link Listener#onLassoCancelled}
-     * when the UI should drop the floating menu (including before a paste-at-tap).
-     */
+    /** Ends the selection and repaints. Caller fires {@link Listener#onLassoCancelled}. */
     private void dismissSelectionForPaste() {
         Selection s = selection;
         if (s == null) {
             return;
         }
         removeCallbacks(dragFrame);
-        stopEdgeScroll();
-        boolean needFull = s.acrossPaper && (s.scrolled || spansMultipleSlices(s));
+        boolean needFull = s.acrossPaper && spansMultipleSlices(s);
         RectF dirty = touchedArea(s);
         scheduleResume();
         endSelection();
@@ -1539,7 +1384,6 @@ final class PageInkView extends FrameLayout {
         if (selection == null) {
             return;
         }
-        stopEdgeScroll();
         // Not recycled: a queued frame may still draw them.
         selection = null;
         syncRaw();
@@ -1581,41 +1425,6 @@ final class PageInkView extends FrameLayout {
         return deleteSelection();
     }
 
-    /**
-     * Places a nudged duplicate of the selection in place (keeps the original).
-     * Does not use the clipboard.
-     */
-    boolean duplicateSelection() {
-        Selection s = selection;
-        if (s == null) {
-            return false;
-        }
-        ArrayList<InkRenderer.InkStroke> picked = selectedStrokes(s);
-        if (picked.isEmpty()) {
-            return false;
-        }
-        float nudge = 28f * getResources().getDisplayMetrics().density;
-        RectF box = boxOnSurface(s);
-        float destX = box.centerX() + nudge;
-        float destY = box.centerY() + nudge;
-        // Temporarily hold strokes so pasteAt can place them; restore clipboard after.
-        ArrayList<InkRenderer.InkStroke> saved = clipboard;
-        boolean savedPaper = clipboardAcrossPaper;
-        clipboard = new ArrayList<>(picked.size());
-        for (InkRenderer.InkStroke stroke : picked) {
-            clipboard.add(stroke.duplicated(0f, 0f));
-        }
-        clipboardAcrossPaper = s.acrossPaper;
-        dismissSelectionForPaste();
-        if (listener != null) {
-            listener.onLassoCancelled();
-        }
-        boolean ok = pasteClipboardAt(destX, destY);
-        clipboard = saved;
-        clipboardAcrossPaper = savedPaper;
-        return ok;
-    }
-
     /** Removes the selected strokes. */
     boolean deleteSelection() {
         Selection s = selection;
@@ -1623,8 +1432,7 @@ final class PageInkView extends FrameLayout {
             return false;
         }
         removeCallbacks(dragFrame);
-        stopEdgeScroll();
-        boolean needFull = s.acrossPaper && (s.scrolled || spansMultipleSlices(s));
+        boolean needFull = s.acrossPaper && spansMultipleSlices(s);
         RectF dirty = touchedArea(s);
         if (s.acrossPaper) {
             NotebookPaper paper = s.page.paper;
@@ -2003,10 +1811,9 @@ final class PageInkView extends FrameLayout {
 
     private void commitPaperSelection(Selection s) {
         removeCallbacks(dragFrame);
-        stopEdgeScroll();
         float dx = s.dx;
         float dy = s.dy;
-        boolean needFull = s.scrolled || spansMultipleSlices(s);
+        boolean needFull = spansMultipleSlices(s);
         RectF dirty = touchedArea(s);
         NotebookPaper paper = s.page.paper;
         Set<String> ids = s.ids;
@@ -2037,9 +1844,7 @@ final class PageInkView extends FrameLayout {
         invalidatePaperRegion(paper, touchedPaper);
         scheduleResume();
         endSelection();
-        // Cross-page (or edge-scrolled) commits must repaint the whole surface:
-        // a partial dirty is still in pre-scroll surface coords and leaves a
-        // second copy of the selection near the dashed mark.
+        // Multi-slice commits repaint the whole surface so seam ghosts clear.
         if (needFull) {
             requestFrame(true, null, UpdateMode.GC);
         } else {
@@ -2173,10 +1978,8 @@ final class PageInkView extends FrameLayout {
         boolean dragging;
         float downX;
         float downY;
-        /** {@link InkViewport#scrollY} at ACTION_DOWN; edge scroll adds the delta to dy. */
+        /** {@link InkViewport#scrollY} at ACTION_DOWN. */
         int scrollAtDown;
-        /** True after edge-scroll during this selection; forces full-surface redraws. */
-        boolean scrolled;
         RectF drawnBox;
 
         Selection(Board page, int index, Set<String> ids, RectF bounds, Bitmap base, Bitmap sprite) {

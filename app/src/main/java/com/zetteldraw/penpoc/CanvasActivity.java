@@ -93,26 +93,15 @@ public final class CanvasActivity extends Activity {
     private TextView modeText;
     private Button modeConfirm;
     /**
-     * Notes-like floating pill above the lasso selection (Cut / Dup / Copy /
-     * Delete, optional Paste). Parent is {@link #root} (same overlay layer as
-     * {@link #modeBar}) so it paints above the Onyx SurfaceView — parenting
-     * inside {@link #drawingArea} left it looking like a bottom chip on Boox.
+     * Notes-like floating pill above the lasso selection (Cut / Copy / Delete,
+     * optional Paste). Parent is {@link #root} (same overlay layer as
+     * {@link #modeBar}) so it paints above the Onyx SurfaceView.
      */
     private LinearLayout lassoMenu;
     private Button lassoCutButton;
-    private Button lassoDupButton;
     private Button lassoCopyButton;
     private Button lassoDeleteButton;
     private Button lassoPasteButton;
-    /**
-     * Top instructional bar while the lasso clipboard is armed: “Tap anywhere
-     * to paste” + Clear clipboard.
-     */
-    private LinearLayout pasteInstructBar;
-    private TextView pasteInstructLabel;
-    private Button pasteClearButton;
-    /** True while {@link #scroller} is being driven by lasso edge-scroll. */
-    private boolean selectionDrivenScroll;
     /** Page the Link control was pressed on. Null when linking is closed. */
     private String linkSourceId;
     /** "notebook k" captured from the slot on screen. Not looked up again. */
@@ -230,12 +219,6 @@ public final class CanvasActivity extends Activity {
         modeLp.rightMargin = dp(10);
         modeLp.bottomMargin = dp(12);
         root.addView(modeBar, modeLp);
-        pasteInstructBar = buildPasteInstructBar();
-        FrameLayout.LayoutParams pasteLp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT);
-        pasteLp.gravity = Gravity.TOP;
-        root.addView(pasteInstructBar, pasteLp);
         lassoMenu = buildLassoMenu();
         FrameLayout.LayoutParams lassoLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -288,14 +271,12 @@ public final class CanvasActivity extends Activity {
                     showHint(getResources().getQuantityString(R.plurals.lasso_selected, selected, selected), false);
                     showLassoMenu();
                 }
-                syncPasteInstructBar();
             }
 
             @Override
             public void onLassoMoved(Lasso.Move move) {
                 showHint("", false);
                 hideLassoMenu();
-                syncPasteInstructBar();
                 tools.setTool(PageInkView.Tool.PEN);
             }
 
@@ -303,21 +284,11 @@ public final class CanvasActivity extends Activity {
             public void onLassoCancelled() {
                 showHint("", false);
                 hideLassoMenu();
-                syncPasteInstructBar();
             }
 
             @Override
             public void onHistoryChanged() {
                 runOnUiThread(CanvasActivity.this::syncHistory);
-            }
-
-            @Override
-            public void onSelectionScroll(int scrollY) {
-                selectionDrivenScroll = true;
-                scroller.scrollTo(0, scrollY);
-                selectionDrivenScroll = false;
-                refreshModeBar();
-                positionLassoMenu();
             }
 
             @Override
@@ -330,6 +301,7 @@ public final class CanvasActivity extends Activity {
         scroller = new PageScroller(this);
         scroller.setStylusTarget(inkView);
         scroller.setListener(this::onScrolled);
+        scroller.setPasteLongPressListener(this::onPasteLongPress);
         pageColumn = new LinearLayout(this);
         pageColumn.setOrientation(LinearLayout.VERTICAL);
         pageColumn.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
@@ -1311,44 +1283,33 @@ public final class CanvasActivity extends Activity {
             updateExcludeRects();
         });
         lassoCutButton = menuChip(getString(R.string.cut));
-        lassoDupButton = menuChip(getString(R.string.duplicate));
         lassoCopyButton = menuChip(getString(R.string.copy));
         lassoDeleteButton = menuChip(getString(R.string.delete));
         lassoPasteButton = menuChip(getString(R.string.paste));
         onTap(lassoCutButton, v -> {
             if (inkView.cutSelection()) {
                 showHint(getString(R.string.lasso_cut), true);
-                syncPasteInstructBar();
-            }
-        });
-        onTap(lassoDupButton, v -> {
-            if (inkView.duplicateSelection()) {
-                showHint(getString(R.string.lasso_duplicated), true);
-                syncPasteInstructBar();
             }
         });
         onTap(lassoCopyButton, v -> {
             if (inkView.copySelection()) {
                 showHint(getString(R.string.lasso_copied), true);
                 syncLassoMenuActions();
-                syncPasteInstructBar();
             }
         });
         onTap(lassoDeleteButton, v -> {
             if (inkView.deleteSelection()) {
                 showHint(getString(R.string.lasso_deleted), true);
-                syncPasteInstructBar();
             }
         });
         onTap(lassoPasteButton, v -> {
             if (inkView.pasteClipboard()) {
                 showHint(getString(R.string.lasso_pasted), true);
                 hideLassoMenu();
-                syncPasteInstructBar();
+                syncLassoMenuActions();
             }
         });
         pill.addView(lassoCutButton, wrap());
-        pill.addView(lassoDupButton, wrap());
         pill.addView(lassoCopyButton, wrap());
         pill.addView(lassoDeleteButton, wrap());
         pill.addView(lassoPasteButton, wrap());
@@ -1361,45 +1322,6 @@ public final class CanvasActivity extends Activity {
         button.setMinimumWidth(dp(36));
         button.setPadding(dp(8), 0, dp(8), 0);
         return button;
-    }
-
-    private LinearLayout buildPasteInstructBar() {
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setBackgroundColor(0xFF2A2A2A);
-        bar.setVisibility(View.GONE);
-        bar.setPadding(dp(14), dp(10), dp(10), dp(10));
-        bar.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
-        pasteInstructLabel = new TextView(this);
-        pasteInstructLabel.setText(R.string.tap_anywhere_to_paste);
-        pasteInstructLabel.setTextColor(Color.WHITE);
-        pasteInstructLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        bar.addView(pasteInstructLabel, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        View rule = new View(this);
-        rule.setBackgroundColor(0xFF888888);
-        LinearLayout.LayoutParams ruleLp = new LinearLayout.LayoutParams(dp(1), dp(18));
-        ruleLp.leftMargin = dp(8);
-        ruleLp.rightMargin = dp(4);
-        bar.addView(rule, ruleLp);
-        pasteClearButton = new Button(this, null, android.R.attr.borderlessButtonStyle);
-        pasteClearButton.setText(R.string.clear_clipboard);
-        pasteClearButton.setAllCaps(false);
-        pasteClearButton.setTextColor(Color.WHITE);
-        pasteClearButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        pasteClearButton.setBackground(null);
-        pasteClearButton.setMinHeight(0);
-        pasteClearButton.setMinimumHeight(dp(40));
-        pasteClearButton.setPadding(dp(10), 0, dp(10), 0);
-        onTap(pasteClearButton, v -> {
-            inkView.clearClipboard();
-            showHint("", false);
-            syncPasteInstructBar();
-            syncLassoMenuActions();
-        });
-        bar.addView(pasteClearButton, wrap());
-        return bar;
     }
 
     private void showLassoMenu() {
@@ -1424,30 +1346,56 @@ public final class CanvasActivity extends Activity {
 
     private void syncLassoMenuActions() {
         boolean paste = inkView != null && inkView.hasClipboard();
-        // Paste is optional on the selection pill — primary path is tap-to-paste.
+        // Optional on the pill — primary paste path is long-press on a page.
         lassoPasteButton.setVisibility(paste ? View.VISIBLE : View.GONE);
         lassoPasteButton.setEnabled(paste);
     }
 
-    /** Show/hide the top Notes-style paste instructional bar while Lasso is active. */
-    private void syncPasteInstructBar() {
-        boolean show = inkView != null
-                && inkView.hasClipboard()
-                && tools.tool() == PageInkView.Tool.LASSO
-                && modeBar.getVisibility() != View.VISIBLE;
-        int next = show ? View.VISIBLE : View.GONE;
-        if (pasteInstructBar.getVisibility() != next) {
-            pasteInstructBar.setVisibility(next);
-            if (show) {
-                pasteInstructBar.bringToFront();
+    /**
+     * Long-press on empty paper while the lasso clipboard is full: Paste at
+     * that surface point (paper coords) or Clear clipboard.
+     */
+    private void onPasteLongPress(float surfaceX, float surfaceY) {
+        if (inkView == null || !inkView.hasClipboard() || inkView.hasSelection()) {
+            return;
+        }
+        if (modeBar.getVisibility() == View.VISIBLE || overlay != null) {
+            return;
+        }
+        LinearLayout menu = panel();
+        menu.setMinimumWidth(dp(180));
+        addPanelButton(menu, getString(R.string.paste), () -> {
+            if (inkView.pasteClipboardAt(surfaceX, surfaceY)) {
+                showHint(getString(R.string.lasso_pasted), true);
+                syncLassoMenuActions();
             }
-            updateExcludeRects();
-        }
-        // Keep the selection pill above the paste bar in z-order.
-        if (lassoMenu.getVisibility() == View.VISIBLE) {
-            lassoMenu.bringToFront();
-        }
-        inkView.setPasteArmed(show && !inkView.hasSelection());
+        });
+        addPanelButton(menu, getString(R.string.clear_clipboard), () -> {
+            inkView.clearClipboard();
+            showHint("", false);
+            syncLassoMenuActions();
+        });
+        showOverlay(menu, pasteMenuLp(surfaceX, surfaceY, menu), drawingArea);
+    }
+
+    /** Anchor the paste menu near the long-press in {@link #drawingArea}. */
+    private FrameLayout.LayoutParams pasteMenuLp(float surfaceX, float surfaceY, View content) {
+        content.measure(
+                View.MeasureSpec.makeMeasureSpec(drawingArea.getWidth(), View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(drawingArea.getHeight(), View.MeasureSpec.AT_MOST));
+        int w = content.getMeasuredWidth();
+        int h = content.getMeasuredHeight();
+        int left = Math.round(surfaceX - w / 2f);
+        int top = Math.round(surfaceY - dp(8));
+        left = Math.max(dp(8), Math.min(left, drawingArea.getWidth() - w - dp(8)));
+        top = Math.max(dp(8), Math.min(top, drawingArea.getHeight() - h - dp(8)));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP | Gravity.START;
+        lp.leftMargin = left;
+        lp.topMargin = top;
+        return lp;
     }
 
     /**
@@ -1525,7 +1473,6 @@ public final class CanvasActivity extends Activity {
         linkSourceId = slot.page.id;
         linkSourceRef = refOnScreen(slot);
         modeBar.setVisibility(View.VISIBLE);
-        syncPasteInstructBar();
         refreshModeBar();
         updateExcludeRects();
     }
@@ -1541,7 +1488,6 @@ public final class CanvasActivity extends Activity {
         moveSourceRef = refOnScreen(slot);
         moveSourceNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
         modeBar.setVisibility(View.VISIBLE);
-        syncPasteInstructBar();
         refreshModeBar();
         updateExcludeRects();
     }
@@ -1556,7 +1502,6 @@ public final class CanvasActivity extends Activity {
         placeSourceId = notebookId;
         placeSourceTitle = titleOf(notebookId);
         modeBar.setVisibility(View.VISIBLE);
-        syncPasteInstructBar();
         refreshModeBar();
         updateExcludeRects();
     }
@@ -1591,7 +1536,6 @@ public final class CanvasActivity extends Activity {
         if (!modeActive()) {
             modeBar.setVisibility(View.GONE);
             modeConfirm.setVisibility(View.GONE);
-            syncPasteInstructBar();
         } else {
             refreshModeBar();
         }
@@ -1605,7 +1549,6 @@ public final class CanvasActivity extends Activity {
         if (!modeActive()) {
             modeBar.setVisibility(View.GONE);
             modeConfirm.setVisibility(View.GONE);
-            syncPasteInstructBar();
         } else {
             refreshModeBar();
         }
@@ -1618,7 +1561,6 @@ public final class CanvasActivity extends Activity {
         if (!modeActive()) {
             modeBar.setVisibility(View.GONE);
             modeConfirm.setVisibility(View.GONE);
-            syncPasteInstructBar();
         } else {
             refreshModeBar();
         }
@@ -1964,9 +1906,9 @@ public final class CanvasActivity extends Activity {
     }
 
     private void onScrolled(int scrollY) {
-        if (selectionDrivenScroll || inkView.hasSelection()) {
-            // Edge-scroll already updated the ink viewport; do not remount it or
-            // pause the (already paused) pen with Hold.SCROLL.
+        if (inkView.hasSelection()) {
+            // Selection captures touches; do not remount the viewport or pause
+            // the (already paused) pen with Hold.SCROLL.
             refreshModeBar();
             return;
         }
@@ -2538,12 +2480,9 @@ public final class CanvasActivity extends Activity {
             if (inkView.hasSelection()) {
                 showLassoMenu();
             }
-            syncPasteInstructBar();
         } else if (!inkView.hasSelection()) {
             showHint("", false);
-            // Leaving Lasso dismisses the paste instructional bar so writing stays clear.
             hideLassoMenu();
-            syncPasteInstructBar();
         }
     }
 
@@ -2638,7 +2577,6 @@ public final class CanvasActivity extends Activity {
         }
         addExclude(rects, modeBar, MOVE_EXCLUDE_PAD_PX, origin, loc);
         addExclude(rects, lassoMenu, MOVE_EXCLUDE_PAD_PX, origin, loc);
-        addExclude(rects, pasteInstructBar, MOVE_EXCLUDE_PAD_PX, origin, loc);
         addExclude(rects, toolbar, dp(6), origin, loc);
         int top = scroller.getScrollY();
         int bottom = top + scroller.getHeight();

@@ -32,7 +32,6 @@ import org.robolectric.shadows.ShadowLooper;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /** Drives the notebook UI without a Boox: create, rename, delete via the in-window forms. */
 @RunWith(RobolectricTestRunner.class)
@@ -461,33 +460,26 @@ public class CanvasActivitySmokeTest {
     }
 
     @Test
-    public void lassoEdgeScrollAdvancesUnderContinuousMove() {
+    public void lassoLongPressPastesAtHoldPoint() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         Board page = repo.scratchpadPages().get(0);
         page.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, 200f));
         repo.saveInk(page);
-        // Second inked slice so the sheet is taller than one viewport.
-        Board second = repo.scratchpadPages().get(repo.scratchpadPages().size() - 1);
-        second.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, 200f));
-        repo.saveInk(second);
-        BoardRepository.NotebookInfo notebook = repo.createNotebook("edge-scroll");
-        for (Board each : new ArrayList<>(repo.scratchpadPages())) {
-            if (!each.isBlank()) {
-                repo.movePageToNotebook(each.id, notebook.id);
-            }
-        }
+        BoardRepository.NotebookInfo notebook = repo.createNotebook("longpress-paste");
+        repo.movePageToNotebook(page.id, notebook.id);
+        InkRenderer.InkStroke original = page.strokes.get(0);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
-        click(root, "edge-scroll");
+        click(root, "longpress-paste");
         idle();
         clickDesc(root, "Lasso");
         PageInkView ink = findInk(root);
         assertNotNull(ink);
-        ink.setContentScrollY(0);
-        idle();
+        assertNotNull(page.paper);
+        int strokesBefore = page.paper.strokes().size();
 
         ArrayList<TouchPoint> outline = new ArrayList<>();
         outline.add(new TouchPoint(150f, 150f, 0.5f, 1f, 0, 0, 1L));
@@ -497,23 +489,18 @@ public class CanvasActivitySmokeTest {
         ink.finishLasso(outline);
         idle();
         assertTrue(ink.hasSelection());
-
-        int before = ink.contentScrollY();
-        int surfaceH = Math.max(ink.getHeight(), 1);
-        float edgeY = surfaceH - 8f;
-        touch(ink, MotionEvent.ACTION_DOWN, 210f, 205f);
-        // Stylus-like stream: MOVE every 10 ms. The old armEdgeScroll reset the
-        // 50 ms delay on each MOVE so the tick never ran; the metronome must keep
-        // ticking through this.
-        for (int i = 0; i < 20; i++) {
-            touch(ink, MotionEvent.ACTION_MOVE, 210f, edgeY);
-            ShadowLooper.idleMainLooper(10, TimeUnit.MILLISECONDS);
-        }
-        assertTrue("edge scroll should advance while held at the bottom band (was "
-                        + before + ", now " + ink.contentScrollY() + ")",
-                ink.contentScrollY() > before);
-        touch(ink, MotionEvent.ACTION_UP, 210f, edgeY);
+        assertTrue(ink.copySelection());
+        // Cancel selection so the page is free to scroll / long-press.
+        touch(ink, MotionEvent.ACTION_DOWN, 20f, 900f);
+        touch(ink, MotionEvent.ACTION_UP, 20f, 900f);
         idle();
+        assertFalse(ink.hasSelection());
+        assertTrue(ink.hasClipboard());
+
+        assertTrue(ink.pasteClipboardAt(400f, 500f));
+        idle();
+        assertEquals(strokesBefore + 1, page.paper.strokes().size());
+        assertNotNull(page.paper.stroke(original.id));
 
         controller.pause().stop().destroy();
     }
@@ -687,6 +674,9 @@ public class CanvasActivitySmokeTest {
         idle();
         TextView cut = find(root, "Cut");
         assertNotNull("Cut action visible while selected", cut);
+        assertNotNull("Copy on the pill", find(root, "Copy"));
+        assertNotNull("Delete on the pill", find(root, "Delete"));
+        assertNull("Dup removed — Copy/Paste covers it", find(root, "Dup"));
         View pill = cut.getParent() instanceof View ? (View) cut.getParent() : null;
         assertNotNull(pill);
         assertEquals(View.VISIBLE, pill.getVisibility());

@@ -17,28 +17,36 @@ final class PageScroller extends ScrollView {
         void onScrolled(int scrollY);
     }
 
+    /** Long-press on empty paper while the lasso clipboard is full. */
+    interface PasteLongPressListener {
+        void onPasteLongPress(float surfaceX, float surfaceY);
+    }
+
     private final Rect hitRect = new Rect();
-    private final GestureDetector pasteTapDetector;
+    private final GestureDetector longPressDetector;
     private View stylusTarget;
     private Listener listener;
+    private PasteLongPressListener pasteLongPressListener;
     private boolean forwardingStylus;
+    /** Raw coords at ACTION_DOWN; used to ignore long-press on chrome. */
+    private float downRawX;
+    private float downRawY;
 
     PageScroller(Context context) {
         super(context);
         setFillViewport(true);
         setVerticalScrollBarEnabled(false);
         setOverScrollMode(OVER_SCROLL_NEVER);
-        pasteTapDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
+        longPressDetector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
             @Override
-            public boolean onSingleTapUp(MotionEvent e) {
-                if (!(stylusTarget instanceof PageInkView)) {
-                    return false;
+            public void onLongPress(MotionEvent e) {
+                if (pasteLongPressListener == null) {
+                    return;
                 }
-                PageInkView ink = (PageInkView) stylusTarget;
-                if (!ink.wantsPasteTap()) {
-                    return false;
+                if (hitsClickable(PageScroller.this, downRawX, downRawY)) {
+                    return;
                 }
-                return ink.pasteClipboardAt(e.getX(), e.getY());
+                pasteLongPressListener.onPasteLongPress(e.getX(), e.getY());
             }
         });
     }
@@ -49,6 +57,10 @@ final class PageScroller extends ScrollView {
 
     void setListener(Listener listener) {
         this.listener = listener;
+    }
+
+    void setPasteLongPressListener(PasteLongPressListener listener) {
+        pasteLongPressListener = listener;
     }
 
     @Override
@@ -65,10 +77,13 @@ final class PageScroller extends ScrollView {
                 return stylusTarget.dispatchTouchEvent(ev);
             }
         }
-        if (stylusTarget instanceof PageInkView && ((PageInkView) stylusTarget).wantsPasteTap()
-                && !PageInkView.isStylus(ev)) {
-            // Detect a finger tap without blocking scroll on drag.
-            pasteTapDetector.onTouchEvent(ev);
+        if (ev.getActionMasked() == MotionEvent.ACTION_DOWN) {
+            downRawX = ev.getRawX();
+            downRawY = ev.getRawY();
+        }
+        // Finger long-press for Paste when clipboard is full; does not block scroll.
+        if (!PageInkView.isStylus(ev)) {
+            longPressDetector.onTouchEvent(ev);
         }
         return super.dispatchTouchEvent(ev);
     }
