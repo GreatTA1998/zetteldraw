@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { proxied, type Page, type PageLink } from "@/lib/api";
 import { dateTime } from "@/lib/format";
-import { PAGE_ASPECT, PageImage } from "@/components/page-grid";
+import { PAGE_ASPECT } from "@/components/page-grid";
 
 interface Props {
   pages: Page[];
@@ -82,21 +82,24 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
             </header>
 
             {/*
-              One tight row of content-sized pages (aspect locked). Neighbors are
-              slightly shorter/dimmer — no % width stretch, no perspective.
+              Center page + narrow cropped peeks. Peeks are a clip window over a
+              correctly aspect-ratio page (no stretch/perspective) — only a
+              strip of the neighbor shows, tight against the center.
             */}
             <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-3">
-              <div className="flex h-full max-h-full items-center justify-center gap-1">
+              <div className="flex h-full max-h-full items-stretch justify-center gap-1">
                 {prev ? (
                   <NeighborPeek
                     page={prev}
+                    side="left"
                     label={String(index)}
-                    ariaLabel="Previous page"
                     onClick={() => onIndexChange(index - 1)}
                   />
-                ) : null}
+                ) : (
+                  <div className="hidden w-14 shrink-0 sm:block" aria-hidden />
+                )}
                 <div
-                  className="relative h-full max-h-full shrink-0"
+                  className="relative h-full max-h-full min-h-0 shrink-0"
                   style={{ aspectRatio: PAGE_ASPECT }}
                 >
                   <FullPage key={page.id} page={page} />
@@ -119,11 +122,13 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
                 {next ? (
                   <NeighborPeek
                     page={next}
+                    side="right"
                     label={String(index + 2)}
-                    ariaLabel="Next page"
                     onClick={() => onIndexChange(index + 1)}
                   />
-                ) : null}
+                ) : (
+                  <div className="hidden w-14 shrink-0 sm:block" aria-hidden />
+                )}
               </div>
               <NavButton side="left" disabled={!prev} onClick={() => onIndexChange(index - 1)} />
               <NavButton side="right" disabled={!next} onClick={() => onIndexChange(index + 1)} />
@@ -135,27 +140,47 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
   );
 }
 
+/** Narrow clip over a correct-aspect page; shows the edge nearest the center. */
 function NeighborPeek({
   page,
+  side,
   label,
-  ariaLabel,
   onClick,
 }: {
   page: Page;
+  side: "left" | "right";
   label: string;
-  ariaLabel: string;
   onClick: () => void;
 }) {
+  const src = proxied(page.thumb_url);
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={ariaLabel}
-      className="relative hidden h-[88%] max-h-full shrink-0 overflow-hidden rounded-sm bg-white opacity-65 shadow-md transition hover:opacity-85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:block"
-      style={{ aspectRatio: PAGE_ASPECT }}
+      aria-label={side === "left" ? "Previous page" : "Next page"}
+      className="relative hidden h-full w-14 shrink-0 overflow-hidden rounded-sm bg-white opacity-70 shadow-md transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 sm:block"
     >
-      <PageImage page={page} />
-      <span className="absolute top-1 left-1.5 text-[0.65rem] tabular-nums text-neutral-500">{label}</span>
+      <div
+        className="absolute inset-y-0 h-full bg-white"
+        style={{
+          aspectRatio: PAGE_ASPECT,
+          ...(side === "left" ? { right: 0 } : { left: 0 }),
+        }}
+      >
+        {src ? (
+          // eslint-disable-next-line @next/next/no-img-element -- auth-proxied PNG
+          <img src={src} alt="" draggable={false} className="size-full object-contain" />
+        ) : (
+          <div className="flex size-full items-center justify-center text-[0.65rem] text-neutral-400">Blank</div>
+        )}
+        <span
+          className={`absolute top-1 text-[0.65rem] tabular-nums text-neutral-500 ${
+            side === "left" ? "left-1.5" : "right-1.5"
+          }`}
+        >
+          {label}
+        </span>
+      </div>
     </button>
   );
 }
