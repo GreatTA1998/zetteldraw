@@ -8,7 +8,11 @@ export interface Config {
   /** PEM of the CA that signs the Postgres server cert (Supabase: prod-ca-2021.crt). */
   databaseCaCert: string | undefined;
   deviceTokens: string[];
-  /** Comma-separated Google OAuth client IDs (Android + Web) for ID token audience. */
+  /**
+   * Comma-separated Google OAuth client IDs accepted as ID token audiences.
+   * The Android client is bound to package com.zetteldraw.android in Google Cloud;
+   * Credential Manager tokens use the web client id as aud.
+   */
   googleClientIds: string[];
   /** HMAC secret for zd1.* access tokens. Required when Google client IDs are set. */
   sessionSecret: string | undefined;

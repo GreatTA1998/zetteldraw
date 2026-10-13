@@ -11,7 +11,7 @@ export default function PrivacyPage() {
     <main className="mx-auto max-w-2xl px-5 py-12 text-sm leading-relaxed text-foreground">
       <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">zetteldraw</p>
       <h1 className="mt-2 text-3xl font-semibold tracking-tight">Privacy policy</h1>
-      <p className="mt-2 text-muted-foreground">Last updated 10 October 2026</p>
+      <p className="mt-2 text-muted-foreground">Last updated 13 October 2026</p>
 
       <section className="mt-10 space-y-3">
         <h2 className="text-lg font-semibold">What this app is</h2>
@@ -39,10 +39,14 @@ export default function PrivacyPage() {
           <li>Notebook and page metadata (titles, order, links between pages)</li>
           <li>Ink data and thumbnails you create while writing</li>
           <li>Your Google account id and email</li>
+          <li>A random device id this install generated, and the device model name, so one device at a time is the live writer</li>
         </ul>
         <p>
-          With sync off, everything stays on the device (and in the optional local Documents backup). We do not sell
-          your notes or use them for advertising.
+          After a successful sync the app also sends a diagnostic launch timeline (timings and the app version). With
+          sync off, everything stays on the device (and in the optional local Documents backup). We do not sell your
+          notes or use them for advertising. Sign-out removes the Google session from this device. It does not delete
+          notebooks already stored on the sync server. To ask for account and note deletion, use the contact email on
+          the Play Store listing for Zetteldraw.
         </p>
       </section>
 

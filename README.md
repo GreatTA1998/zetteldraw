@@ -172,7 +172,7 @@ Web endpoints (bearer device token, no schema header):
 
 ## Build
 
-Requires JDK 17+, Android SDK platform 34, and network access to Onyx's Maven repo (HTTP):
+Requires JDK 17+, Android SDK platform 35, and network access to Onyx's Maven repo (HTTP):
 
 `http://repo.boox.com/repository/maven-public/`
 
@@ -181,9 +181,21 @@ export ANDROID_HOME=/path/to/android-sdk
 ./gradlew :app:assembleDebug
 ```
 
+Play App Bundle (unsigned unless `keystore.properties` or `ZETTELDRAW_STORE_*` is set; release builds do not embed `zetteldraw.syncToken`):
+
+```bash
+./gradlew :app:bundleRelease \
+  -Pzetteldraw.syncUrl=https://zetteldraw-sync.onrender.com \
+  -Pzetteldraw.googleWebClientId=YOUR_WEB_CLIENT_ID.apps.googleusercontent.com
+```
+
+The hosted sync URL is the one in `render.yaml`. Signing, the upload keystore, and the Play Console checklist are in [docs/play-store/README.md](docs/play-store/README.md).
+
 APK:
 
 `app/build/outputs/apk/debug/app-debug.apk`
+
+`applicationId` is `com.zetteldraw.android`. Java sources stay in `com.zetteldraw.penpoc`. A Play or sideload build with the new id does not replace an install of `com.zetteldraw.penpoc`; sync or the Documents mirror is the way notes move across.
 
 Debug builds are signed with the committed `app/debug.keystore` (standard `android` / `androiddebugkey` debug credentials), so a build from any machine installs over any other without uninstalling.
 
@@ -213,7 +225,7 @@ Sideload without adb: copy the APK to internal storage and open it in **Storage*
 If the screen stays white and nothing appears under the pen:
 
 - Confirm this is a stylus-capable Go 7 Color II firmware, not a finger-only Go Color 7 Gen 1.
-- Check `adb logcat | grep -i -e TouchHelper -e onyx -e penpoc`.
+- Check `adb logcat | grep -i -e TouchHelper -e onyx -e zetteldraw -e penpoc`.
 - Hidden API exemption is already applied in `PenApp`. Do not remove it; TouchHelper needs it on Android 13.
 
 ## Remaining device step
