@@ -44,9 +44,12 @@ export default function PrivacyPage() {
         <p>
           After a successful sync the app also sends a diagnostic launch timeline (timings and the app version). With
           sync off, everything stays on the device (and in the optional local Documents backup). We do not sell your
-          notes or use them for advertising. Sign-out removes the Google session from this device. It does not delete
-          notebooks already stored on the sync server. To ask for account and note deletion, use the contact email on
-          the Play Store listing for Zetteldraw.
+          notes or use them for advertising. Signing out stops sync. It does not delete notebooks already stored on
+          the sync server. To delete your account and those notes, follow{" "}
+          <Link href="/delete-account" className="underline underline-offset-2">
+            Delete your Zetteldraw account
+          </Link>
+          .
         </p>
       </section>
 
@@ -61,8 +64,11 @@ export default function PrivacyPage() {
       <section className="mt-8 space-y-3">
         <h2 className="text-lg font-semibold">Contact</h2>
         <p>
-          Questions about this policy: use the contact email listed on the Play Store listing for Zetteldraw, or the
-          address on your Google Play Console account for this app.
+          Zetteldraw is published by Elton Lin. Questions about this policy:{" "}
+          <a href="mailto:eltonlin1998@gmail.com" className="underline underline-offset-2">
+            eltonlin1998@gmail.com
+          </a>
+          .
         </p>
       </section>
     </main>

@@ -85,7 +85,7 @@ Notes are not sold and are not used for advertising. Privacy policy: https://zet
 
 In the app, Settings → Privacy policy opens `https://zetteldraw.com/privacy` (`CanvasActivity`). That path is `web/src/app/privacy/page.tsx`, served by the `zetteldraw-web` service on zetteldraw.com (`render.yaml`). Use that URL in Play Console.
 
-The page describes Google account id and email, notebook and ink data, the random device id, the device model, the diagnostic launch timeline the app sends, and that sign-out does not delete server notes. Deletion requests go to the contact email on the Play listing. There is no in-app or server endpoint that deletes an account. You have to actually answer those requests. Play asks for a data-deletion URL when an app creates accounts; this privacy URL can be that link only if the inbox behind the listing email is monitored.
+The page describes Google account id and email, notebook and ink data, the random device id, the device model, the diagnostic launch timeline the app sends, and that sign-out does not delete server notes. It links to the account-deletion page. There is no in-app or server endpoint that deletes an account. You have to answer email requests. Play’s data-deletion URL is `https://zetteldraw.com/delete-account` (`web/src/app/delete-account/page.tsx`). The privacy URL stays `https://zetteldraw.com/privacy`.
 
 ## Data safety
 
@@ -116,7 +116,7 @@ Not collected: advertising ID, Android ID, IMEI, serial, location, contacts, SMS
 
 **Encrypted at rest:** The app relies on the Android app sandbox. It does not add its own encryption. Server-side disk encryption is whatever Supabase and the object store provide; this repo does not implement a separate layer. Answer the in-transit question from the URL you bake in. Do not claim app-level encryption at rest.
 
-**Data deletion:** Users cannot delete the server account in the app. Sign-out clears the local access token, email, and subject, and turns sync off. Say that deletion is by request to the listing contact, and only after that inbox is real.
+**Data deletion:** Users cannot delete the server account in the app. Sign-out clears the local access token, email, and subject, and turns sync off. Deletion is by email, as described at `https://zetteldraw.com/delete-account`. Use that URL in Play Console. Answer the inbox at eltonlin1998@gmail.com: confirm within 7 days and delete within 30 days.
 
 **Advertising ID:** No. The app does not use it.
 
