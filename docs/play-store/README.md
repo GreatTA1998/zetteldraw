@@ -1,6 +1,6 @@
 # Play Store listing — Zetteldraw
 
-First Google Play release of the Android app. The store identity stays `com.zetteldraw.penpoc` (versionCode 67, versionName 3.46), the same application id as existing sideloads. The app only works as a pen notebook on **Boox/Onyx e-ink devices, arm64**. Play will still offer the AAB to other arm64 phones unless you exclude them in the device catalog. Say so in the listing.
+First Google Play release of the Android app. The store identity stays `com.zetteldraw.penpoc` (versionCode 71, versionName 3.50), the same application id as existing sideloads. The app only works as a pen notebook on **Boox/Onyx e-ink devices, arm64**. Play will still offer the AAB to other arm64 phones unless you exclude them in the device catalog. Say so in the listing.
 
 There is no FileProvider, custom permission authority, or deep link tied to a different package. `https://zetteldraw.com/apk` proxies the latest GitHub release APK and does not embed an application id.
 
