@@ -1,5 +1,7 @@
 package com.zetteldraw.penpoc.data;
 
+import android.graphics.RectF;
+
 import com.onyx.android.sdk.data.note.TouchPoint;
 import com.zetteldraw.penpoc.InkRenderer;
 
@@ -43,6 +45,11 @@ public final class NotebookPaper {
     private final ArrayList<Integer> heights = new ArrayList<>();
     private final ArrayList<String> sliceIds = new ArrayList<>();
     private final ArrayList<InkRenderer.InkStroke> strokes = new ArrayList<>();
+    /**
+     * Y-bucket index over {@link #strokes}. Lasso, erase, and slice paint query
+     * a paper range instead of walking the whole sheet (v70).
+     */
+    private final StrokeYIndex yIndex = new StrokeYIndex();
     /** Bytes of the log so far. Appending a record only adds to the end. */
     private byte[] log;
     /**
@@ -205,6 +212,7 @@ public final class NotebookPaper {
             good = in.position();
         }
         paper.log = Arrays.copyOf(bytes, good);
+        paper.rebuildYIndex();
         return paper;
     }
 
@@ -296,8 +304,8 @@ public final class NotebookPaper {
         }
         float top = origin(slice);
         float bottom = top + heights.get(slice);
-        for (InkRenderer.InkStroke stroke : strokes) {
-            if (stroke.bounds == null || stroke.bounds.bottom < top || stroke.bounds.top >= bottom) {
+        for (InkRenderer.InkStroke stroke : yIndex.overlapping(top, bottom)) {
+            if (stroke.bounds == null) {
                 continue;
             }
             for (TouchPoint point : stroke.points) {
@@ -311,18 +319,26 @@ public final class NotebookPaper {
 
     /** Strokes whose bounds meet this slice. The same object, not a copy. */
     public List<InkRenderer.InkStroke> touching(int slice) {
-        ArrayList<InkRenderer.InkStroke> hit = new ArrayList<>();
         if (slice < 0) {
-            return hit;
+            return new ArrayList<>();
         }
         float top = origin(slice);
         float bottom = top + (slice < heights.size() ? heights.get(slice) : sliceHeight);
-        for (InkRenderer.InkStroke stroke : strokes) {
-            if (stroke.bounds.bottom >= top && stroke.bounds.top < bottom) {
-                hit.add(stroke);
-            }
-        }
-        return hit;
+        return yIndex.overlapping(top, bottom);
+    }
+
+    /**
+     * Strokes whose bounds meet {@code [top, bottom)} in paper coordinates.
+     * Candidates only — callers still run geometry tests. O(strokes in range),
+     * not O(all strokes on the sheet).
+     */
+    public List<InkRenderer.InkStroke> strokesOverlapping(float top, float bottom) {
+        return yIndex.overlapping(top, bottom);
+    }
+
+    /** Same as {@link #strokesOverlapping(float, float)} for a rectangle's Y span. */
+    public List<InkRenderer.InkStroke> strokesOverlapping(RectF area) {
+        return yIndex.overlapping(area);
     }
 
     /**
@@ -352,6 +368,15 @@ public final class NotebookPaper {
         for (InkRenderer.InkStroke stroke : strokes) {
             noteStroke(stroke);
         }
+    }
+
+    private void rebuildYIndex() {
+        yIndex.rebuild(strokes);
+    }
+
+    /** Test helper: bucket membership count (tall strokes count in several buckets). */
+    int yIndexEntryCountForTest() {
+        return yIndex.entryCount();
     }
 
     public int sliceIndexAt(float paperY) {
@@ -392,6 +417,7 @@ public final class NotebookPaper {
             extend(id, sliceHeight);
         }
         strokes.add(stroke);
+        yIndex.insert(stroke);
         noteStroke(stroke);
         append(record(OP_APPEND, strokePayload(stroke)));
     }
@@ -413,6 +439,7 @@ public final class NotebookPaper {
         if (!gone.isEmpty()) {
             append(record(OP_DELETE, idsPayload(gone)));
             refreshLastInked();
+            rebuildYIndex();
         }
     }
 
@@ -470,6 +497,7 @@ public final class NotebookPaper {
             }
             append(record(OP_TRANSLATE, raw.toByteArray()));
             refreshLastInked();
+            rebuildYIndex();
         }
     }
 
@@ -545,6 +573,7 @@ public final class NotebookPaper {
             rewriteLogFromStrokes();
             trimTail();
             refreshLastInked();
+            rebuildYIndex();
             assertReorderPreserved(slicesBefore, strokeIdsBefore, movedId);
         } catch (Throwable failed) {
             log = logBefore;
@@ -555,6 +584,7 @@ public final class NotebookPaper {
             strokes.clear();
             strokes.addAll(strokesBefore);
             lastInked = lastInkedBefore;
+            rebuildYIndex();
             if (failed instanceof RuntimeException) {
                 throw (RuntimeException) failed;
             }
@@ -639,6 +669,7 @@ public final class NotebookPaper {
             // Prefer both notebooks intact over dropping a dense page mid-move.
             strokes.addAll(cut.taken);
             refreshLastInked();
+            rebuildYIndex();
             if (failed instanceof RuntimeException) {
                 throw (RuntimeException) failed;
             }
@@ -648,6 +679,7 @@ public final class NotebookPaper {
         rememberTear(slice, TEAR_DELETE, cut);
         trimTail();
         refreshLastInked();
+        rebuildYIndex();
         return cut;
     }
 
@@ -726,6 +758,7 @@ public final class NotebookPaper {
             destination.rewriteLogFromStrokes();
             destination.trimTail();
             destination.refreshLastInked();
+            destination.rebuildYIndex();
             if (destination.indexOfSliceId(id) < 0) {
                 throw new IllegalStateException("dest rewrite dropped moved page " + id);
             }
@@ -747,9 +780,11 @@ public final class NotebookPaper {
             destination.strokes.clear();
             destination.strokes.addAll(destStrokesBefore);
             destination.lastInked = destLastInkedBefore;
+            destination.rebuildYIndex();
             // Prefer both notebooks intact over dropping a dense page mid-move.
             strokes.addAll(cut.taken);
             refreshLastInked();
+            rebuildYIndex();
             if (failed instanceof RuntimeException) {
                 throw (RuntimeException) failed;
             }
@@ -759,6 +794,7 @@ public final class NotebookPaper {
         rememberTear(slice, TEAR_DELETE, cut);
         trimTail();
         refreshLastInked();
+        rebuildYIndex();
         return cut;
     }
 
@@ -803,6 +839,7 @@ public final class NotebookPaper {
             append(suffix);
             for (InkRenderer.InkStroke stroke : shifted) {
                 strokes.add(stroke);
+                yIndex.insert(stroke);
                 noteStroke(stroke);
             }
         } catch (Throwable failed) {
@@ -815,6 +852,7 @@ public final class NotebookPaper {
                 strokes.remove(strokes.size() - 1);
             }
             lastInked = lastInkedBefore;
+            rebuildYIndex();
             if (failed instanceof RuntimeException) {
                 throw (RuntimeException) failed;
             }
@@ -832,6 +870,7 @@ public final class NotebookPaper {
         // A wiped slice stays, so pages under it do not move. An empty tail does not.
         trimTail();
         refreshLastInked();
+        rebuildYIndex();
         return cut;
     }
 

@@ -47,13 +47,13 @@ Tests that lock the guarantees (names encode the claim):
 
 Race invariants assume the process stays alive. They do **not** mean an unbounded Scratchpad fits in ~256 MB heap.
 
-| Envelope | Expectation on tip **v69+** |
+| Envelope | Expectation on tip **v70+** |
 | --- | --- |
 | **~100 pages** / light–moderate ink (log ≲ few MB) | **Safe** for open, draw, lasso, Move, sync/Prepare |
-| **~1 000 pages** or fat log (~10–20 MB; prod Scratchpad ~14 MB) | UI **degrades** (O(n) open/lasso/erase). **Prepare/push heap OK** — v69 streams blobs >256 KiB via `PUT /sync/blob` (fixes ≤v68 ~75 MB Base64 OOM). Drain time still ∝ whole-log upload. |
+| **~1 000 pages** or fat log (~10–20 MB; prod Scratchpad ~14 MB) | **Open/heap still degrade** (full log resident). **Lasso/erase/`touching` no longer O(sheet)** — v70 Y-bucket index (cost ≈ ink near the gesture). **Prepare/push heap OK** (v69 streamed `PUT /sync/blob`). Drain time still ∝ whole-log upload. |
 | **~10 000 pages** / huge log | **Fail risk** — open/replay, flush re-read, and pull `byte[]` can still OOM; not a watertight “sync always works” claim |
 
-Remaining gap: streaming **decode/open/pull-apply**, not the Prepare Base64 path. Full table: [docs/CORRECTNESS.md § Scale](docs/CORRECTNESS.md#scale-pages--strokes--heap--not-a-race-proof).
+**Improved (v70):** paper lasso / erase / slice paint query a Y range. **Still O(n):** open/replay, append/`flushSheet` copies, whole-log sync re-upload, pull `byte[]`, multi-sheet heap. Full table: [docs/CORRECTNESS.md § Scale](docs/CORRECTNESS.md#scale-pages--strokes--heap--not-a-race-proof).
 
 ---
 

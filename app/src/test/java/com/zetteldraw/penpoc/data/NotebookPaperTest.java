@@ -256,6 +256,31 @@ public class NotebookPaperTest {
     }
 
     @Test
+    public void yIndexCullsFarStrokesForOverlappingQuery() throws Exception {
+        NotebookPaper paper = NotebookPaper.empty(1420);
+        InkRenderer.InkStroke near = line("near", 10f, 40f, 80f);
+        paper.appendStroke(near);
+        for (int i = 0; i < 500; i++) {
+            float y0 = 8000f + i * 10f;
+            paper.appendStroke(line("far" + i, 10f, y0, y0 + 20f));
+        }
+        List<InkRenderer.InkStroke> hit = paper.strokesOverlapping(0f, 200f);
+        assertEquals(1, hit.size());
+        assertEquals("near", hit.get(0).id);
+        assertEquals(near, paper.touching(0).get(0));
+
+        NotebookPaper again = NotebookPaper.replay(paper.bytes());
+        assertEquals(1, again.strokesOverlapping(0f, 200f).size());
+        assertTrue(again.yIndexEntryCountForTest() > 0);
+
+        again.translate(List.of("near"), 0f, 20_000f);
+        assertTrue(again.strokesOverlapping(0f, 200f).isEmpty());
+        List<InkRenderer.InkStroke> moved = again.strokesOverlapping(20_020f, 20_100f);
+        assertEquals(1, moved.size());
+        assertEquals("near", moved.get(0).id);
+    }
+
+    @Test
     public void denseLassoTranslateStaysFastAndKeepsLastInked() {
         NotebookPaper paper = NotebookPaper.empty(1420);
         ArrayList<String> move = new ArrayList<>();

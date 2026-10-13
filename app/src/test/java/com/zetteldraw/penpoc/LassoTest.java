@@ -152,6 +152,37 @@ public class LassoTest {
     }
 
     @Test
+    public void paperYIndexKeepsFarSheetStrokesOutOfSelectCandidates() throws Exception {
+        com.zetteldraw.penpoc.data.NotebookPaper paper =
+                com.zetteldraw.penpoc.data.NotebookPaper.empty(1420);
+        InkRenderer.InkStroke centerDot = line(200f, 200f, 1);
+        paper.appendStroke(centerDot);
+        for (int row = 0; row < 20; row++) {
+            for (int col = 0; col < 20; col++) {
+                paper.appendStroke(line(40f + col * 36f, 40f + row * 42f, 8));
+            }
+        }
+        for (int i = 0; i < 2000; i++) {
+            float y0 = 20_000f + i * 5f;
+            paper.appendStroke(line(50f, y0, 8));
+        }
+        List<TouchPoint> outline = denseCircle(200f, 200f, 110f, 800);
+        float top = outline.get(0).y;
+        float bottom = top;
+        for (TouchPoint p : outline) {
+            top = Math.min(top, p.y);
+            bottom = Math.max(bottom, p.y);
+        }
+        List<InkRenderer.InkStroke> candidates = paper.strokesOverlapping(top, bottom);
+        assertTrue("spatial cull must drop far strokes", candidates.size() < paper.strokes().size() / 4);
+        for (InkRenderer.InkStroke stroke : candidates) {
+            assertTrue(stroke.bounds.bottom < 2000f);
+        }
+        List<InkRenderer.InkStroke> picked = Lasso.select(candidates, outline);
+        assertTrue(picked.contains(centerDot));
+    }
+
+    @Test
     public void clampKeepsSelectionOnThePage() {
         RectF bounds = new RectF(100f, 200f, 300f, 400f);
         float[] ok = Lasso.clampOffset(bounds, 50f, -50f, 1000f, 1400f);
