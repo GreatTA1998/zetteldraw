@@ -19,6 +19,8 @@ import java.util.Map;
 /** JSON shapes for {@code POST /sync/push} and {@code GET /sync/pull}; see server/README.md. */
 final class SyncProtocol {
     static final String SCHEMA_HEADER = "X-Zetteldraw-Schema";
+    /** @see SyncStore#INLINE_BLOB_MAX_BYTES */
+    static final int INLINE_BLOB_MAX_BYTES = SyncStore.INLINE_BLOB_MAX_BYTES;
 
     private SyncProtocol() {
     }

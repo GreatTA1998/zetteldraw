@@ -9,7 +9,7 @@ import {
 } from "./accounts.js";
 import { AuthService, issueAccessToken, type AuthPrincipal } from "./auth.js";
 import type { InkStorage } from "./storage.js";
-import { pull, push, type SyncScope } from "./sync.js";
+import { pull, push, sha256Hex, type SyncScope } from "./sync.js";
 import type { Thumbnailer } from "./thumbs.js";
 import { BadRequest, parsePushBody } from "./validate.js";
 import { Forbidden, NotFound, registerWebRoutes } from "./web.js";
@@ -17,6 +17,10 @@ import { backupStatus } from "./web.js";
 import { assertCanPush, claimWriter, NotLiveWriter, prepareTransfer } from "./writer.js";
 
 export const SCHEMA_HEADER = "x-zetteldraw-schema";
+
+const SHA256_HEX = /^[0-9a-f]{64}$/i;
+/** Raw ink uploads (Scratchpad logs can exceed the old 64MB JSON Base64 budget). */
+const BLOB_BODY_LIMIT = 256 * 1024 * 1024;
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -43,7 +47,16 @@ function scopeOf(principal: AuthPrincipal | undefined): SyncScope {
 }
 
 export function buildApp(deps: AppDeps): FastifyInstance {
-  const app = Fastify({ logger: deps.logger ?? true, bodyLimit: 64 * 1024 * 1024 });
+  // JSON push stays modest (large ink uses /sync/blob). Octet uploads allow big notebook logs.
+  const app = Fastify({ logger: deps.logger ?? true, bodyLimit: BLOB_BODY_LIMIT });
+
+  app.addContentTypeParser(
+    "application/octet-stream",
+    { parseAs: "buffer", bodyLimit: BLOB_BODY_LIMIT },
+    (_req, body, done) => {
+      done(null, body);
+    },
+  );
 
   app.get("/healthz", async () => ({ ok: true, schema_version: deps.schemaVersion }));
 
@@ -178,6 +191,49 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       }
       throw new BadRequest(err instanceof Error ? err.message : "Prepare transfer failed");
     }
+  });
+
+  /**
+   * Raw ink blob upload. Prefer this over Base64-in-JSON for large notebook logs
+   * so Boox Prepare transfer does not allocate ~4/3 N UTF-16 / JSON copies.
+   * Query: device_id (required for Google live-writer gate).
+   */
+  app.put<{ Params: { hash: string }; Querystring: { device_id?: string } }>(
+    "/sync/blob/:hash",
+    async (req) => {
+      const hash = (req.params.hash || "").toLowerCase();
+      if (!SHA256_HEX.test(hash)) {
+        throw new BadRequest("hash must be a sha256 hex digest");
+      }
+      const deviceId = typeof req.query.device_id === "string" ? req.query.device_id.trim() : "";
+      const scope = scopeOf(req.principal);
+      await assertCanPush(deps.pool, scope, deviceId);
+      const bytes = Buffer.isBuffer(req.body)
+        ? req.body
+        : Buffer.from(req.body == null ? [] : (req.body as ArrayBuffer));
+      if (sha256Hex(bytes) !== hash) {
+        throw new BadRequest(`blob ${hash} does not match its sha256`);
+      }
+      await deps.storage.put(hash, bytes);
+      return { ok: true, hash, bytes: bytes.length };
+    },
+  );
+
+  /** Raw ink blob download. Used when pull omits large Base64 blobs. */
+  app.get<{ Params: { hash: string } }>("/sync/blob/:hash", async (req, reply) => {
+    const hash = (req.params.hash || "").toLowerCase();
+    if (!SHA256_HEX.test(hash)) {
+      throw new BadRequest("hash must be a sha256 hex digest");
+    }
+    if (!(await deps.storage.has(hash))) {
+      throw new NotFound(`blob ${hash}`);
+    }
+    const bytes = await deps.storage.get(hash);
+    return reply
+      .header("Content-Type", "application/octet-stream")
+      .header("Content-Length", String(bytes.length))
+      .header("X-Zetteldraw-Ink-Hash", hash)
+      .send(bytes);
   });
 
   app.post("/sync/push", async (req) => {

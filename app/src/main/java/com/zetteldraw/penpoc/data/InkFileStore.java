@@ -4,6 +4,9 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
@@ -135,15 +138,52 @@ public class InkFileStore {
 
     public static String sha256(byte[] bytes) {
         try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
-            StringBuilder hex = new StringBuilder(digest.length * 2);
-            for (byte b : digest) {
-                hex.append(Character.forDigit((b >> 4) & 0xf, 16));
-                hex.append(Character.forDigit(b & 0xf, 16));
-            }
-            return hex.toString();
+            return toHex(MessageDigest.getInstance("SHA-256").digest(bytes));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException(e);
         }
+    }
+
+    /** Stream a file through SHA-256 without loading it into a byte[]. */
+    public static String sha256File(File file) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[64 * 1024];
+            try (InputStream in = new DigestInputStream(new FileInputStream(file), digest)) {
+                while (in.read(buf) >= 0) {
+                    // digest updated by DigestInputStream
+                }
+            }
+            return toHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Copy {@code file} to {@code out} while hashing; returns sha256 hex. */
+    public static String copyAndSha256(File file, OutputStream out) throws IOException {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] buf = new byte[64 * 1024];
+            try (InputStream in = new FileInputStream(file)) {
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    digest.update(buf, 0, n);
+                    out.write(buf, 0, n);
+                }
+            }
+            return toHex(digest.digest());
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static String toHex(byte[] digest) {
+        StringBuilder hex = new StringBuilder(digest.length * 2);
+        for (byte b : digest) {
+            hex.append(Character.forDigit((b >> 4) & 0xf, 16));
+            hex.append(Character.forDigit(b & 0xf, 16));
+        }
+        return hex.toString();
     }
 }

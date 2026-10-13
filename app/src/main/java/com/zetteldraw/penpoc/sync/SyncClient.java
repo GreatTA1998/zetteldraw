@@ -1,15 +1,19 @@
 package com.zetteldraw.penpoc.sync;
 
+import com.zetteldraw.penpoc.data.InkFileStore;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.net.URLEncoder;
 
 /** Plain HttpURLConnection transport with the device token as a bearer token. */
 public final class SyncClient {
@@ -60,6 +64,112 @@ public final class SyncClient {
 
     JSONObject push(JSONObject body) throws IOException {
         return request("POST", "/sync/push", body.toString().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Stream a large ink file as raw octets (no Base64). Server verifies sha256 == {@code hash}.
+     * Used so Prepare transfer can push a 14MB+ Scratchpad without a ~75MB heap spike.
+     */
+    void putBlob(String hash, File file, String deviceId) throws IOException {
+        if (file == null || !file.isFile()) {
+            throw new IOException("missing blob file for " + hash);
+        }
+        String q = deviceId == null || deviceId.isEmpty()
+                ? ""
+                : "?device_id=" + URLEncoder.encode(deviceId, StandardCharsets.UTF_8.name());
+        HttpURLConnection conn = (HttpURLConnection) new URL(
+                config.serverUrl + "/sync/blob/" + hash + q).openConnection();
+        try {
+            conn.setRequestMethod("PUT");
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(READ_TIMEOUT_MS);
+            conn.setDoOutput(true);
+            conn.setRequestProperty("Authorization", "Bearer " + config.bearerToken());
+            conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
+            conn.setRequestProperty("Content-Type", "application/octet-stream");
+            conn.setRequestProperty("Accept", "application/json");
+            long length = file.length();
+            if (length > Integer.MAX_VALUE) {
+                throw new IOException("blob too large: " + length);
+            }
+            conn.setFixedLengthStreamingMode((int) length);
+            try (OutputStream out = conn.getOutputStream()) {
+                String actual = InkFileStore.copyAndSha256(file, out);
+                if (!actual.equals(hash)) {
+                    throw new IOException("blob hash changed while uploading " + hash);
+                }
+            }
+            int code = conn.getResponseCode();
+            String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
+            if (code == 401 || code == 403) {
+                String err = "";
+                String message = "";
+                try {
+                    JSONObject errBody = new JSONObject(text);
+                    err = errBody.optString("error", "");
+                    message = errBody.optString("message", "");
+                } catch (JSONException ignored) {
+                }
+                if ("not_live_writer".equals(err)) {
+                    throw new NotLiveWriter(message);
+                }
+                throw new Unauthorized();
+            }
+            if (code == 409) {
+                int server = -1;
+                try {
+                    server = new JSONObject(text).optInt("server_schema", -1);
+                } catch (JSONException ignored) {
+                }
+                throw new SchemaMismatch(server);
+            }
+            if (code < 200 || code >= 300) {
+                throw new IOException("PUT /sync/blob/" + hash + " -> " + code + ": " + text);
+            }
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    /** Download a raw ink blob omitted from pull JSON (large notebook logs). */
+    byte[] getBlob(String hash) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(
+                config.serverUrl + "/sync/blob/" + hash).openConnection();
+        try {
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(READ_TIMEOUT_MS);
+            conn.setRequestProperty("Authorization", "Bearer " + config.bearerToken());
+            conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
+            conn.setRequestProperty("Accept", "application/octet-stream");
+            int code = conn.getResponseCode();
+            if (code == 401 || code == 403) {
+                throw new Unauthorized();
+            }
+            if (code == 409) {
+                throw new SchemaMismatch(-1);
+            }
+            if (code < 200 || code >= 300) {
+                String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
+                throw new IOException("GET /sync/blob/" + hash + " -> " + code + ": " + text);
+            }
+            try (InputStream in = conn.getInputStream()) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream();
+                byte[] buf = new byte[64 * 1024];
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    out.write(buf, 0, n);
+                }
+                byte[] bytes = out.toByteArray();
+                String actual = InkFileStore.sha256(bytes);
+                if (!actual.equals(hash)) {
+                    throw new IOException("downloaded blob hash mismatch for " + hash);
+                }
+                return bytes;
+            }
+        } finally {
+            conn.disconnect();
+        }
     }
 
     /** Claim (or refresh) live-writer status before pushing. */

@@ -48,6 +48,16 @@ public class SyncProtocolTest {
     }
 
     @Test
+    public void pushBodyOmitsEmptyBlobMapEntriesFromFilesOnlyPath() throws Exception {
+        // Large blobs live in blobFiles and are uploaded via PUT /sync/blob before push JSON.
+        SyncStore.PushBatch batch = new SyncStore.PushBatch();
+        JSONObject body = SyncProtocol.pushBody(batch, 4, "device-a");
+        assertEquals(0, body.getJSONObject("blobs").length());
+        assertEquals(SyncStore.INLINE_BLOB_MAX_BYTES, SyncProtocol.INLINE_BLOB_MAX_BYTES);
+        assertEquals(256 * 1024, SyncStore.INLINE_BLOB_MAX_BYTES);
+    }
+
+    @Test
     public void pageLinkRoundTrips() throws Exception {
         PageLinkEntity link = new PageLinkEntity();
         link.id = "cccccccc-3333-4333-8333-333333333333";

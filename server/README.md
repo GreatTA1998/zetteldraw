@@ -50,6 +50,10 @@ Every `/sync/*` call sends `Authorization: Bearer <device token>` and `X-Zetteld
 
 `links` connects two pages by id and copies no ink. Last-write-wins, with no conflict copy. A delete of either page is a tombstone on the link. Omit `links` and it is treated as empty.
 
+### `PUT /sync/blob/:hash` / `GET /sync/blob/:hash`
+
+Raw ink octets (`Content-Type: application/octet-stream`). Prefer this for notebook logs larger than **256 KiB** so Boox Prepare transfer never Base64-encodes a multi‑MB Scratchpad into JSON (that path allocated ~75 MB and OOM'd on a 256 MB heap). `PUT` requires `?device_id=` (live-writer gate). `GET` is used when pull omits large Base64 blobs. Hash must match sha256 of the body.
+
 ### `POST /sync/push`
 
 ```json
@@ -65,6 +69,8 @@ Every `/sync/*` call sends `Authorization: Bearer <device token>` and `X-Zetteld
   "blobs": { "<sha256 hex>": "<base64 ink file>" }
 }
 ```
+
+Small blobs may still ride in `blobs` as Base64. Large ones should already be in object storage via `PUT /sync/blob/:hash` (push then omits them from JSON).
 
 The response has one result per row: `{"entity":"board","id":"…","status":"…","rev":n}`.
 

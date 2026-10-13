@@ -3,11 +3,15 @@ package com.zetteldraw.penpoc.sync;
 import android.os.Build;
 
 import com.zetteldraw.penpoc.data.SyncStore;
+import com.zetteldraw.penpoc.data.db.BoardEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 
 import org.json.JSONException;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
 
@@ -145,15 +149,29 @@ public final class SyncEngine {
             if (batch.isEmpty()) {
                 return;
             }
+            // Large files: raw PUT first so push JSON never Base64-encodes them.
+            try {
+                for (Map.Entry<String, File> e : batch.blobFiles.entrySet()) {
+                    client.putBlob(e.getKey(), e.getValue(), config.deviceId);
+                }
+            } catch (SyncClient.NotLiveWriter e) {
+                result.blockedAsNonWriter = true;
+                result.writerBlockMessage = e.serverMessage;
+                return;
+            }
             List<SyncStore.PushResult> results;
             try {
                 results = SyncProtocol.pushResults(
                         client.push(SyncProtocol.pushBody(batch, schemaVersion, config.deviceId)));
             } catch (JSONException e) {
                 throw new IOException("bad push response", e);
+            } catch (SyncClient.NotLiveWriter e) {
+                result.blockedAsNonWriter = true;
+                result.writerBlockMessage = e.serverMessage;
+                return;
             }
             store.applyPushResults(batch, results);
-            result.pushed += batch.notebooks.size() + batch.boards.size();
+            result.pushed += batch.notebooks.size() + batch.boards.size() + batch.logs.size();
             if (store.outboxSize() >= before) {
                 // Nothing drained (e.g. missing blobs or rows edited mid-flight); try next pass.
                 return;
@@ -169,11 +187,32 @@ public final class SyncEngine {
             } catch (JSONException e) {
                 throw new IOException("bad pull response", e);
             }
+            fetchMissingBlobs(page);
             store.applyPull(page);
             result.pulledBoards += page.boards.size();
             result.pulledNotebooks += page.notebooks.size();
             if (!page.hasMore) {
                 return;
+            }
+        }
+    }
+
+    /** Pull JSON omits large Base64 blobs; fetch them raw before applyPull. */
+    private void fetchMissingBlobs(SyncStore.PullPage page) throws IOException {
+        for (NotebookLogEntity log : page.logs) {
+            if (log.inkHash == null || log.deletedAt != null) {
+                continue;
+            }
+            if (!page.blobs.containsKey(log.inkHash)) {
+                page.blobs.put(log.inkHash, client.getBlob(log.inkHash));
+            }
+        }
+        for (BoardEntity board : page.boards) {
+            if (board.inkHash == null || board.deletedAt != null) {
+                continue;
+            }
+            if (!page.blobs.containsKey(board.inkHash)) {
+                page.blobs.put(board.inkHash, client.getBlob(board.inkHash));
             }
         }
     }
