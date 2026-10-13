@@ -80,6 +80,23 @@ public final class SyncEngine {
         return result;
     }
 
+    /**
+     * Drain outbox (sync), then tell the server this live Boox prepared transfer.
+     * Web Hand off stays locked until this succeeds (or lost-device path on web).
+     */
+    public Result prepareTransfer() throws IOException {
+        Result result = run();
+        if (result.blockedAsNonWriter) {
+            return result;
+        }
+        if (store.outboxSize() != 0) {
+            throw new IOException("Sync still has " + store.outboxSize()
+                    + " change(s) waiting. Wait until caught up, then Prepare transfer again.");
+        }
+        client.prepareTransfer(config.deviceId, deviceLabel());
+        return result;
+    }
+
     /** Google accounts must hold the live-writer lease before any push. */
     private boolean claimLiveWriter(Result result) throws IOException {
         if (config.accessToken == null || config.accessToken.isEmpty()) {
@@ -96,7 +113,7 @@ public final class SyncEngine {
         }
     }
 
-    private static String deviceLabel() {
+    static String deviceLabel() {
         String model = Build.MODEL;
         return model == null || model.isEmpty() ? "Boox" : model;
     }

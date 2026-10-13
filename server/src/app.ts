@@ -13,7 +13,8 @@ import { pull, push, type SyncScope } from "./sync.js";
 import type { Thumbnailer } from "./thumbs.js";
 import { BadRequest, parsePushBody } from "./validate.js";
 import { Forbidden, NotFound, registerWebRoutes } from "./web.js";
-import { assertCanPush, claimWriter, NotLiveWriter } from "./writer.js";
+import { backupStatus } from "./web.js";
+import { assertCanPush, claimWriter, NotLiveWriter, prepareTransfer } from "./writer.js";
 
 export const SCHEMA_HEADER = "x-zetteldraw-schema";
 
@@ -148,6 +149,35 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     }
     const result = await claimWriter(deps.pool, req.principal.user.id, deviceId, deviceLabel);
     return { ok: true, ...result };
+  });
+
+  /** Live Boox: drain outbox on device, then call this to unlock web Hand off. */
+  app.post<{ Body: { device_id?: unknown; device_label?: unknown } }>("/sync/prepare-transfer", async (req) => {
+    if (req.principal?.kind !== "google") {
+      throw new Forbidden("Google sign-in required to Prepare transfer");
+    }
+    const deviceId = typeof req.body?.device_id === "string" ? req.body.device_id.trim() : "";
+    const deviceLabel = typeof req.body?.device_label === "string" ? req.body.device_label.trim() : "";
+    if (!deviceId) {
+      throw new BadRequest("device_id is required");
+    }
+    const scope = scopeOf(req.principal);
+    const backup = await backupStatus(deps.pool, deps.storage, scope);
+    try {
+      const status = await prepareTransfer(
+        deps.pool,
+        req.principal.user.id,
+        deviceId,
+        deviceLabel,
+        backup.ready_for_device_restore,
+      );
+      return { ok: true, ...status };
+    } catch (err) {
+      if (err instanceof NotLiveWriter) {
+        throw err;
+      }
+      throw new BadRequest(err instanceof Error ? err.message : "Prepare transfer failed");
+    }
   });
 
   app.post("/sync/push", async (req) => {

@@ -2,11 +2,11 @@ import type { NextRequest } from "next/server";
 import { accessToken, serverUrl } from "@/lib/server-config";
 
 /**
- * Forwards Hand off / cancel to the sync server. This is the only intentional
- * write path from the web companion — it moves the live-writer lease, never ink.
+ * Forwards Hand off / lost-device / cancel to the sync server. This is the only
+ * intentional write path from the web companion — it moves the live-writer lease, never ink.
  */
 
-const ACTIONS = new Set(["hand-off", "cancel"]);
+const ACTIONS = new Set(["hand-off", "cancel", "lost-device"]);
 
 type Ctx = { params: Promise<{ action: string }> };
 

@@ -27,8 +27,8 @@ UI bugs are recoverable. These three are not — they permanently lose or corrup
 
 **Google account + sync (v64):**
 
-- **One live writer** per account. Second Boox gets `403 not_live_writer` on push until web **Hand off** + claim.
-- Hand off refused until `/web/backup-status` ready (every board + `notebook_log` ink in S3).
+- **One live writer** per account. Second Boox gets `403 not_live_writer` on push until **Prepare transfer** (live Boox) → web **Hand off** + claim.
+- Hand off refused until `/web/backup-status` ready **and** Prepare transfer (or lost-device confirm).
 - Never-synced device: **pull before push**; untouched seeds (`updated_at === 0`) are not queued first and cannot clobber server notebooks.
 - `markSynced` only when outbox is empty. Missing S3 ink fails the pull clearly (cursor does not skip past it).
 
@@ -118,7 +118,7 @@ Tested target: Boox Go 7 Color II (Android 13, Kaleido 3, optional InkSense styl
 
 ## Web overview (`web/`)
 
-A read-only companion for a big monitor: notebooks sidebar, dense thumbnail grid (column slider / `−` / `=`), full-size viewer (click a page; arrows flip, Esc closes). **No drawing and no library edits from the browser** — rename/move/reorder are refused. The one intentional web write is the lease ceremony: Settings → **Move to a new device** → **Hand off** / Cancel (blocked until backup-status is ready). Notebook titles and thumbs are not a hydrate proof; use the backup banner before Play cutover.
+A read-only companion for a big monitor: notebooks sidebar, dense thumbnail grid (column slider / `−` / `=`), full-size viewer (click a page; arrows flip, Esc closes). **No drawing and no library edits from the browser** — rename/move/reorder are refused. The intentional web writes are the lease ceremony: Settings → **Move to a new device** → **Hand off** / Cancel / lost-device confirm (Hand off blocked until the live Boox **Prepare transfer** or lost-device ack, and backup-status is ready). Notebook titles and thumbs are not a hydrate proof; use the backup banner before Play cutover.
 
 Next.js 16 + TypeScript + Tailwind + shadcn/ui. Sign in with Google (or a local device token for demos). The token is kept in an httpOnly cookie, and the Next server proxies `/api/zd/*` to the sync server's `/web/*`, so the browser never talks to the sync server directly.
 
@@ -155,7 +155,8 @@ Web endpoints (bearer device token, no schema header):
 | `GET /web/notebooks/:id/pages` | Live pages in `position` order with `thumb_url` / `render_url` (null for blank pages) |
 | `GET /web/thumbs/<ink_hash>.png`, `GET /web/renders/<ink_hash>.png` | PNGs, immutable cache headers |
 | `GET /web/backup-status` | Ready only when every owned board + `notebook_log` ink blob exists in S3 |
-| `GET /web/writer`, `POST /web/writer/hand-off`, `POST /web/writer/cancel` | Live-writer status and Hand off ceremony (Hand off requires backup ready) |
+| `GET /web/writer`, `POST /web/writer/hand-off`, `POST /web/writer/lost-device`, `POST /web/writer/cancel` | Live-writer status and Hand off ceremony (Hand off requires Prepare transfer or lost-device ack + backup ready) |
+| `POST /sync/prepare-transfer` | Live Boox final-sync ack; unlocks web Hand off |
 
 ## Build
 

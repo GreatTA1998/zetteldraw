@@ -44,14 +44,15 @@ public final class SyncClient {
 
     /**
      * This Google account already has a live Boox writer (or Hand off is open for a
-     * different device). Pull may still work; push is blocked until Hand off + claim.
+     * different device). Pull may still work; push is blocked until Prepare transfer
+     * + web Hand off + claim.
      */
     public static final class NotLiveWriter extends IOException {
         public final String serverMessage;
 
         NotLiveWriter(String serverMessage) {
             super(serverMessage == null || serverMessage.isEmpty()
-                    ? "not the live writer — Hand off on the web companion first"
+                    ? "not the live writer — Prepare transfer on the old Boox, then Hand off on the web"
                     : serverMessage);
             this.serverMessage = getMessage();
         }
@@ -70,6 +71,21 @@ public final class SyncClient {
             return request("POST", "/sync/claim-writer", body.toString().getBytes(StandardCharsets.UTF_8));
         } catch (JSONException e) {
             throw new IOException("claim-writer body", e);
+        }
+    }
+
+    /**
+     * Live Boox: after outbox is empty, mark transfer prepared so web Hand off unlocks.
+     * Server also requires cloud backup-status ready.
+     */
+    JSONObject prepareTransfer(String deviceId, String deviceLabel) throws IOException {
+        try {
+            JSONObject body = new JSONObject()
+                    .put("device_id", deviceId)
+                    .put("device_label", deviceLabel == null ? "" : deviceLabel);
+            return request("POST", "/sync/prepare-transfer", body.toString().getBytes(StandardCharsets.UTF_8));
+        } catch (JSONException e) {
+            throw new IOException("prepare-transfer body", e);
         }
     }
 
@@ -124,6 +140,14 @@ public final class SyncClient {
                 throw new SchemaMismatch(server);
             }
             if (code < 200 || code >= 300) {
+                String message = "";
+                try {
+                    message = new JSONObject(text).optString("message", "");
+                } catch (JSONException ignored) {
+                }
+                if (!message.isEmpty()) {
+                    throw new IOException(message);
+                }
                 throw new IOException(method + " " + path + " -> " + code + ": " + text);
             }
             try {

@@ -1,6 +1,6 @@
 # Correctness: the three irreversible bugs
 
-UI glitches, wrong underlines, and awkward snackbars are recoverable. These three are not. This document states what the code **actually enforces**, which tests lock those claims, and what remains **unguaranteed**. Tip app versions referenced: **v63** (Move dest), **v64** (Hand off / live writer).
+UI glitches, wrong underlines, and awkward snackbars are recoverable. These three are not. This document states what the code **actually enforces**, which tests lock those claims, and what remains **unguaranteed**. Tip app versions referenced: **v63** (Move dest), **v64** (Hand off / live writer), **v66** (Prepare transfer gate).
 
 For the short version, see the [README](../README.md#the-only-three-irreversible-bugs).
 
@@ -37,6 +37,7 @@ Proven impossible (single device, under the locks and fences below):
 - A second Google-signed Boox successfully `POST /sync/push` while another device holds the live-writer lease (server `403 not_live_writer`).
 - Untouched seed notebooks (`updated_at === 0`) clobbering an existing server notebook row.
 - Hand off opening while `/web/backup-status` is not ready.
+- Hand off opening without live-Boox **Prepare transfer** (or web lost-device confirm).
 
 Not in that list → not claimed. See [Non-guarantees](#non-guarantees).
 
@@ -119,14 +120,14 @@ WorkManager → push (disk), then pull (skips `holdFlush` sheets).
 | Mechanism | What it prevents |
 | --- | --- |
 | Live-writer lease + `POST /sync/claim-writer` | Two Google devices both pushing |
-| Web **Hand off** (48h window) | Old device keeps writing after cutover starts |
-| Hand off refused until `backup-status` ready | Cutover without every board + `notebook_log` ink in S3 |
+| Boox **Prepare transfer** then web **Hand off** (48h window) | Old device keeps writing after cutover starts; web Hand off without device prepare |
+| Hand off refused until prepare/lost-device + `backup-status` ready | Cutover without every board + `notebook_log` ink in S3 |
 | First sync **pull before push** | Empty Room + seed notebooks uploading first |
 | Seeds not queued until after restore pull; server rejects `updated_at === 0` clobber | Seed ids wiping a real cloud notebook |
 | `markSynced` only when outbox empty | “Caught up” lie while uploads pending |
 | Pull errors on missing S3 ink (cursor does not advance past it) | Silent hydrate with holes |
 
-Safe Play cutover requires **all of**: Boox sync caught up under Google G, web banner **backup ready**, web **Hand off**, Play build same `SYNC_URL`, sign-in as G, then open ink on the new device before discarding Documents.
+Safe Play cutover requires **all of**: Boox **Prepare transfer** under Google G, web banner **backup ready**, web **Hand off**, Play build same `SYNC_URL`, sign-in as G, then open ink on the new device before discarding Documents.
 
 **Web list/thumbs alone are not a hydrate proof** — they can reflect Postgres metadata and cached PNGs while a `notebook_log` blob is missing.
 
@@ -134,8 +135,10 @@ Safe Play cutover requires **all of**: Boox sync caught up under Google G, web b
 
 | Test | Claim |
 | --- | --- |
-| `server/test/unit/writer.test.ts` — `blocks Hand off until backup is ready` | Backup gate |
-| `server/test/unit/writer.test.ts` — `opens Hand off and lets a new device claim` | Ceremony |
+| `server/test/unit/writer.test.ts` — `blocks Hand off until Prepare transfer` | Device prepare gate |
+| `server/test/unit/writer.test.ts` — `blocks Hand off until backup is ready even after Prepare transfer` | Backup gate |
+| `server/test/unit/writer.test.ts` — `Prepare transfer unlocks Hand off; new device can claim` | Ceremony |
+| `server/test/unit/writer.test.ts` — `lost-device ack unlocks Hand off without Prepare transfer` | Secondary path |
 | `server/test/unit/writer.test.ts` — `assertCanPush rejects a second device while live` | Single writer |
 | `server/test/unit/backup-status.test.ts` — `fails when a notebook_log blob is missing even if boards look fine` | Logs in S3 |
 | `server/test/unit/lww.test.ts` — `rejects untouched seed placeholders that would clobber a server notebook` | No seed clobber |

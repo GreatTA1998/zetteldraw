@@ -45,8 +45,11 @@ import android.widget.TextView;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.ZettelData;
+import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 import com.zetteldraw.penpoc.sync.GoogleAuth;
+import com.zetteldraw.penpoc.sync.SyncClient;
 import com.zetteldraw.penpoc.sync.SyncConfig;
+import com.zetteldraw.penpoc.sync.SyncEngine;
 import com.zetteldraw.penpoc.sync.SyncScheduler;
 
 import java.text.DateFormat;
@@ -2344,6 +2347,18 @@ public final class CanvasActivity extends Activity {
                 });
                 box.addView(syncNow, new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                // Primary cutover path: final sync + unlock web Hand off (iPhone-upgrade style).
+                if (writerBlock.isEmpty()) {
+                    Button prepare = tinyButton(getString(R.string.settings_prepare_transfer), 15);
+                    styleButton(prepare, true);
+                    onTap(prepare, v -> startPrepareTransfer(prepare, statusLine));
+                    LinearLayout.LayoutParams prepareLp = new LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                    prepareLp.topMargin = dp(4);
+                    box.addView(prepare, prepareLp);
+                    box.addView(panelText(getString(R.string.settings_prepare_transfer_hint), 11));
+                }
             }
 
             Button signOut = tinyButton(getString(R.string.settings_sign_out), 15);
@@ -2384,6 +2399,53 @@ public final class CanvasActivity extends Activity {
         box.addView(actions, actionsLp);
 
         showOverlay(box, anchoredLp(settingsButton, box), root);
+    }
+
+    /**
+     * Settings → Prepare transfer: force sync until outbox empty, then ack the
+     * server so web Hand off unlocks. Runs off the UI thread.
+     */
+    private void startPrepareTransfer(Button prepare, TextView statusLine) {
+        prepare.setEnabled(false);
+        statusLine.setVisibility(View.VISIBLE);
+        statusLine.setText(R.string.settings_prepare_transfer_working);
+        UiExecutors.loader.execute(() -> {
+            String err = null;
+            boolean blocked = false;
+            try {
+                SyncConfig cfg = SyncConfig.load(CanvasActivity.this);
+                com.zetteldraw.penpoc.data.SyncStore store = ZettelData.repository(CanvasActivity.this);
+                store.ensureUnsyncedQueued();
+                SyncClient client = new SyncClient(cfg, ZettelDatabase.SCHEMA_VERSION);
+                SyncEngine engine = new SyncEngine(
+                        store, client, cfg, ZettelDatabase.SCHEMA_VERSION, System::currentTimeMillis);
+                SyncEngine.Result r = engine.prepareTransfer();
+                if (r.blockedAsNonWriter) {
+                    blocked = true;
+                    SyncConfig.setWriterBlockMessage(CanvasActivity.this, r.writerBlockMessage);
+                    err = getString(R.string.settings_not_live_writer);
+                }
+            } catch (Exception e) {
+                err = e.getMessage() == null || e.getMessage().isEmpty()
+                        ? getString(R.string.settings_prepare_transfer_failed)
+                        : e.getMessage();
+            }
+            String message = err;
+            boolean wasBlocked = blocked;
+            runOnUiThread(() -> {
+                if (message == null) {
+                    dismissOverlay();
+                    showHint(getString(R.string.settings_prepare_transfer_done), true);
+                } else {
+                    statusLine.setText(message);
+                    prepare.setEnabled(!wasBlocked);
+                    if (wasBlocked) {
+                        dismissOverlay();
+                        showSettings();
+                    }
+                }
+            });
+        });
     }
 
     private static String formatSyncTime(long epochMillis) {

@@ -105,6 +105,7 @@ export const api = {
   writerKey: "/api/zd/writer",
   handOffWriter: () => request<WriterStatus>("/api/writer/hand-off", { method: "POST", body: "{}" }),
   cancelHandOff: () => request<WriterStatus>("/api/writer/cancel", { method: "POST", body: "{}" }),
+  ackLostDevice: () => request<WriterStatus>("/api/writer/lost-device", { method: "POST", body: "{}" }),
 };
 
 export interface BackupStatus {
@@ -126,6 +127,10 @@ export interface WriterStatus {
   last_seen_at: number | null;
   handoff_until: number | null;
   handoff_open: boolean;
+  transfer_prepared: boolean;
+  transfer_prepared_at: number | null;
+  lost_device_ack: boolean;
+  lost_device_ack_at: number | null;
   can_hand_off: boolean;
   backup_ready: boolean;
   note: string;

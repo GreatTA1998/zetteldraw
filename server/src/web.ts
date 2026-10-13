@@ -7,11 +7,11 @@ import type { SyncScope } from "./sync.js";
 import type { InkStorage } from "./storage.js";
 import type { ImageKind, Thumbnailer } from "./thumbs.js";
 import { BadRequest } from "./validate.js";
-import { cancelHandOff, getWriterStatus, handOff } from "./writer.js";
+import { ackLostDevice, cancelHandOff, getWriterStatus, handOff } from "./writer.js";
 /**
  * Read endpoints for the web overview. Notebook/page mutations are refused —
  * the companion is strictly read-only for ink. The only write it offers is
- * Hand off (live-writer lease), which does not touch notebook data.
+ * Hand off / lost-device ack (live-writer lease), which does not touch notebook data.
  */
 
 export const SCRATCHPAD = "scratchpad";
@@ -516,6 +516,19 @@ export function registerWebRoutes(
         return await handOff(pool, scope.userId, backup.ready_for_device_restore);
       } catch (err) {
         throw new BadRequest(err instanceof Error ? err.message : "Hand off failed");
+      }
+    });
+
+    app.post("/web/writer/lost-device", async (req) => {
+      const scope = scopeOf(req);
+      if (scope.kind !== "user") {
+        throw new Forbidden("Google sign-in required");
+      }
+      const backup = await backupStatus(pool, storage, scope);
+      try {
+        return await ackLostDevice(pool, scope.userId, backup.ready_for_device_restore);
+      } catch (err) {
+        throw new BadRequest(err instanceof Error ? err.message : "Lost-device confirm failed");
       }
     });
 
