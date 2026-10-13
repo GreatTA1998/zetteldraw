@@ -155,7 +155,7 @@ The sections above argue **logical** safety under concurrency. They do **not** c
 
 **Incident → fix:** Scratchpad `notebook_logs` ~**14.3 MB** in cloud (2026-10-12). On tip **≤ v68**, Prepare/sync Base64’d the whole `.zdl` into push JSON and peaked around a **~75 MB** alloc → OOM. **v69** uploads blobs **> 256 KiB** with `PUT /sync/blob/:hash` (raw octets, streamed from disk; hash via `sha256File` / `copyAndSha256`). Push JSON keeps only metadata; pull omits large Base64 and the client `GET`s raw. That removes the Prepare Base64 spike. It does **not** remove in-memory open/replay of the whole log, or pull assembling a full `byte[]` before `applyPull`.
 
-Server JSON `bodyLimit` stays **64 MB**; large ink is meant to bypass that via `/sync/blob` (octet body limit is higher). Small blobs (≤ 256 KiB) still ride Base64 in JSON.
+Server `bodyLimit` is **256 MB** (v69; was 64 MB) for both JSON and octet `/sync/blob` bodies. Large ink still prefers `/sync/blob` so push JSON stays small. Small blobs (≤ 256 KiB) still ride Base64 in JSON.
 
 ### What is O(n) today (tip `main` / v69)
 
