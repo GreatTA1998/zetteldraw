@@ -10,7 +10,7 @@ export interface Config {
   deviceTokens: string[];
   /**
    * Comma-separated Google OAuth client IDs accepted as ID token audiences.
-   * The Android client is bound to package com.zetteldraw.android in Google Cloud;
+   * The Android client is bound to package com.zetteldraw.penpoc in Google Cloud;
    * Credential Manager tokens use the web client id as aud.
    */
   googleClientIds: string[];

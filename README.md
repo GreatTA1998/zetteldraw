@@ -195,7 +195,7 @@ APK:
 
 `app/build/outputs/apk/debug/app-debug.apk`
 
-`applicationId` is `com.zetteldraw.android`. Java sources stay in `com.zetteldraw.penpoc`. A Play or sideload build with the new id does not replace an install of `com.zetteldraw.penpoc`; sync or the Documents mirror is the way notes move across.
+`applicationId` is `com.zetteldraw.penpoc`, the same id as existing sideloads. A Play build is signed with the upload key, then by Play App Signing, not with `app/debug.keystore`, so it will not install over a debug-signed sideload until that install is removed.
 
 Debug builds are signed with the committed `app/debug.keystore` (standard `android` / `androiddebugkey` debug credentials), so a build from any machine installs over any other without uninstalling.
 

@@ -37,14 +37,11 @@ if (uploadSigningValues.count { it != null } in 1..3) {
 }
 
 android {
-    // Play identity is applicationId. The Java namespace stays com.zetteldraw.penpoc so R,
-    // BuildConfig, Room schemas, and the source tree do not move. Manifest class names
-    // (.PenApp, .CanvasActivity) resolve against this namespace.
     namespace = "com.zetteldraw.penpoc"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.zetteldraw.android"
+        applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 35
         versionCode = 71
@@ -59,9 +56,9 @@ android {
         // The release build type overrides SYNC_TOKEN to empty even if -Pzetteldraw.syncToken is set.
         buildConfigField("String", "SYNC_URL", "\"${project.findProperty("zetteldraw.syncUrl") ?: ""}\"")
         buildConfigField("String", "SYNC_TOKEN", "\"${project.findProperty("zetteldraw.syncToken") ?: ""}\"")
-        // Web OAuth client ID (serverClientId) for Google ID tokens. The Android OAuth client
-        // is registered in Google Cloud for applicationId com.zetteldraw.android plus the
-        // upload and Play App Signing SHA-1s. The ID token audience is this web client.
+        // Web OAuth client ID (serverClientId) for Google ID tokens. The existing Android
+        // OAuth client for com.zetteldraw.penpoc needs the upload-key SHA-1 and the Play
+        // App Signing SHA-1. The ID token audience is this web client.
         buildConfigField(
             "String",
             "GOOGLE_WEB_CLIENT_ID",

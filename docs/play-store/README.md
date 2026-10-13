@@ -1,10 +1,10 @@
 # Play Store listing — Zetteldraw
 
-First Google Play release of the Android app. The store identity is `com.zetteldraw.android` (versionCode 67, versionName 3.46). The app only works as a pen notebook on **Boox/Onyx e-ink devices, arm64**. Play will still offer the AAB to other arm64 phones unless you exclude them in the device catalog. Say so in the listing.
+First Google Play release of the Android app. The store identity stays `com.zetteldraw.penpoc` (versionCode 67, versionName 3.46), the same application id as existing sideloads. The app only works as a pen notebook on **Boox/Onyx e-ink devices, arm64**. Play will still offer the AAB to other arm64 phones unless you exclude them in the device catalog. Say so in the listing.
 
-Java sources stay in `com.zetteldraw.penpoc`. That namespace is what `R`, `BuildConfig`, Room schemas, and the manifest class names use. Play does not see it. There is no FileProvider, custom permission authority, or deep link whose host would have to change with the id. `https://zetteldraw.com/apk` proxies the latest GitHub release APK and does not embed an application id, so that page keeps working.
+There is no FileProvider, custom permission authority, or deep link tied to a different package. `https://zetteldraw.com/apk` proxies the latest GitHub release APK and does not embed an application id.
 
-A Play install does **not** upgrade a sideload of `com.zetteldraw.penpoc`. They are different apps. Move notes by syncing the old install, **Prepare transfer**, web **Hand off**, then signing in on the new install. `Documents/zetteldraw` survives uninstall and is not auto-imported.
+Play App Signing uses a different certificate from `app/debug.keystore`. Android will not install the Play build over a debug-signed sideload until that install is removed. Uninstall drops the app sandbox. Sync (Prepare transfer, then web Hand off) or `Documents/zetteldraw` is how notes survive that. The Documents mirror is not auto-imported.
 
 ## Build the release AAB
 
@@ -46,14 +46,12 @@ Do not pass `-Pzetteldraw.emulator`. That flag builds x86_64 and drops the arm64
 
 ## Google Cloud OAuth (manual)
 
-Create an **Android** OAuth client in the same Google Cloud project as the existing web client:
+Do not create a new Android OAuth client. On the existing Android client for package `com.zetteldraw.penpoc`, add:
 
-| Field | Value |
-| --- | --- |
-| Package name | `com.zetteldraw.android` |
-| SHA-1 | Upload keystore SHA-1 **and**, after Play App Signing is enrolled, the **App signing key** SHA-1 from Play Console |
+- the upload keystore SHA-1 (`keytool -list` above)
+- after Play App Signing is enrolled, the **App signing key** SHA-1 from Play Console
 
-The app sends the **web** client id as `serverClientId`. ID tokens use that web client as `aud`. `GOOGLE_CLIENT_IDS` on the sync server must include that web client id. It is not a package-name allowlist. Add the new Android client id there only if you also accept tokens whose audience is the Android client. An Android client registered for `com.zetteldraw.penpoc` does not authorize this package.
+The app sends the **web** client id as `serverClientId`. ID tokens use that web client as `aud`. `GOOGLE_CLIENT_IDS` on the sync server must include that web client id. It is not a package-name allowlist. Add an Android client id there only if you also accept tokens whose audience is the Android client.
 
 If the OAuth consent screen is in Testing, Play reviewers cannot sign in unless their Google accounts are test users. Publish the consent screen, or add the review accounts, before review.
 
@@ -78,9 +76,7 @@ Scratchpad plus nested notebooks. Hold a notebook tab to rename it, place it und
 
 Notes stay on the device first. A copy is also written under Documents/zetteldraw, which survives uninstall. That folder is not imported automatically after a reinstall.
 
-Sync is optional. Sign in with Google from Settings to back the library up to your account. The web companion at https://zetteldraw.com is read-only: browse notebooks and pages, and Hand off when you move to another Boox. One device is the live writer. Before a new device or this Play install, on the current Boox use Settings, Prepare transfer, then on the web use Hand off, then sign in here.
-
-This listing is application id com.zetteldraw.android. It does not upgrade an older sideload installed as com.zetteldraw.penpoc. Sync that install first.
+Sync is optional. Sign in with Google from Settings to back the library up to your account. The web companion at https://zetteldraw.com is read-only: browse notebooks and pages, and Hand off when you move to another Boox. One device is the live writer. Before a new device, on the current Boox use Settings, Prepare transfer, then on the web use Hand off, then sign in on the new device.
 
 Notes are not sold and are not used for advertising. Privacy policy: https://zetteldraw.com/privacy.
 ```
@@ -147,7 +143,7 @@ In Play Console, choose "some functionality is restricted" and give reviewers th
 
 ```
 No demo password is built into the app. Any Google account works when:
-- the Android OAuth client for com.zetteldraw.android lists the Play App Signing SHA-1, and
+- the existing Android OAuth client for com.zetteldraw.penpoc includes the Play App Signing SHA-1, and
 - the OAuth consent screen is in production (or the reviewer's Google account is a test user).
 
 1. Open Zetteldraw. The scratchpad and notebooks are usable without an account.
