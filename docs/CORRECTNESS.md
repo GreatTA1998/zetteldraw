@@ -1,6 +1,6 @@
 # Correctness: the three irreversible bugs
 
-UI glitches, wrong underlines, and awkward snackbars are recoverable. These three are not. This document states what the code **actually enforces**, which tests lock those claims, and what remains **unguaranteed**. Tip app versions referenced: **v63** (Move dest), **v64** (Hand off / live writer), **v66** (Prepare transfer gate), **v67** (Sign-In error/Prepare reasons), **v68** (Prepare transfer on-device only; crash-on-retry + blank `/` redirect fixed). **Scale** below is honesty about heap and payload size — not a race proof. Tip `main` after v68 still materializes whole notebook logs for push/Prepare; streaming large logs is a known gap (in flight separately).
+UI glitches, wrong underlines, and awkward snackbars are recoverable. These three are not. This document states what the code **actually enforces**, which tests lock those claims, and what remains **unguaranteed**. Tip app versions referenced: **v63** (Move dest), **v64** (Hand off / live writer), **v66** (Prepare transfer gate), **v67** (Sign-In error/Prepare reasons), **v68** (Prepare transfer on-device only; crash-on-retry + blank `/` redirect fixed), **v69** (stream large ink via `PUT/GET /sync/blob` — Prepare/push no longer Base64’s multi‑MB logs into JSON). **Scale** below is honesty about heap and payload size — not a race proof.
 
 For the short version, see the [README](../README.md#the-only-three-irreversible-bugs).
 
@@ -151,13 +151,13 @@ Safe Play cutover requires **all of**: Boox **Prepare transfer** under Google G,
 
 ## Scale (pages / strokes / heap) — not a race proof
 
-The sections above argue **logical** safety under concurrency. They do **not** claim the Boox can hold an unbounded library. Go 7 Color II–class devices have on the order of **~256 MB Java heap**. Correctness under races can still fail as **OOM** (process death mid-sync / mid-Prepare) when a single notebook log is large. That is a hard limit today, not a soft “gets slower.”
+The sections above argue **logical** safety under concurrency. They do **not** claim the Boox can hold an unbounded library. Go 7 Color II–class devices have on the order of **~256 MB Java heap**. Race proofs assume the process stays alive; scale failures are usually **OOM** or multi-minute drains, not silent LWW bugs.
 
-**Known incident (tip ≤ v68):** Scratchpad `notebook_logs` in cloud ~**14.3 MB** (2026-10-12). Prepare / sync later hit a ~**75 MB** allocation and OOM’d. That matches tip push math: load whole `.zdl` → Base64 into JSON → `JSONObject.toString()` → `getBytes` → HTTP body, with other copies (open `NotebookPaper.log`, `bytes()`, flush re-read for SHA-256) still live. Streaming large logs is **not** on tip `main` yet (parallel fix in flight after v68); until it lands, treat large-log sync/Prepare as **can fail by OOM**.
+**Incident → fix:** Scratchpad `notebook_logs` ~**14.3 MB** in cloud (2026-10-12). On tip **≤ v68**, Prepare/sync Base64’d the whole `.zdl` into push JSON and peaked around a **~75 MB** alloc → OOM. **v69** uploads blobs **> 256 KiB** with `PUT /sync/blob/:hash` (raw octets, streamed from disk; hash via `sha256File` / `copyAndSha256`). Push JSON keeps only metadata; pull omits large Base64 and the client `GET`s raw. That removes the Prepare Base64 spike. It does **not** remove in-memory open/replay of the whole log, or pull assembling a full `byte[]` before `applyPull`.
 
-Server `bodyLimit` is **64 MB** for `POST /sync/push`. A Base64’d blob is ~4/3 of raw size, so a single log much above ~**40 MB** raw can be refused even if the device survives the alloc.
+Server JSON `bodyLimit` stays **64 MB**; large ink is meant to bypass that via `/sync/blob` (octet body limit is higher). Small blobs (≤ 256 KiB) still ride Base64 in JSON.
 
-### What is O(n) today (tip `main`)
+### What is O(n) today (tip `main` / v69)
 
 | Path | Cost in n | Notes |
 | --- | --- | --- |
@@ -165,22 +165,22 @@ Server `bodyLimit` is **64 MB** for `POST /sync/push`. A Base64’d blob is ~4
 | Pen-up / erase / lasso translate append | O(log bytes) | `append` does `Arrays.copyOf` of the full in-memory log each record. |
 | Writer `flushSheet` | O(log bytes) | Copies log, appends suffix, **re-reads entire file** for SHA-256 + mirrors. |
 | Dense Move (`appendMoved`) | O(taken strokes + dest log growth) | Atomic batch (v29); still one big dest suffix + rollback copies. Tear scans strokes intersecting the slice. |
-| Sync push / Prepare drain | O(log bytes) **per** queued notebook_log | `PUSH_BATCH = 50` rows, but each log blob is the **whole** file inline Base64. One fat Scratchpad log dominates. |
-| Sync pull | O(batch) rows; blobs inline Base64 | `PULL_LIMIT = 200`; same whole-blob materialization on apply. |
-| Outbox drain time | O(outbox × rounds) | Up to `MAX_ROUNDS = 1000` push/pull rounds per pass; wall time grows with blob size and Render RTT, not just row count. |
+| Sync **push** / Prepare (v69) | O(log bytes) **I/O**, bounded heap for large blobs | `PUT /sync/blob` streams file; **one large blob per push round**. JSON push no longer holds the Scratchpad as Base64. |
+| Sync **pull** (v69) | O(log bytes) heap per large blob | Large blobs fetched raw into a `byte[]` then applied; no Base64×4/3 spike, still one full copy in RAM. |
+| Outbox drain time | O(outbox × rounds × blob size) | `PUSH_BATCH = 50`, `MAX_ROUNDS = 1000`; each Scratchpad edit re-uploads the **entire** log (content-addressed, but still full transfer). Wall time ∝ log size × RTT. |
 | Lasso hit-test | O(strokes × points × ≤64 verts) | Outline thinned (`MAX_HIT_VERTICES = 64`); paper lasso walks **all** strokes on the sheet. |
 | Eraser | O(all strokes on sheet) | Hits every stroke against the wipe path. |
 | Render / scroll | Bounded bitmaps | `BITMAP_CACHE_SIZE = 3`; visible pages only. Dense **page** rebuild is O(strokes on that page), not whole library. |
 
 ### Envelope: ~100 / ~1 000 / ~10 000
 
-Orders of magnitude for **one notebook** (Scratchpad counts). “Strokes” = ink strokes on that sheet, not UI events. These are engineering judgments from code + the incidents above — **not** load-test certificates.
+Orders of magnitude for **one notebook** (Scratchpad counts). “Strokes” = ink strokes on that sheet, not UI events. Judgments from code + the v68 OOM / v69 streaming fix — **not** device load-test certificates.
 
-| Scale | Memory / open | Sync payload & Prepare | Hit-test / lasso / erase | Move (page tear) | Render / scroll | Outbox drain |
+| Scale | Memory / open | Sync payload & Prepare (v69) | Hit-test / lasso / erase | Move (page tear) | Render / scroll | Outbox drain |
 | --- | --- | --- | --- | --- | --- | --- |
-| **~100 pages**, light–moderate ink (log ≲ few MB) | **OK** — normal tip use | **OK** — push peak well under heap | **OK** — select stays responsive with thinning | **OK** — dense page still atomic | **OK** — 3-page bitmap cache | Seconds–minutes depending on network |
-| **~1 000 pages** or dense ink (log ~10–20 MB; Scratchpad already ~14 MB in prod) | **Degrades** — full log + stroke list resident; multiple opened notebooks stack | **Fails possible** — Base64 JSON peak can approach/exceed ~75 MB alloc (observed OOM); Prepare = full sync first | **Degrades** — paper lasso/erase O(all strokes); may hitch on lift, not freeze by design | **Degrades** — tear/appendMoved copies grow with page density + log size; still prefer both-intact over drop | **Mostly OK** — still 3 bitmaps; first open / full invalidate of a dense page costs O(page strokes) | **Degrades** — each Scratchpad change re-pushes the **entire** log; drain time ∝ log size × RTT |
-| **~10 000 pages** or log ≳ ~40 MB | **Likely fail** — heap + retained sheets | **Fail** — device OOM and/or server **64 MB** body limit | **Degrades → unusable** — O(n) walks on huge stroke lists | **Fail risk** — large intermediate `byte[]` during tear/rewrite | Open/replay alone may OOM before UI settles | May never reach `outbox == 0` if push OOMs or 413 |
+| **~100 pages**, light–moderate ink (log ≲ few MB) | **OK** — normal tip use | **OK** — small logs may still Base64; peak modest | **OK** — select stays responsive with thinning | **OK** — dense page still atomic | **OK** — 3-page bitmap cache | Seconds–minutes depending on network |
+| **~1 000 pages** or dense ink (log ~10–20 MB; prod Scratchpad ~14 MB) | **Degrades** — full log + stroke list resident; multiple opened notebooks stack | **OK for Prepare/push heap** (streamed PUT) — still pays full upload time; pull holds one ~14 MB `byte[]` | **Degrades** — paper lasso/erase O(all strokes); may hitch on lift | **Degrades** — tear/appendMoved copies grow with density + log size; still prefer both-intact over drop | **Mostly OK** — 3 bitmaps; dense-page rebuild O(page strokes) | **Degrades** — whole-log re-upload each change; minutes possible on slow links |
+| **~10 000 pages** or log tens of MB→100 MB+ | **Likely fail / severe degrade** — open/replay + retained sheets vs ~256 MB heap | **Push path OK-ish** (stream); **open / pull / flush still OOM risk** when a full `byte[]` + stroke list + copies coexist | **Degrades → unusable** — O(n) walks on huge stroke lists | **Fail risk** — large intermediate arrays during tear/rewrite | Open/replay may OOM before UI settles | Drain can take very long; process may die on flush/pull before `outbox == 0` |
 
 **Beyond:** no compaction/GC of notebook logs; append-only `.zdl` only grows. Splitting Scratchpad / archiving pages is an operational mitigation, not a product guarantee.
 
@@ -191,10 +191,11 @@ Orders of magnitude for **one notebook** (Scratchpad counts). “Strokes” = in
 | Race invariants in Bugs 1–3 while the process stays alive | **Guaranteed** (single device / live-writer rules as above) |
 | UI never waits on encode/`fsync`/network | **Guaranteed** for the write-behind design — unless the process is killed by OOM |
 | Dense Move does not drop ink mid-append (v29) | **Guaranteed** when Move completes without OOM; on OOM mid-rewrite see crash windows |
-| Sync / Prepare succeeds for arbitrary library size | **Not guaranteed** — **fails** by OOM or server body limit on large whole-log pushes |
+| Prepare/push does not Base64 a multi‑MB Scratchpad into JSON (v69) | **Guaranteed** for blobs **> 256 KiB** (`PUT /sync/blob` first) |
+| Sync / Prepare / open succeed for arbitrary library size | **Not guaranteed** — open/replay, flush re-read, pull `byte[]`, and stacked sheets can still **fail** by OOM |
 | Lasso/erase stay interactive at 10k strokes | **Not guaranteed** — **degrades** (O(n)); thinning helps select, does not cap sheet size |
 | Render stays O(visible pages) | **Mostly guaranteed** — cache size 3; opening the sheet still pays full replay |
-| Streaming / chunked ink upload | **Gap** on tip after v68 — do not claim watertight sync at Scratchpad-scale until that lands |
+| Streaming upload of large ink | **Landed in v69** — remaining gap is streaming **decode/open/pull-apply**, not the Prepare Base64 spike |
 
 ---
 
@@ -207,7 +208,7 @@ State these out loud; do not paper over them.
 | **Multi-device concurrent editing of one notebook without Hand off** | Whole-log LWW; one log wins, the other is a hidden conflict copy. Not CRDT merge of strokes. |
 | **Kill after dest rewrite, before source flush** | Brief duplicate on disk possible; not silent drop, but not “exactly once” either. |
 | **Crash in the write-behind window** | Newest unflushed snapshot per page can be lost. |
-| **Unbounded library / large notebook_log sync** | Whole-log Base64 push; Boox ~256 MB heap; observed ~75 MB Prepare OOM; server body limit 64 MB. Streaming not on tip yet. |
+| **Unbounded library size** | Open/replay keeps whole `.zdl` + strokes; flush re-reads full file; pull still materializes large blobs as `byte[]`. v69 fixed Prepare Base64 OOM (~75 MB on ≤v68), not unbounded heap. |
 | **Web titles / thumbs ⇒ restore-safe** | Metadata and cached PNGs ≠ `notebook_logs` in S3. |
 | **Partial outbox + uninstall** | Pending uploads die with the app data. |
 | **Missing S3 objects** | Pull refuses to advance; stuck until a device that still has the file re-pushes. |

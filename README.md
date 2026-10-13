@@ -45,15 +45,15 @@ Tests that lock the guarantees (names encode the claim):
 
 ### Scale (honest limits — not race proofs)
 
-Race invariants assume the process stays alive. They do **not** mean sync/Prepare works for an unbounded Scratchpad.
+Race invariants assume the process stays alive. They do **not** mean an unbounded Scratchpad fits in ~256 MB heap.
 
-| Envelope | Expectation on tip after v68 |
+| Envelope | Expectation on tip **v69+** |
 | --- | --- |
-| **~100 pages** / light–moderate ink (log ≲ few MB) | **Safe** for open, draw, lasso, Move, sync |
-| **~1 000 pages** or fat log (~10–20 MB; prod Scratchpad already ~14 MB) | UI **degrades** (O(n) lasso/erase/open); sync/Prepare **can OOM** — whole `.zdl` is Base64’d into one JSON push (~75 MB alloc observed) |
-| **~10 000 pages** or log ≳ ~40 MB | **Fails** — device heap and/or server **64 MB** push body limit |
+| **~100 pages** / light–moderate ink (log ≲ few MB) | **Safe** for open, draw, lasso, Move, sync/Prepare |
+| **~1 000 pages** or fat log (~10–20 MB; prod Scratchpad ~14 MB) | UI **degrades** (O(n) open/lasso/erase). **Prepare/push heap OK** — v69 streams blobs >256 KiB via `PUT /sync/blob` (fixes ≤v68 ~75 MB Base64 OOM). Drain time still ∝ whole-log upload. |
+| **~10 000 pages** / huge log | **Fail risk** — open/replay, flush re-read, and pull `byte[]` can still OOM; not a watertight “sync always works” claim |
 
-Streaming large logs is a **gap** (fix in flight; not on tip yet). Full O(n) table and guaranteed vs degrades vs fails: [docs/CORRECTNESS.md § Scale](docs/CORRECTNESS.md#scale-pages--strokes--heap--not-a-race-proof).
+Remaining gap: streaming **decode/open/pull-apply**, not the Prepare Base64 path. Full table: [docs/CORRECTNESS.md § Scale](docs/CORRECTNESS.md#scale-pages--strokes--heap--not-a-race-proof).
 
 ---
 
