@@ -10,7 +10,7 @@ A Play install does **not** upgrade a sideload of `com.zetteldraw.penpoc`. They 
 
 JDK 17+, Android SDK platform 35, and HTTP access to `http://repo.boox.com/repository/maven-public/`.
 
-Generate an upload key once. Do not commit the keystore or the passwords. Java's `keytool` writes a PKCS12 store; the Android Gradle Plugin accepts it.
+Generate an upload key once. Do not commit the keystore or the passwords. Java's `keytool` writes a PKCS12 store; the Android Gradle Plugin accepts it. PKCS12 uses one password for the store and the key. Set `zetteldraw.storePassword` and `zetteldraw.keyPassword` to that same value. A different key password fails at `signReleaseBundle`.
 
 ```bash
 keytool -genkeypair -v \
