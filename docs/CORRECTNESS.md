@@ -199,6 +199,22 @@ Orders of magnitude for **one notebook** (Scratchpad counts). “Strokes” = in
 
 ---
 
+## Tip ship / sync routes
+
+**Never ship an APK that calls a new `/sync/*` route until that route is live on production.** v69 called `PUT/GET /sync/blob/:hash` while Render still served an older sync build (app-ahead-of-API); Prepare transfer failed with Fastify `404 Route PUT:/sync/blob/… not found`. Stay on Render — redeploy by hand when auto-deploy does not fire (see agent-store hosting notes).
+
+Gate before tip APK / GitHub release:
+
+```bash
+cd server && npm run smoke:prod
+# → scripts/smoke-sync-prod.sh against https://zetteldraw-sync.onrender.com
+# Pass = unauthenticated 401/403 (route registered). Fail = 404 (not deployed).
+```
+
+After `server/` lands on GitHub `main`, trigger a Render deploy for `zetteldraw-sync` and re-run the smoke before bumping `versionCode`.
+
+---
+
 ## Non-guarantees
 
 State these out loud; do not paper over them.
