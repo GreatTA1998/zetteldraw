@@ -5,6 +5,7 @@ import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.PageLinkEntity;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,6 +14,12 @@ import java.util.Map;
 
 /** What the sync engine needs from local storage. Transport lives in {@code sync}. */
 public interface SyncStore {
+    /**
+     * Blobs larger than this leave the JSON Base64 path and use raw {@code /sync/blob/:hash}.
+     * Keep in sync with server {@code INLINE_BLOB_MAX_BYTES} and {@code SyncProtocol}.
+     */
+    int INLINE_BLOB_MAX_BYTES = 256 * 1024;
+
     /** Next outbox rows to push, with the ink blobs they reference. */
     PushBatch pendingPush(int limit);
 
@@ -77,8 +84,14 @@ public interface SyncStore {
         public final List<NotebookLogEntity> logs = new ArrayList<>();
         /** Page links. Metadata only: a link copies no ink. */
         public final List<PageLinkEntity> links = new ArrayList<>();
-        /** sha256 hex → ink file bytes. */
+        /**
+         * sha256 hex → ink file bytes for small blobs inlined as Base64 in push JSON.
+         * Large logs go in {@link #blobFiles} instead so Prepare transfer never Base64s
+         * a multi-megabyte Scratchpad into the heap.
+         */
         public final Map<String, byte[]> blobs = new HashMap<>();
+        /** sha256 hex → on-disk ink file for raw PUT /sync/blob/:hash (no Base64). */
+        public final Map<String, File> blobFiles = new HashMap<>();
         /** "entity:id" → outbox queued_at snapshot. */
         final Map<String, Long> queuedAt = new HashMap<>();
 

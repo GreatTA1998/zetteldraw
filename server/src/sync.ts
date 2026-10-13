@@ -19,6 +19,13 @@ import { BadRequest, type PushBody } from "./validate.js";
 /** Serializes pushes so revs commit in order and a pull never skips one. */
 export const PUSH_LOCK = 42_4242;
 
+/**
+ * Blobs larger than this stay out of JSON (Base64). Clients upload/download them
+ * via PUT/GET /sync/blob/:hash as raw octets. Keeps Boox heap under the ~256MB
+ * growth limit during Prepare transfer / sync of large notebook logs.
+ */
+export const INLINE_BLOB_MAX_BYTES = 256 * 1024;
+
 const BOARD_COLS = [
   "id",
   "notebook_id",
@@ -370,7 +377,13 @@ export async function pull(
         `missing ink blob ${hash} for ${kind} ${id}; re-sync from a device that still has the file`,
       );
     }
-    blobs[hash] = (await storage.get(hash)).toString("base64");
+    const bytes = await storage.get(hash);
+    // Large logs (Scratchpad can be 14MB+) must not Base64 into the pull JSON —
+    // that alone OOMs a 256MB Boox heap. Client fetches them via GET /sync/blob/:hash.
+    if (bytes.length > INLINE_BLOB_MAX_BYTES) {
+      return;
+    }
+    blobs[hash] = bytes.toString("base64");
   };
   for (const board of boards) {
     if (board.ink_hash && board.deleted_at === null) {

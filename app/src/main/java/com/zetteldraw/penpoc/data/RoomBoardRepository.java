@@ -1065,31 +1065,77 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 }
             }
         }
-        HashMap<String, byte[]> files = new HashMap<>();
-        for (BoardEntity row : boards) {
-            if (row.inkHash != null && row.deletedAt == null) {
-                byte[] bytes = readInkQuietly(row.id);
-                if (bytes != null) {
-                    files.put(row.id, bytes);
-                }
-            }
-        }
-        HashMap<String, byte[]> logFiles = new HashMap<>();
+        // Large notebook logs (Scratchpad 14MB+) must not be loaded as byte[] + Base64 into
+        // the push JSON — that OOM'd Boox Prepare transfer (~75MB alloc on 256MB heap).
+        // At most one large on-disk blob per batch so sync stays one-at-a-time.
+        boolean haveLarge = false;
+        HashMap<String, byte[]> smallInk = new HashMap<>();
+        HashMap<String, File> largeInk = new HashMap<>();
+        HashMap<String, byte[]> smallLogs = new HashMap<>();
+        HashMap<String, File> largeLogs = new HashMap<>();
+        ArrayList<BoardEntity> boardsKept = new ArrayList<>();
+        ArrayList<NotebookLogEntity> logsKept = new ArrayList<>();
         for (NotebookLogEntity row : logs) {
-            if (row.inkHash != null && row.deletedAt == null) {
+            if (row.inkHash == null || row.deletedAt != null) {
+                logsKept.add(row);
+                continue;
+            }
+            File file = ink.logFile(row.id);
+            if (!file.exists()) {
+                logsKept.add(row);
+                continue;
+            }
+            long len = file.length();
+            if (len > SyncStore.INLINE_BLOB_MAX_BYTES) {
+                if (haveLarge) {
+                    // Defer remaining large logs to the next push round.
+                    continue;
+                }
+                haveLarge = true;
+                largeLogs.put(row.id, file);
+                logsKept.add(row);
+            } else {
                 byte[] bytes = readLogQuietly(row.id);
                 if (bytes != null) {
-                    logFiles.put(row.id, bytes);
+                    smallLogs.put(row.id, bytes);
                 }
+                logsKept.add(row);
+            }
+        }
+        for (BoardEntity row : boards) {
+            if (row.inkHash == null || row.deletedAt != null) {
+                boardsKept.add(row);
+                continue;
+            }
+            File file = ink.fileFor(row.id);
+            if (!file.exists()) {
+                boardsKept.add(row);
+                continue;
+            }
+            long len = file.length();
+            if (len > SyncStore.INLINE_BLOB_MAX_BYTES) {
+                if (haveLarge) {
+                    continue;
+                }
+                haveLarge = true;
+                largeInk.put(row.id, file);
+                boardsKept.add(row);
+            } else {
+                byte[] bytes = readInkQuietly(row.id);
+                if (bytes != null) {
+                    smallInk.put(row.id, bytes);
+                }
+                boardsKept.add(row);
             }
         }
         synchronized (lock) {
-            for (NotebookLogEntity seen : logs) {
+            for (NotebookLogEntity seen : logsKept) {
                 NotebookLogEntity row = dao.notebookLog(seen.id);
                 if (row == null || !sameLog(seen, row)) {
                     continue;
                 }
-                byte[] bytes = logFiles.get(row.id);
+                byte[] bytes = smallLogs.get(row.id);
+                File large = largeLogs.get(row.id);
                 if (bytes != null) {
                     String actual = InkFileStore.sha256(bytes);
                     if (!actual.equals(row.inkHash)) {
@@ -1098,16 +1144,30 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         dao.upsertNotebookLog(row);
                     }
                     batch.blobs.put(actual, bytes);
+                } else if (large != null) {
+                    try {
+                        String actual = InkFileStore.sha256File(large);
+                        if (!actual.equals(row.inkHash)) {
+                            row.inkHash = actual;
+                            row.inkBytes = large.length();
+                            dao.upsertNotebookLog(row);
+                        }
+                        batch.blobFiles.put(actual, large);
+                    } catch (IOException e) {
+                        LaunchLog.mark("pendingPush log hash failed " + row.id + ": " + e.getMessage());
+                        continue;
+                    }
                 }
                 batch.logs.add(row);
                 batch.queuedAt.put(OutboxEntry.LOG + ":" + row.id, logQueuedAt.get(row.id));
             }
-            for (BoardEntity seen : boards) {
+            for (BoardEntity seen : boardsKept) {
                 BoardEntity row = dao.board(seen.id);
                 if (row == null || !sameRow(seen, row)) {
                     continue;
                 }
-                byte[] bytes = files.get(row.id);
+                byte[] bytes = smallInk.get(row.id);
+                File large = largeInk.get(row.id);
                 if (bytes != null) {
                     String actual = InkFileStore.sha256(bytes);
                     if (!actual.equals(row.inkHash)) {
@@ -1118,6 +1178,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         dao.upsertBoard(row);
                     }
                     batch.blobs.put(actual, bytes);
+                } else if (large != null) {
+                    try {
+                        String actual = InkFileStore.sha256File(large);
+                        if (!actual.equals(row.inkHash)) {
+                            row.inkHash = actual;
+                            row.inkBytes = large.length();
+                            dao.upsertBoard(row);
+                        }
+                        batch.blobFiles.put(actual, large);
+                    } catch (IOException e) {
+                        LaunchLog.mark("pendingPush ink hash failed " + row.id + ": " + e.getMessage());
+                        continue;
+                    }
                 }
                 batch.boards.add(row);
                 batch.queuedAt.put(OutboxEntry.BOARD + ":" + row.id, boardQueuedAt.get(row.id));
