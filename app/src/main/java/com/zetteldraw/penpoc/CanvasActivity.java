@@ -31,6 +31,8 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -60,6 +62,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -90,6 +93,10 @@ public final class CanvasActivity extends Activity {
     private FrameLayout drawingArea;
     /** In-window menu or form (Move, notebook menu, name, delete confirm). */
     private FrameLayout overlay;
+    /** Blocks double-tap Prepare transfer while a pass is already running. */
+    private final AtomicBoolean prepareTransferInFlight = new AtomicBoolean(false);
+    /** Bumped each time Settings opens so a stale Prepare callback cannot mutate old views. */
+    private int settingsGeneration;
     private LinearLayout topBar;
     /**
      * Bottom strip for Link / Move / Place under. Floated on {@link #root},
@@ -2227,6 +2234,7 @@ public final class CanvasActivity extends Activity {
 
     /** In-window Settings: Google Sign-In, sync toggle, privacy, version. */
     private void showSettings() {
+        settingsGeneration++;
         SyncConfig config = SyncConfig.load(this);
         LinearLayout box = panel();
         box.setMinimumWidth(dp(280));
@@ -2361,6 +2369,8 @@ public final class CanvasActivity extends Activity {
 
         // Always show Prepare transfer. When blocked, keep it visible but disabled with a reason
         // (never silently omit — Elton needs a path explanation before Sign-In / live writer).
+        // Prepare transfer must stay on-device (sync + POST /sync/prepare-transfer). It must never
+        // open a browser — that was the v66/v67 confusion with "Open web companion" below.
         String prepareBlockReason = prepareTransferBlockReason(config, writerBlock, lastOk);
         boolean canPrepare = prepareBlockReason == null;
         Button prepare = tinyButton(getString(R.string.settings_prepare_transfer), 15);
@@ -2388,18 +2398,6 @@ public final class CanvasActivity extends Activity {
                 getString(R.string.settings_oauth_diag, getPackageName(), sha1),
                 10));
 
-        Button privacy = tinyButton(getString(R.string.settings_privacy), 15);
-        onTap(privacy, v -> openUrl("https://zetteldraw.com/privacy"));
-        LinearLayout.LayoutParams linkLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        linkLp.topMargin = dp(8);
-        box.addView(privacy, linkLp);
-
-        Button web = tinyButton(getString(R.string.settings_web), 15);
-        onTap(web, v -> openUrl("https://zetteldraw.com"));
-        box.addView(web, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
         box.addView(panelText(
                 getString(R.string.settings_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
                 12));
@@ -2415,7 +2413,38 @@ public final class CanvasActivity extends Activity {
         actionsLp.topMargin = dp(8);
         box.addView(actions, actionsLp);
 
-        showOverlay(box, anchoredLp(settingsButton, box), root);
+        // Browser links last and clearly labeled so they are not mistaken for Prepare transfer.
+        TextView linksHeader = panelText(getString(R.string.settings_links_section), 11);
+        LinearLayout.LayoutParams linksHeaderLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        linksHeaderLp.topMargin = dp(16);
+        box.addView(linksHeader, linksHeaderLp);
+
+        Button privacy = tinyButton(getString(R.string.settings_privacy), 15);
+        onTap(privacy, v -> openUrl("https://zetteldraw.com/privacy"));
+        box.addView(privacy, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        // Dedicated static /transfer page (SSR, works without JS) — not the CSR homepage spinner.
+        Button web = tinyButton(getString(R.string.settings_web), 15);
+        onTap(web, v -> openUrl("https://zetteldraw.com/transfer"));
+        box.addView(web, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        // Scroll so Prepare / Links never sit off-screen or share a clipped hit target on Boox.
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        scroll.addView(box, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT));
+        int maxH = Math.max(dp(240), Math.round(root.getHeight() * 0.78f));
+        scroll.measure(
+                View.MeasureSpec.makeMeasureSpec(root.getWidth() - dp(16), View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(maxH, View.MeasureSpec.AT_MOST));
+        FrameLayout.LayoutParams scrollLp = anchoredLp(settingsButton, scroll);
+        scrollLp.width = Math.max(dp(280), scroll.getMeasuredWidth());
+        scrollLp.height = Math.min(maxH, Math.max(dp(200), scroll.getMeasuredHeight()));
+        showOverlay(scroll, scrollLp, root);
     }
 
     /**
@@ -2441,12 +2470,20 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Settings → Prepare transfer: force sync until outbox empty, then ack the
-     * server so web Hand off unlocks. Runs off the UI thread.
+     * server so web Hand off unlocks. Runs entirely on-device (HttpURLConnection to
+     * the sync API). Never opens a browser / Custom Tab / WebView.
      */
     private void startPrepareTransfer(Button prepare, TextView statusLine) {
+        if (!prepareTransferInFlight.compareAndSet(false, true)) {
+            statusLine.setVisibility(View.VISIBLE);
+            statusLine.setText(R.string.settings_prepare_transfer_working);
+            return;
+        }
+        final int generation = settingsGeneration;
         prepare.setEnabled(false);
         statusLine.setVisibility(View.VISIBLE);
         statusLine.setText(R.string.settings_prepare_transfer_working);
+        showHint(getString(R.string.settings_prepare_transfer_working), false);
         UiExecutors.loader.execute(() -> {
             String err = null;
             boolean blocked = false;
@@ -2463,7 +2500,10 @@ public final class CanvasActivity extends Activity {
                     SyncConfig.setWriterBlockMessage(CanvasActivity.this, r.writerBlockMessage);
                     err = getString(R.string.settings_not_live_writer);
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
+                // Catch Error as well as Exception — concurrent sync races previously escaped
+                // Exception-only handlers and killed the activity on 2nd/3rd Prepare taps.
+                Log.w("zd-prepare", "prepare transfer failed", e);
                 err = e.getMessage() == null || e.getMessage().isEmpty()
                         ? getString(R.string.settings_prepare_transfer_failed)
                         : e.getMessage();
@@ -2471,12 +2511,28 @@ public final class CanvasActivity extends Activity {
             String message = err;
             boolean wasBlocked = blocked;
             runOnUiThread(() -> {
+                prepareTransferInFlight.set(false);
+                if (isDestroyed() || generation != settingsGeneration) {
+                    // Settings was closed/reopened; do not touch detached views or dismissOverlay.
+                    if (message == null) {
+                        showHint(getString(R.string.settings_prepare_transfer_done), false);
+                    } else {
+                        showHint(message, true);
+                    }
+                    return;
+                }
                 if (message == null) {
-                    dismissOverlay();
-                    showHint(getString(R.string.settings_prepare_transfer_done), true);
+                    // Stay in Settings with durable success copy — do not open a browser.
+                    String done = getString(R.string.settings_prepare_transfer_done);
+                    statusLine.setText(done);
+                    showHint(done, false);
+                    prepare.setEnabled(false);
+                    prepare.setAlpha(0.35f);
                 } else {
                     statusLine.setText(message);
+                    showHint(message, true);
                     prepare.setEnabled(!wasBlocked);
+                    prepare.setAlpha(wasBlocked ? 0.35f : 1f);
                     if (wasBlocked) {
                         dismissOverlay();
                         showSettings();
@@ -2628,24 +2684,31 @@ public final class CanvasActivity extends Activity {
         scrim.setClickable(true);
         onTap(scrim, v -> dismissOverlay());
         scrim.addView(content, contentLp);
-        overlay = scrim;
         inkView.hold(PageInkView.Hold.OVERLAY);
+        // Attach before publishing overlay so dismissOverlay never sees a null parent.
         host.addView(scrim, scrimLp);
+        overlay = scrim;
         updateExcludeRects();
     }
 
     private void dismissOverlay() {
-        if (overlay == null) {
+        FrameLayout scrim = overlay;
+        if (scrim == null) {
             return;
         }
+        overlay = null;
         InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
         if (imm != null) {
-            imm.hideSoftInputFromWindow(overlay.getWindowToken(), 0);
+            imm.hideSoftInputFromWindow(scrim.getWindowToken(), 0);
         }
-        ((FrameLayout) overlay.getParent()).removeView(overlay);
-        overlay = null;
+        ViewParent parent = scrim.getParent();
+        if (parent instanceof ViewGroup) {
+            ((ViewGroup) parent).removeView(scrim);
+        }
         updateExcludeRects();
-        inkView.release(PageInkView.Hold.OVERLAY);
+        if (inkView != null) {
+            inkView.release(PageInkView.Hold.OVERLAY);
+        }
     }
 
     private void wipe(PageSlot slot) {
