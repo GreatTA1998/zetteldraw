@@ -8,6 +8,8 @@
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <!-- Target 35: shortService on SystemForegroundService requires this permission. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
 
     <application
         android:name=".PenApp"
@@ -33,8 +35,9 @@
         <!--
             WorkManager 2.9.1 declares this service with no type. Target 35 rejects a
             foreground start that has none. Sync uses a normal Worker (not expedited,
-            and it never calls setForeground); shortService only makes the library
-            service legal if WorkManager starts it.
+            and it never calls setForeground); shortService plus
+            FOREGROUND_SERVICE_SHORT_SERVICE makes the library service legal if
+            WorkManager starts it.
         -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
