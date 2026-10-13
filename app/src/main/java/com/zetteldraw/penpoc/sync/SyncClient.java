@@ -123,6 +123,10 @@ public final class SyncClient {
                 }
                 throw new SchemaMismatch(server);
             }
+            if (code == 404) {
+                // Prod briefly lacked these routes when v69 shipped ahead of Render deploy.
+                throw new IOException("Sync server updating — retry Prepare transfer in a minute.");
+            }
             if (code < 200 || code >= 300) {
                 throw new IOException("PUT /sync/blob/" + hash + " -> " + code + ": " + text);
             }

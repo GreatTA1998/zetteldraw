@@ -110,6 +110,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!needsAuth) {
       return;
     }
+    // onRequest still runs for unmatched paths. Skip auth so missing routes
+    // stay 404 (not 401) — tip-ship smoke treats 404 as "route not deployed"
+    // and unauthenticated 401 as "route registered".
+    if (!req.routeOptions?.url) {
+      return;
+    }
     const claimedBy = await getLibraryClaimer(deps.pool);
     const principal = await deps.auth.resolveBearer(req.headers.authorization, {
       libraryClaimed: claimedBy !== null,
@@ -208,9 +214,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       const deviceId = typeof req.query.device_id === "string" ? req.query.device_id.trim() : "";
       const scope = scopeOf(req.principal);
       await assertCanPush(deps.pool, scope, deviceId);
-      const bytes = Buffer.isBuffer(req.body)
-        ? req.body
-        : Buffer.from(req.body == null ? [] : (req.body as ArrayBuffer));
+      // Content-type parser always yields a Buffer for application/octet-stream.
+      if (!Buffer.isBuffer(req.body)) {
+        throw new BadRequest("expected application/octet-stream body");
+      }
+      const bytes = req.body;
       if (sha256Hex(bytes) !== hash) {
         throw new BadRequest(`blob ${hash} does not match its sha256`);
       }
