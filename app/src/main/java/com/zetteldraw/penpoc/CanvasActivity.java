@@ -2347,18 +2347,6 @@ public final class CanvasActivity extends Activity {
                 });
                 box.addView(syncNow, new LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-                // Primary cutover path: final sync + unlock web Hand off (iPhone-upgrade style).
-                if (writerBlock.isEmpty()) {
-                    Button prepare = tinyButton(getString(R.string.settings_prepare_transfer), 15);
-                    styleButton(prepare, true);
-                    onTap(prepare, v -> startPrepareTransfer(prepare, statusLine));
-                    LinearLayout.LayoutParams prepareLp = new LinearLayout.LayoutParams(
-                            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-                    prepareLp.topMargin = dp(4);
-                    box.addView(prepare, prepareLp);
-                    box.addView(panelText(getString(R.string.settings_prepare_transfer_hint), 11));
-                }
             }
 
             Button signOut = tinyButton(getString(R.string.settings_sign_out), 15);
@@ -2370,6 +2358,35 @@ public final class CanvasActivity extends Activity {
             box.addView(signOut, new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
+
+        // Always show Prepare transfer. When blocked, keep it visible but disabled with a reason
+        // (never silently omit — Elton needs a path explanation before Sign-In / live writer).
+        String prepareBlockReason = prepareTransferBlockReason(config, writerBlock, lastOk);
+        boolean canPrepare = prepareBlockReason == null;
+        Button prepare = tinyButton(getString(R.string.settings_prepare_transfer), 15);
+        styleButton(prepare, canPrepare);
+        prepare.setEnabled(canPrepare);
+        prepare.setAlpha(canPrepare ? 1f : 0.35f);
+        if (canPrepare) {
+            onTap(prepare, v -> startPrepareTransfer(prepare, statusLine));
+        }
+        LinearLayout.LayoutParams prepareLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        prepareLp.topMargin = dp(8);
+        box.addView(prepare, prepareLp);
+        box.addView(panelText(
+                canPrepare
+                        ? getString(R.string.settings_prepare_transfer_hint)
+                        : prepareBlockReason,
+                11));
+
+        String sha1 = com.zetteldraw.penpoc.sync.SigningCert.sha1(this);
+        if (sha1.isEmpty()) {
+            sha1 = "(unknown)";
+        }
+        box.addView(panelText(
+                getString(R.string.settings_oauth_diag, getPackageName(), sha1),
+                10));
 
         Button privacy = tinyButton(getString(R.string.settings_privacy), 15);
         onTap(privacy, v -> openUrl("https://zetteldraw.com/privacy"));
@@ -2399,6 +2416,27 @@ public final class CanvasActivity extends Activity {
         box.addView(actions, actionsLp);
 
         showOverlay(box, anchoredLp(settingsButton, box), root);
+    }
+
+    /**
+     * Why Prepare transfer is disabled, or {@code null} when it may run.
+     * Sign-In is required: prepare posts with the Google bearer and only the
+     * live writer may ack.
+     */
+    private String prepareTransferBlockReason(SyncConfig config, String writerBlock, long lastOk) {
+        if (!config.hasGoogleAccount()) {
+            return getString(R.string.settings_prepare_need_sign_in);
+        }
+        if (!config.enabled()) {
+            return getString(R.string.settings_prepare_need_sync);
+        }
+        if (!writerBlock.isEmpty()) {
+            return getString(R.string.settings_prepare_need_live);
+        }
+        if (lastOk <= 0) {
+            return getString(R.string.settings_prepare_need_restore);
+        }
+        return null;
     }
 
     /**

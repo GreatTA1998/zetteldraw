@@ -165,12 +165,47 @@ public final class GoogleAuth {
     }
 
     private static String humanCredentialError(GetCredentialException e) {
-        String msg = e.getMessage();
-        if (msg != null && msg.toLowerCase().contains("cancel")) {
+        String msg = e.getMessage() == null ? "" : e.getMessage();
+        String lower = msg.toLowerCase();
+        if (lower.contains("cancel")) {
             return "Sign-in cancelled.";
         }
-        return "Google Sign-In is unavailable on this device (Play Services required). " +
-                (msg != null ? msg : e.getClass().getSimpleName());
+        // ApiException 10 = DEVELOPER_ERROR. One Tap code 28444 = console SHA-1 / package mismatch.
+        // Play Services answered — this is not "GMS missing".
+        if (lower.contains("28444")
+                || lower.contains("developer console")
+                || lower.contains("developer_error")
+                || lower.contains("apiException: 10")
+                || lower.matches("(?s).*\\b10:\\s*28444\\b.*")
+                || lower.contains(": 10:")) {
+            return "Google rejected this APK’s signing cert (error 10 / 28444). "
+                    + "In Google Cloud Console → Credentials → Android OAuth client for "
+                    + "package com.zetteldraw.penpoc, add SHA-1 "
+                    + SigningCert.TIP_DEBUG_SHA1
+                    + " (tip/debug). Wait ~5 min, then try again. Play upload uses a different SHA.";
+        }
+        if (lower.contains("no credentials available")
+                || lower.contains("cannot find a matching credential")
+                || lower.contains("16:")) {
+            return "No Google account available for Sign-In on this device. "
+                    + "Add a Google account in system settings (needs Play Services), then retry.";
+        }
+        String simple = e.getClass().getSimpleName();
+        if (lower.contains("service_invalid")
+                || lower.contains("service_missing")
+                || lower.contains("service_disabled")
+                || lower.contains("service_version_update_required")
+                || simple.contains("NoCreateOption")
+                || simple.contains("NoProvider")) {
+            return "Google Play Services is missing or unusable on this Boox. "
+                    + "Install/update Play Services, or sign in on the web companion and use "
+                    + "Move to a new device → I no longer have the old device if this Boox cannot authenticate.";
+        }
+        // Keep the raw Google message — do not pretend every failure is "Play Services required".
+        if (!msg.isEmpty()) {
+            return "Google Sign-In failed: " + msg;
+        }
+        return "Google Sign-In failed (" + e.getClass().getSimpleName() + ").";
     }
 
     private static String readAll(InputStream in) throws Exception {

@@ -1,6 +1,6 @@
 # Correctness: the three irreversible bugs
 
-UI glitches, wrong underlines, and awkward snackbars are recoverable. These three are not. This document states what the code **actually enforces**, which tests lock those claims, and what remains **unguaranteed**. Tip app versions referenced: **v63** (Move dest), **v64** (Hand off / live writer), **v66** (Prepare transfer gate).
+UI glitches, wrong underlines, and awkward snackbars are recoverable. These three are not. This document states what the code **actually enforces**, which tests lock those claims, and what remains **unguaranteed**. Tip app versions referenced: **v63** (Move dest), **v64** (Hand off / live writer), **v66** (Prepare transfer gate), **v67** (Sign-In error/Prepare reasons).
 
 For the short version, see the [README](../README.md#the-only-three-irreversible-bugs).
 

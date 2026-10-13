@@ -100,4 +100,9 @@
     <string name="settings_prepare_transfer_working">Preparing transfer — syncing until caught up…</string>
     <string name="settings_prepare_transfer_done">Transfer prepared. On the web companion: Settings → Move to a new device → Hand off.</string>
     <string name="settings_prepare_transfer_failed">Prepare transfer failed. Check sync, then try again.</string>
+    <string name="settings_prepare_need_sign_in">Prepare transfer needs Google Sign-In first. Sign in above, wait until sync is caught up, then tap Prepare transfer.</string>
+    <string name="settings_prepare_need_sync">Prepare transfer needs sync on. Tap Enable syncing, wait until caught up, then try again.</string>
+    <string name="settings_prepare_need_live">Prepare transfer only works on the live writer. This device is blocked — use the old live Boox, or web → I no longer have the old device.</string>
+    <string name="settings_prepare_need_restore">Wait until the first cloud restore finishes (sync caught up) before Prepare transfer.</string>
+    <string name="settings_oauth_diag">OAuth check: package %1$s · SHA-1 %2$s · must match Android OAuth client in Google Cloud</string>
 </resources>
