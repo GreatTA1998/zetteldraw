@@ -30,5 +30,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <!--
+            WorkManager 2.9.1 declares this service with no type. Target 35 rejects a
+            foreground start that has none. Sync uses a normal Worker (not expedited,
+            and it never calls setForeground); shortService only makes the library
+            service legal if WorkManager starts it.
+        -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="shortService"
+            tools:node="merge" />
     </application>
 </manifest>
