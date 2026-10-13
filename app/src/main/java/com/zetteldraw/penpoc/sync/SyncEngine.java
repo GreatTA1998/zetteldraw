@@ -8,6 +8,7 @@ import org.json.JSONException;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
 
 /** One sync pass: drain the outbox with pushes, then pull until caught up. */
@@ -15,6 +16,11 @@ public final class SyncEngine {
     static final int PUSH_BATCH = 50;
     static final int PULL_LIMIT = 200;
     private static final int MAX_ROUNDS = 1000;
+    /**
+     * One sync/prepare at a time across WorkManager + Settings Prepare transfer.
+     * Concurrent passes raced Room refresh delivery and crashed the activity on retry.
+     */
+    private static final ReentrantLock GATE = new ReentrantLock();
 
     private final SyncStore store;
     private final SyncClient client;
@@ -45,6 +51,15 @@ public final class SyncEngine {
     }
 
     public Result run() throws IOException {
+        GATE.lock();
+        try {
+            return runLocked();
+        } finally {
+            GATE.unlock();
+        }
+    }
+
+    private Result runLocked() throws IOException {
         Result result = new Result();
         store.beginRemoteBatch();
         try {
@@ -85,16 +100,21 @@ public final class SyncEngine {
      * Web Hand off stays locked until this succeeds (or lost-device path on web).
      */
     public Result prepareTransfer() throws IOException {
-        Result result = run();
-        if (result.blockedAsNonWriter) {
+        GATE.lock();
+        try {
+            Result result = runLocked();
+            if (result.blockedAsNonWriter) {
+                return result;
+            }
+            if (store.outboxSize() != 0) {
+                throw new IOException("Sync still has " + store.outboxSize()
+                        + " change(s) waiting. Wait until caught up, then Prepare transfer again.");
+            }
+            client.prepareTransfer(config.deviceId, deviceLabel());
             return result;
+        } finally {
+            GATE.unlock();
         }
-        if (store.outboxSize() != 0) {
-            throw new IOException("Sync still has " + store.outboxSize()
-                    + " change(s) waiting. Wait until caught up, then Prepare transfer again.");
-        }
-        client.prepareTransfer(config.deviceId, deviceLabel());
-        return result;
     }
 
     /** Google accounts must hold the live-writer lease before any push. */

@@ -68,8 +68,16 @@ export function Overview({ googleClientId }: { googleClientId: string | null }) 
   }
   if (!session.data) {
     return (
-      <div className="flex min-h-dvh items-center justify-center">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" aria-label="Loading" />
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-3 px-6 text-center">
+        <Loader2 className="size-5 animate-spin text-foreground" aria-label="Loading" />
+        <p className="text-sm text-foreground">Loading zetteldraw…</p>
+        <p className="max-w-sm text-xs text-muted-foreground">
+          Prepare transfer runs in the Boox app, not here. For Hand off on a computer, open{" "}
+          <a className="underline underline-offset-2" href="/transfer">
+            /transfer
+          </a>
+          .
+        </p>
       </div>
     );
   }
