@@ -8,7 +8,7 @@ export type AuthPrincipal =
 
 export interface AuthConfig {
   deviceTokens: string[];
-  /** Web + Android OAuth client IDs accepted as Google ID token audiences. */
+  /** Web (and any Android) OAuth client IDs accepted as Google ID token audiences. */
   googleClientIds: string[];
   /** HMAC secret for long-lived access tokens issued after Google verify. */
   sessionSecret: string | undefined;

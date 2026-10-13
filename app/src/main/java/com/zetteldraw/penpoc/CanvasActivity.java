@@ -10,12 +10,14 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.DashPathEffect;
+import android.graphics.Insets;
 import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -33,6 +35,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -338,6 +341,17 @@ public final class CanvasActivity extends Activity {
         drawingArea.addView(scroller, matchMatch());
 
         drawingArea.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> onDrawingAreaLaidOut());
+
+        // API 35 enforces edge-to-edge. The theme opts out so the fullscreen window stays
+        // the pre-35 size. If that opt-out is ignored, pad the root by the system bars so
+        // the notebook chrome is not covered and page height still matches the visible area.
+        if (Build.VERSION.SDK_INT >= 35) {
+            root.setOnApplyWindowInsetsListener((v, insets) -> {
+                Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+                return WindowInsets.CONSUMED;
+            });
+        }
 
         setContentView(root);
         repository.addRemoteChangeListener(remoteChanged);

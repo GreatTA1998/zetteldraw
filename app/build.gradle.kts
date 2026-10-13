@@ -1,27 +1,64 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
 }
 
+// Upload key for Play. Never commit the keystore or these secrets.
+// Resolution order for each value: -P property, repo-root keystore.properties, environment variable.
+// Paths are relative to the repo root unless absolute. Leave all four unset to build an unsigned AAB.
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+if (keystorePropertiesFile.isFile) {
+    keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+}
+
+fun signingValue(propertyName: String, envName: String): String? {
+    val fromGradle = project.findProperty(propertyName) as String?
+    val fromFile = keystoreProperties.getProperty(propertyName)
+    val fromEnv = System.getenv(envName)
+    return listOf(fromGradle, fromFile, fromEnv)
+        .firstNotNullOfOrNull { raw -> raw?.trim()?.takeIf { it.isNotEmpty() } }
+}
+
+val uploadStoreFile = signingValue("zetteldraw.storeFile", "ZETTELDRAW_STORE_FILE")
+val uploadStorePassword = signingValue("zetteldraw.storePassword", "ZETTELDRAW_STORE_PASSWORD")
+val uploadKeyAlias = signingValue("zetteldraw.keyAlias", "ZETTELDRAW_KEY_ALIAS")
+val uploadKeyPassword = signingValue("zetteldraw.keyPassword", "ZETTELDRAW_KEY_PASSWORD")
+val uploadSigningValues = listOf(uploadStoreFile, uploadStorePassword, uploadKeyAlias, uploadKeyPassword)
+val uploadSigningReady = uploadSigningValues.all { it != null }
+if (uploadSigningValues.count { it != null } in 1..3) {
+    throw GradleException(
+        "Release signing is incomplete. Set all of zetteldraw.storeFile, zetteldraw.storePassword, " +
+            "zetteldraw.keyAlias, and zetteldraw.keyPassword (keystore.properties, -P, or " +
+            "ZETTELDRAW_STORE_FILE / ZETTELDRAW_STORE_PASSWORD / ZETTELDRAW_KEY_ALIAS / " +
+            "ZETTELDRAW_KEY_PASSWORD), or set none of them to produce an unsigned release bundle.",
+    )
+}
+
 android {
     namespace = "com.zetteldraw.penpoc"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
-        targetSdk = 33
-        versionCode = 70
-        versionName = "3.49"
+        targetSdk = 35
+        versionCode = 71
+        versionName = "3.50"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
+            // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
             abiFilters += if (project.hasProperty("zetteldraw.emulator")) "x86_64" else "arm64-v8a"
         }
-        // Sync URL is baked for production sideloads; Google Sign-In supplies the bearer at runtime.
+        // Sync URL is baked for production builds; Google Sign-In supplies the bearer at runtime.
         // Do not bake SYNC_TOKEN into Play/sideload releases once Google auth is live.
+        // The release build type overrides SYNC_TOKEN to empty even if -Pzetteldraw.syncToken is set.
         buildConfigField("String", "SYNC_URL", "\"${project.findProperty("zetteldraw.syncUrl") ?: ""}\"")
         buildConfigField("String", "SYNC_TOKEN", "\"${project.findProperty("zetteldraw.syncToken") ?: ""}\"")
-        // Web OAuth client ID (serverClientId) for Google ID tokens. Android client id is registered
-        // in Google Cloud for the package/signing cert; the ID token audience is this web client.
+        // Web OAuth client ID (serverClientId) for Google ID tokens. The existing Android
+        // OAuth client for com.zetteldraw.penpoc needs the upload-key SHA-1 and the Play
+        // App Signing SHA-1. The ID token audience is this web client.
         buildConfigField(
             "String",
             "GOOGLE_WEB_CLIENT_ID",
@@ -55,6 +92,14 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        if (uploadSigningReady) {
+            create("release") {
+                storeFile = rootProject.file(uploadStoreFile!!)
+                storePassword = uploadStorePassword
+                keyAlias = uploadKeyAlias
+                keyPassword = uploadKeyPassword
+            }
+        }
     }
 
     buildTypes {
@@ -63,6 +108,11 @@ android {
             isMinifyEnabled = false
         }
         getByName("release") {
+            if (uploadSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+            // Play and sideload releases authenticate with Google, not a baked device token.
+            buildConfigField("String", "SYNC_TOKEN", "\"\"")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -94,6 +144,23 @@ android {
 
     lint {
         abortOnError = false
+    }
+}
+
+if (uploadSigningReady && !rootProject.file(uploadStoreFile!!).isFile) {
+    throw GradleException(
+        "Upload keystore not found: ${rootProject.file(uploadStoreFile).absolutePath}. " +
+            "zetteldraw.storeFile is relative to the repo root unless it is absolute.",
+    )
+}
+
+gradle.taskGraph.whenReady {
+    val buildingRelease = allTasks.any { it.project == project && it.name.endsWith("Release") }
+    val token = (project.findProperty("zetteldraw.syncToken") as String?)?.trim().orEmpty()
+    if (buildingRelease && token.isNotEmpty()) {
+        logger.warn(
+            "Release builds ignore -Pzetteldraw.syncToken. SYNC_TOKEN is empty in the release BuildConfig.",
+        )
     }
 }
 

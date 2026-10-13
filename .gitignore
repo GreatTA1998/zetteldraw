@@ -1,5 +1,11 @@
 *.aab
 agent-tools/
+# Play upload key. debug.keystore stays tracked so debug installs match.
+keystore.properties
+*.jks
+*.keystore
+!app/debug.keystore
+*.pepk
 *.ap_
 *.apk
 **/build/
