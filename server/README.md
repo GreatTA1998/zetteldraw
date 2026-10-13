@@ -54,6 +54,8 @@ Every `/sync/*` call sends `Authorization: Bearer <device token>` and `X-Zetteld
 
 Raw ink octets (`Content-Type: application/octet-stream`). Prefer this for notebook logs larger than **256 KiB** so Boox Prepare transfer never Base64-encodes a multi‑MB Scratchpad into JSON (that path allocated ~75 MB and OOM'd on a 256 MB heap). `PUT` requires `?device_id=` (live-writer gate). `GET` is used when pull omits large Base64 blobs. Hash must match sha256 of the body.
 
+**Prod smoke (before tip APK):** `npm run smoke:prod` — unauthenticated `401` means the routes are registered; `404` means Render is still on an older build. Do not ship an APK that calls these routes until the smoke passes.
+
 ### `POST /sync/push`
 
 ```json
