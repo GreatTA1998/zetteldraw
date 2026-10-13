@@ -43,6 +43,18 @@ UI bugs are recoverable. These three are not — they permanently lose or corrup
 Tests that lock the guarantees (names encode the claim):  
 `InkNavigationTest.*`, `WriteBehindTest.aPullNeverOverwritesAnEditStillBeingWritten`, `PageMoveSafetyTest.staleSliceIndexStillMovesTheRequestedPageNotItsNeighbor`, `PageMoveScratchpadToSubNotebookTest.syncPullDuringHeldCrossNotebookMoveCannotDropPage`, `…placeIntoHomePageChildIgnoresStaleParentMidlineTarget`, `EnsureUnsyncedQueuedTest.markSyncedOnlyWhenOutboxEmpty`, server `writer.test.ts` / `backup-status.test.ts` / `lww.test.ts` (`rejects untouched seed placeholders…`). Details and concurrency model: [docs/CORRECTNESS.md](docs/CORRECTNESS.md).
 
+### Scale (honest limits — not race proofs)
+
+Race invariants assume the process stays alive. They do **not** mean sync/Prepare works for an unbounded Scratchpad.
+
+| Envelope | Expectation on tip after v68 |
+| --- | --- |
+| **~100 pages** / light–moderate ink (log ≲ few MB) | **Safe** for open, draw, lasso, Move, sync |
+| **~1 000 pages** or fat log (~10–20 MB; prod Scratchpad already ~14 MB) | UI **degrades** (O(n) lasso/erase/open); sync/Prepare **can OOM** — whole `.zdl` is Base64’d into one JSON push (~75 MB alloc observed) |
+| **~10 000 pages** or log ≳ ~40 MB | **Fails** — device heap and/or server **64 MB** push body limit |
+
+Streaming large logs is a **gap** (fix in flight; not on tip yet). Full O(n) table and guaranteed vs degrades vs fails: [docs/CORRECTNESS.md § Scale](docs/CORRECTNESS.md#scale-pages--strokes--heap--not-a-race-proof).
+
 ---
 
 ## What it does
@@ -228,4 +240,4 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 - `sync/` — `SyncEngine` (on a never-synced device: pull, claim live writer, then push; otherwise claim → push → pull), `SyncClient` (HTTP, including `/sync/claim-writer`), `SyncWorker` / `SyncScheduler` (WorkManager), `SyncConfig`.
 - `server/` — sync service, shared SQL migrations, live-writer lease, thumbnail rendering, web endpoints, docker-compose.
 - `web/` — Next.js read-only overview + Hand off Settings ceremony.
-- `docs/CORRECTNESS.md` — invariants, concurrency model, tests, and non-guarantees for the three irreversible bugs.
+- `docs/CORRECTNESS.md` — invariants, concurrency model, tests, non-guarantees, and **Scale** (heap / sync payload / OOM envelope) for the three irreversible bugs.
