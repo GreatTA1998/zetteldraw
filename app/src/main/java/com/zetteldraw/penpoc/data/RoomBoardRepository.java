@@ -161,14 +161,24 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * Ink of pages not yet in memory is read and decoded without the lock,
      * so a large list never blocks the notebook list, saves or other loads.
      * Only pages that keep changing under it (two rounds) decode under the lock.
+     *
+     * <p>When a {@code notebook_log} exists, the ink log is the source of truth:
+     * this returns an empty list until {@link #ensureSheet} has installed a Ready
+     * {@link OpenSheet}. Room board rows must not be shown in that window — they
+     * lag paper extends and were the ~50→~23 collapse path.
      */
     @Override
     public List<Board> pages(String notebookId) {
         notebookReads.incrementAndGet();
+        String sheetId = NotebookPaper.sheetId(notebookId);
         synchronized (lock) {
-            OpenSheet sheet = sheets.get(NotebookPaper.sheetId(notebookId));
+            OpenSheet sheet = sheets.get(sheetId);
             if (sheet != null && sheet.ready) {
                 return projectLocked(notebookId, sheet.paper);
+            }
+            if (dao.notebookLog(sheetId) != null) {
+                // Log-backed: refuse legacy BoardEntity projection.
+                return new ArrayList<>();
             }
         }
         List<Board> pages = null;
@@ -180,6 +190,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     if (notebook == null || notebook.deletedAt != null) {
                         return new ArrayList<>();
                     }
+                }
+                // A log may have appeared while we decoded; never fall through.
+                if (dao.notebookLog(sheetId) != null) {
+                    OpenSheet sheet = sheets.get(sheetId);
+                    if (sheet != null && sheet.ready) {
+                        return projectLocked(notebookId, sheet.paper);
+                    }
+                    return new ArrayList<>();
                 }
                 ensureTrailingBlankLocked(notebookId);
                 List<BoardEntity> rows = rowsLocked(notebookId);
@@ -197,6 +215,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         scheduleWarmCache();
         return pages;
+    }
+
+    @Override
+    public boolean isSheetReady(String notebookId) {
+        synchronized (lock) {
+            OpenSheet sheet = sheets.get(NotebookPaper.sheetId(notebookId));
+            return sheet != null && sheet.ready;
+        }
     }
 
     private List<BoardEntity> uncachedInkLocked(List<BoardEntity> rows) {
@@ -2305,10 +2331,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     @Override
-    public void ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
+    public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
         notebookReads.incrementAndGet();
         if (pageHeight <= 0) {
-            return;
+            return false;
         }
         knownPageHeight = pageHeight;
         knownLegacyHeight = legacyPageHeight;
@@ -2317,12 +2343,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             OpenSheet open = sheets.get(sheetId);
             if (open != null && open.ready) {
-                return;
+                return true;
             }
             if (notebookId != null) {
                 NotebookEntity notebook = dao.notebook(notebookId);
                 if (notebook == null || notebook.deletedAt != null) {
-                    return;
+                    return false;
                 }
             }
         }
@@ -2331,23 +2357,24 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             existing = ink.readLog(sheetId);
         } catch (IOException e) {
             Log.e(TAG, "ink log unreadable " + sheetId, e);
-            return;
+            return false;
         }
         if (existing != null) {
             try {
                 logReplays.incrementAndGet();
                 installSheet(notebookId, sheetId, NotebookPaper.replay(existing), existing.length, false);
+                return isSheetReady(notebookId);
             } catch (IOException e) {
                 Log.e(TAG, "ink log will not replay " + sheetId, e);
+                return false;
             }
-            return;
         }
         synchronized (lock) {
             if (dao.notebookLog(sheetId) != null) {
                 // The log is the source of truth, and its file is missing. Do not rebuild
                 // it from the pre-migration pages; a pull can put the log back.
                 LaunchLog.mark("ink log missing for " + sheetId + "; page files left as they are");
-                return;
+                return false;
             }
         }
         List<BoardEntity> rows;
@@ -2372,7 +2399,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         strokes = InkCodec.decode(bytes);
                     } catch (IOException e) {
                         Log.e(TAG, "page ink skipped in migration " + row.id, e);
-                        return;
+                        return false;
                     }
                 }
             }
@@ -2386,11 +2413,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             readBack = NotebookPaper.replay(built.bytes());
         } catch (IOException e) {
             Log.e(TAG, "migration log will not replay " + sheetId, e);
-            return;
+            return false;
         }
         if (!NotebookPaper.readsBack(sources, built) || !NotebookPaper.readsBack(sources, readBack)) {
             Log.e(TAG, "migration refused for " + sheetId + "; page files left untouched");
-            return;
+            return false;
         }
         byte[] bytes = built.bytes();
         try {
@@ -2398,18 +2425,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             byte[] onDisk = ink.readLog(sheetId);
             if (onDisk == null || !java.util.Arrays.equals(bytes, onDisk)) {
                 Log.e(TAG, "migration read-back mismatch " + sheetId);
-                return;
+                return false;
             }
             readBack = NotebookPaper.replay(onDisk);
         } catch (IOException e) {
             Log.e(TAG, "migration write failed " + sheetId, e);
-            return;
+            return false;
         }
         if (!NotebookPaper.readsBack(sources, readBack)) {
             Log.e(TAG, "migration disk read-back refused " + sheetId);
-            return;
+            return false;
         }
         installSheet(notebookId, sheetId, readBack, bytes.length, true);
+        return isSheetReady(notebookId);
     }
 
     private void installSheet(String notebookId, String sheetId, NotebookPaper paper, int flushed, boolean queue) {

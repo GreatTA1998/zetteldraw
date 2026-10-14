@@ -82,10 +82,14 @@ public final class CanvasActivity extends Activity {
     /**
      * Per-collection vertical scroll (prefs key {@code scroll_} + id). Survives
      * process death. First open (no key) still jumps to last page / last inked.
-     * See docs/notebook-navigation.md: remember via {@link #effectiveScrollY()},
-     * never a ScrollView that has not yet applied {@link #pendingScrollY}.
+     * Fingerprint keys ({@code scrollPages_} / {@code scrollPage_}) must match
+     * the Ready sheet on restore. See notebook-navigation.md: Ready-gate;
+     * remember via {@link #effectiveScrollY()}, never a ScrollView that has not
+     * yet applied {@link #pendingScrollY}.
      */
     private static final String PREF_SCROLL_PREFIX = "scroll_";
+    private static final String PREF_SCROLL_PAGES_PREFIX = "scrollPages_";
+    private static final String PREF_SCROLL_PAGE_PREFIX = "scrollPage_";
 
     private BoardRepository repository;
     private String collectionId = SCRATCHPAD;
@@ -878,10 +882,9 @@ public final class CanvasActivity extends Activity {
             inkView.clearHistory();
         }
         // Persist the collection we leave using the intended Y (pending apply wins).
-        // Skip only while a load for this collection has not yet shown — the
-        // ScrollView may still display a previous notebook's pages.
-        if (pagesLoaded && !loading()) {
-            rememberScroll(collectionId, effectiveScrollY());
+        // Only when that collection was Ready and shown — never from a partial load.
+        if (pagesLoaded && !loading() && collectionShownReady()) {
+            rememberScroll(collectionId, effectiveScrollY(), fingerprintOf(currentPages, effectiveScrollY()));
         }
         pagesLoaded = true;
         collectionId = id;
@@ -895,21 +898,29 @@ public final class CanvasActivity extends Activity {
 
     /** Saves the open list's scroll so a later return (or process death) can restore it. */
     private void rememberOpenScroll() {
-        if (!pagesLoaded || loading() || collectionId == null) {
+        if (!pagesLoaded || loading() || collectionId == null || !collectionShownReady()) {
             return;
         }
-        rememberScroll(collectionId, effectiveScrollY());
+        rememberScroll(collectionId, effectiveScrollY(), fingerprintOf(currentPages, effectiveScrollY()));
     }
 
     private void rememberScroll(String id, int scrollY) {
+        rememberScroll(id, scrollY, fingerprintOf(currentPages, scrollY));
+    }
+
+    private void rememberScroll(String id, int scrollY, ScrollFingerprint fingerprint) {
         if (id == null) {
             return;
         }
         int y = Math.max(0, scrollY);
         scrollByCollection.put(id, y);
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putInt(PREF_SCROLL_PREFIX + id, y)
-                .apply();
+        SharedPreferences.Editor edit = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putInt(PREF_SCROLL_PREFIX + id, y);
+        if (fingerprint != null && fingerprint.pageCount > 0 && fingerprint.pageId != null) {
+            edit.putInt(PREF_SCROLL_PAGES_PREFIX + id, fingerprint.pageCount)
+                    .putString(PREF_SCROLL_PAGE_PREFIX + id, fingerprint.pageId);
+        }
+        edit.apply();
     }
 
     /**
@@ -929,6 +940,94 @@ public final class CanvasActivity extends Activity {
         int saved = Math.max(0, prefs.getInt(key, 0));
         scrollByCollection.put(id, saved);
         return saved;
+    }
+
+    /** True when the on-screen list came from a Ready sheet (or true legacy boards). */
+    private boolean collectionShownReady() {
+        if (currentPages == null || currentPages.isEmpty()) {
+            return false;
+        }
+        String notebook = SCRATCHPAD.equals(collectionId) ? null : collectionId;
+        if (repository.isSheetReady(notebook)) {
+            return true;
+        }
+        // Pre-migration lists have no paper on boards.
+        return currentPages.get(0).paper == null;
+    }
+
+    private ScrollFingerprint fingerprintOf(List<Board> pages, int scrollY) {
+        if (pages == null || pages.isEmpty()) {
+            return null;
+        }
+        String pageId = pageIdAtScroll(pages, scrollY);
+        if (pageId == null) {
+            pageId = pages.get(pages.size() - 1).id;
+        }
+        return new ScrollFingerprint(pages.size(), pageId);
+    }
+
+    private String pageIdAtScroll(List<Board> pages, int scrollY) {
+        if (pages == null || pages.isEmpty()) {
+            return null;
+        }
+        int y = Math.max(0, scrollY);
+        int gap = layoutGap(pages);
+        int cursor = 0;
+        for (int i = 0; i < pages.size(); i++) {
+            int span = heightOf(pages.get(i)) + gap;
+            if (y < cursor + span || i == pages.size() - 1) {
+                return pages.get(i).id;
+            }
+            cursor += span;
+        }
+        return pages.get(pages.size() - 1).id;
+    }
+
+    private boolean fingerprintMatches(String id, List<Board> pages) {
+        if (id == null || pages == null || pages.isEmpty()) {
+            return false;
+        }
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        if (!prefs.contains(PREF_SCROLL_PAGES_PREFIX + id)
+                || !prefs.contains(PREF_SCROLL_PAGE_PREFIX + id)) {
+            // Pre-v78 memory: Y=0 on a multi-page Ready sheet is ambiguous (often the
+            // pending-ScrollView / truncated-list bug). Prefer first-open once; the
+            // next leave writes a real fingerprint. Non-zero Y must still fit.
+            Integer y = rememberedScroll(id);
+            if (y == null) {
+                return false;
+            }
+            if (y == 0 && pages.size() > 1) {
+                return false;
+            }
+            int max = 0;
+            int gap = layoutGap(pages);
+            for (int i = 0; i < pages.size(); i++) {
+                max += heightOf(pages.get(i)) + gap;
+            }
+            return y <= Math.max(0, max);
+        }
+        int savedCount = prefs.getInt(PREF_SCROLL_PAGES_PREFIX + id, -1);
+        String savedPage = prefs.getString(PREF_SCROLL_PAGE_PREFIX + id, null);
+        if (savedCount != pages.size() || savedPage == null) {
+            return false;
+        }
+        for (Board page : pages) {
+            if (savedPage.equals(page.id)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static final class ScrollFingerprint {
+        final int pageCount;
+        final String pageId;
+
+        ScrollFingerprint(int pageCount, String pageId) {
+            this.pageCount = pageCount;
+            this.pageId = pageId;
+        }
     }
 
     /**
@@ -968,6 +1067,7 @@ public final class CanvasActivity extends Activity {
             executor.execute(() -> {
             List<BoardRepository.NotebookInfo> notebooks;
             List<Board> pages;
+            boolean ready;
             long started = SystemClock.uptimeMillis();
             reading.set(started);
             try {
@@ -978,10 +1078,35 @@ public final class CanvasActivity extends Activity {
                         rebuildNotebookTabs(notebooks);
                     }
                 });
-                if (pageHeight > 0) {
-                    repository.ensureSheet(notebook, pageHeight, legacyPageHeight, shortPagesSince);
+                // Ready-gate: never call pages() for show while height is unknown
+                // (that used to return truncated Room rows, then show after layout).
+                if (pageHeight <= 0) {
+                    reading.set(-1);
+                    main.post(() -> onPagesLoaded(new Loaded(
+                            generation, id, keepScroll, notebooks, java.util.Collections.emptyList(), false)));
+                    return;
+                }
+                ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight, shortPagesSince);
+                if (!ready) {
+                    reading.set(-1);
+                    // Deleted notebook: ensureSheet fails; still post so UI can leave it.
+                    if (notebook != null && notebookByIdIn(notebooks, notebook) == null) {
+                        main.post(() -> onPagesLoaded(new Loaded(
+                                generation, id, keepScroll, notebooks,
+                                java.util.Collections.emptyList(), true)));
+                        return;
+                    }
+                    // Not Ready — do not show truncated Room rows; deadline retries.
+                    LaunchLog.mark("page list " + name + " sheet not ready (attempt " + (attempt + 1) + ")");
+                    return;
                 }
                 pages = repository.pages(notebook);
+                if (pages.isEmpty()) {
+                    reading.set(-1);
+                    LaunchLog.mark("page list " + name + " empty after Ready ensure (attempt "
+                            + (attempt + 1) + ")");
+                    return;
+                }
                 if (first) {
                     LaunchLog.mark("page list " + name + " read: " + pages.size() + " pages ("
                             + inked(pages) + " inked), " + notebooks.size() + " notebooks in "
@@ -994,7 +1119,7 @@ public final class CanvasActivity extends Activity {
                 return;
             }
             reading.set(-1);
-            main.post(() -> onPagesLoaded(new Loaded(generation, id, keepScroll, notebooks, pages)));
+            main.post(() -> onPagesLoaded(new Loaded(generation, id, keepScroll, notebooks, pages, true)));
             });
         } catch (RuntimeException e) {
             Log.e(TAG, "page list load could not start; the deadline retries it", e);
@@ -1068,7 +1193,8 @@ public final class CanvasActivity extends Activity {
             }
             return;
         }
-        if (pageHeight == 0) {
+        // Not Ready (height unknown or ensure pending): wait / retry — never show.
+        if (!loaded.ready || pageHeight == 0) {
             awaitingLayout = loaded;
             return;
         }
@@ -1079,30 +1205,32 @@ public final class CanvasActivity extends Activity {
         if (loaded.generation != loadGeneration || shownGeneration == loaded.generation) {
             return;
         }
-        // One intent → one target after the sheet is ready (notebook-navigation.md).
+        if (!loaded.ready || loaded.pages.isEmpty()) {
+            return;
+        }
+        // One intent → one target after the sheet is Ready (notebook-navigation.md).
         int target;
         if (loaded.keepScroll != null) {
             // Jump: page link, Move, or hold-place reload/reflow.
             target = loaded.keepScroll;
         } else {
             Integer remembered = rememberedScroll(loaded.id);
-            if (remembered != null) {
-                // Restore: return to where the user left.
+            if (remembered != null && fingerprintMatches(loaded.id, loaded.pages)) {
+                // Restore: return to where the user left (same page count + page id).
                 target = remembered;
             } else if (SCRATCHPAD.equals(loaded.id)) {
-                // First open: Scratchpad trailing blank.
+                // First open (or fingerprint mismatch): Scratchpad trailing blank.
                 target = 0;
                 for (int i = 0; i < loaded.pages.size() - 1; i++) {
                     target += heightOf(loaded.pages.get(i)) + layoutGap(loaded.pages);
                 }
             } else {
-                // First open: notebook last inked slice.
+                // First open (or fingerprint mismatch): notebook last inked slice.
                 target = lastInkOffset(loaded.pages);
             }
         }
-        // Persist the resolved intent before ScrollView layout applies it, so a
-        // leave/reflow in the pending window cannot store Y=0 as "visited".
-        rememberScroll(loaded.id, target);
+        // Persist the resolved intent + fingerprint before ScrollView layout applies it.
+        rememberScroll(loaded.id, target, fingerprintOf(loaded.pages, target));
         showPages(loaded.pages, target);
         syncNav();
         if (!firstListShown) {
@@ -1112,21 +1240,36 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    /** One finished background load. */
+    private static BoardRepository.NotebookInfo notebookByIdIn(
+            List<BoardRepository.NotebookInfo> notebooks, String id) {
+        if (notebooks == null || id == null) {
+            return null;
+        }
+        for (BoardRepository.NotebookInfo each : notebooks) {
+            if (each.id.equals(id)) {
+                return each;
+            }
+        }
+        return null;
+    }
+
+    /** One finished background load. {@code ready} means ensureSheet installed the sheet. */
     private static final class Loaded {
         final int generation;
         final String id;
         final Integer keepScroll;
         final List<BoardRepository.NotebookInfo> notebooks;
         final List<Board> pages;
+        final boolean ready;
 
         Loaded(int generation, String id, Integer keepScroll, List<BoardRepository.NotebookInfo> notebooks,
-               List<Board> pages) {
+               List<Board> pages, boolean ready) {
             this.generation = generation;
             this.id = id;
             this.keepScroll = keepScroll;
             this.notebooks = notebooks;
             this.pages = pages;
+            this.ready = ready;
         }
     }
 
@@ -1136,6 +1279,11 @@ public final class CanvasActivity extends Activity {
 
     private void reloadPages(int targetScrollY) {
         List<Board> pages = pagesIn(collectionId);
+        // Log-backed sheet vanished from cache mid-session — re-ensure, do not show [].
+        if (pages.isEmpty()) {
+            startLoad(collectionId, targetScrollY, false);
+            return;
+        }
         if (tryAppendTrailingBlank(pages, targetScrollY)) {
             return;
         }

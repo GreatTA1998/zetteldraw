@@ -151,8 +151,115 @@ public class ScratchpadNavigationTest {
         controller.pause().stop().destroy();
     }
 
+    @Test
+    public void scrollMidSwitchAndReturnKeepsFullPageCountAndRestoresY() {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        int height = seedDenseScratchpad(app, repo, 40);
+        app.getSharedPreferences("canvas", Context.MODE_PRIVATE)
+                .edit()
+                .remove("scroll_scratchpad")
+                .remove("scrollPages_scratchpad")
+                .remove("scrollPage_scratchpad")
+                .apply();
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+        idleForPaint();
+        relayout(root);
+
+        int beforeCount = repo.scratchpadPages().size();
+        assertTrue("dense Scratchpad must be multi-page, was " + beforeCount, beforeCount > 30);
+        assertNotNull(find(root, "1/" + beforeCount));
+
+        int midY = height * 15;
+        PageScroller scroller = (PageScroller) pageScroller(root);
+        scroller.scrollTo(0, midY);
+        idle();
+        assertEquals(midY, scroller.getScrollY());
+
+        assertTrue(find(root, "comedy").performClick());
+        idle();
+        idleForPaint();
+        relayout(root);
+
+        assertTrue(byDescription(root, "Scratchpad").get(0).performClick());
+        idle();
+        idleForPaint();
+        relayout(root);
+
+        int afterCount = repo.scratchpadPages().size();
+        assertEquals("return must keep full page count (no ~50→~23 collapse)", beforeCount, afterCount);
+        scroller = (PageScroller) pageScroller(root);
+        assertEquals("return restores mid scroll", midY, scroller.getScrollY());
+        assertNotNull(find(root, "1/" + afterCount));
+
+        controller.pause().stop().destroy();
+    }
+
+    @Test
+    public void switchDuringLoadDoesNotCommitTruncatedScratchpad() throws Exception {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        seedDenseScratchpad(app, repo, 36);
+        app.getSharedPreferences("canvas", Context.MODE_PRIVATE)
+                .edit()
+                .clear()
+                .apply();
+        ((RoomBoardRepository) repo).forgetSheetForTest(null);
+
+        // Gate the first loader task so we can switch notebooks while ensureSheet is pending.
+        java.util.concurrent.CountDownLatch gate = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.Executor real = java.util.concurrent.Executors.newSingleThreadExecutor();
+        UiExecutors.loader = task -> real.execute(() -> {
+            try {
+                gate.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            task.run();
+        });
+        UiExecutors.retryLoader = Runnable::run;
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        ShadowLooper.idleMainLooper();
+        // Tabs may appear before pages; switch away while Scratchpad load is gated.
+        TextView comedy = find(root, "comedy");
+        if (comedy != null) {
+            assertTrue(comedy.performClick());
+            ShadowLooper.idleMainLooper();
+        }
+        gate.countDown();
+        Thread.sleep(400);
+        ShadowLooper.idleMainLooper();
+        idleForPaint();
+        relayout(root);
+
+        // Return to Scratchpad after the gated load finished (possibly superseded).
+        List<View> scratch = byDescription(root, "Scratchpad");
+        assertFalse(scratch.isEmpty());
+        assertTrue(scratch.get(0).performClick());
+        idle();
+        idleForPaint();
+        relayout(root);
+
+        int count = repo.scratchpadPages().size();
+        assertTrue("switch mid-load must not leave truncated Scratchpad, was " + count, count > 30);
+        assertNotNull(find(root, "1/" + count));
+
+        controller.pause().stop().destroy();
+        UiExecutors.useSynchronousForTest();
+    }
+
     /** Multi-page Scratchpad with ink on pages 1–3 and a tear so slice count stays. */
     private static int seedMultiPageScratchpad(Application app, BoardRepository repo) {
+        return seedDenseScratchpad(app, repo, 3);
+    }
+
+    /** Many inked slices + tear so Ready projection stays large after cold ensure. */
+    private static int seedDenseScratchpad(Application app, BoardRepository repo, int inkedSlices) {
         ActivityController<CanvasActivity> probe = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = probe.get().getWindow().getDecorView();
         idle();
@@ -160,9 +267,12 @@ public class ScratchpadNavigationTest {
         int height = blank.slicePx;
         assertTrue(height > 40);
         blank.paper.appendStroke(TestStrokes.stroke(12f, 20f), blank.id);
-        blank.paper.appendStroke(TestStrokes.stroke(12f, height + 20f));
-        blank.paper.appendStroke(TestStrokes.stroke(12f, 2f * height + 20f));
-        blank.paper.tearDelete(1);
+        for (int i = 1; i < inkedSlices; i++) {
+            blank.paper.appendStroke(TestStrokes.stroke(12f, (float) i * height + 20f));
+        }
+        if (inkedSlices > 2) {
+            blank.paper.tearDelete(1);
+        }
         repo.saveInk(blank);
         idle();
         ((RoomBoardRepository) repo).forgetSheetForTest(null);
