@@ -20,6 +20,9 @@ public final class SyncClient {
     private static final int CONNECT_TIMEOUT_MS = 30_000;
     /** Long enough for a Render free instance to wake from sleep (~30-60 s) on the first request. */
     private static final int READ_TIMEOUT_MS = 90_000;
+    /** Scratchpad primary is ~17 MiB; slow Wi‑Fi + cold Render needs headroom. */
+    private static final int BLOB_READ_TIMEOUT_MS = 300_000;
+    private static final int BLOB_GET_ATTEMPTS = 3;
 
     private final SyncConfig config;
     private final int schemaVersion;
@@ -137,12 +140,35 @@ public final class SyncClient {
 
     /** Download a raw ink blob omitted from pull JSON (large notebook logs). */
     byte[] getBlob(String hash) throws IOException {
+        IOException last = null;
+        for (int attempt = 1; attempt <= BLOB_GET_ATTEMPTS; attempt++) {
+            try {
+                return getBlobOnce(hash);
+            } catch (Unauthorized | SchemaMismatch e) {
+                throw e;
+            } catch (IOException e) {
+                last = e;
+                if (attempt == BLOB_GET_ATTEMPTS) {
+                    break;
+                }
+                try {
+                    Thread.sleep(1_000L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+        throw last != null ? last : new IOException("GET /sync/blob/" + hash + " failed");
+    }
+
+    private byte[] getBlobOnce(String hash) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(
                 config.serverUrl + "/sync/blob/" + hash).openConnection();
         try {
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
+            conn.setReadTimeout(BLOB_READ_TIMEOUT_MS);
             conn.setRequestProperty("Authorization", "Bearer " + config.bearerToken());
             conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
             conn.setRequestProperty("Accept", "application/octet-stream");

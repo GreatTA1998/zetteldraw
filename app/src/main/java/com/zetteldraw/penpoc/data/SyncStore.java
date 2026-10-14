@@ -31,12 +31,20 @@ public interface SyncStore {
     void applyPull(PullPage page) throws IOException;
 
     /**
-     * On-disk ink-log byte length for {@code sheetId}, or {@code 0} if missing.
-     * Used by length reconcile so a longer cloud primary can still be adopted
-     * after the global pull cursor has skipped that log's rev.
+     * On-disk ink-log byte length for {@code sheetId}, or {@code 0} if the
+     * {@code .zdl} file is missing. Must not fall back to Room meta — a stale
+     * long {@code ink_bytes} row with a short/missing file would skip reconcile.
      */
     default long localInkLogBytes(String sheetId) {
         return 0L;
+    }
+
+    /**
+     * Sha256 of the on-disk ink log, or empty when the file is missing.
+     * Reconcile adopts when the cloud hash differs and remote bytes are not shorter.
+     */
+    default String localInkLogHash(String sheetId) {
+        return "";
     }
 
     void markSynced(long now);

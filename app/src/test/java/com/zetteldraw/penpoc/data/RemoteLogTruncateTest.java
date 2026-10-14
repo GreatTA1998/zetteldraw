@@ -195,6 +195,52 @@ public class RemoteLogTruncateTest {
     }
 
     @Test
+    public void localInkLogBytesIgnoresStaleRoomMetaWhenFileMissing() throws Exception {
+        String sheetId = NotebookPaper.sheetId(null);
+        NotebookLogEntity row = new NotebookLogEntity();
+        row.id = sheetId;
+        row.inkHash = "deadbeef";
+        row.inkBytes = 17_175_780;
+        row.sliceHeight = PAGE;
+        row.createdAt = device.clock.get();
+        row.updatedAt = device.clock.get();
+        row.rev = 387;
+        device.db.dao().upsertNotebookLog(row);
+        assertEquals("missing .zdl must report 0 so reconcile still fetches",
+                0L, repo.localInkLogBytes(sheetId));
+        assertEquals("", repo.localInkLogHash(sheetId));
+    }
+
+    @Test
+    public void longerRemoteBytesAdoptEvenWhenReadySliceCountConfused() throws Exception {
+        // Disk short; Ready open somehow reports equal/higher slices than remote —
+        // still adopt when remote blob is larger on disk (cloud primary).
+        byte[] shortBytes = shortLogBytes(22);
+        String sheetId = NotebookPaper.sheetId(null);
+        new InkFileStore(device.inkDir()).writeLog(sheetId, shortBytes);
+        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.localInkLogBytes(sheetId) < 1_000_000L);
+
+        byte[] longBytes = shortLogBytes(40);
+        NotebookLogEntity local = device.db.dao().notebookLog(sheetId);
+        assertNotNull(local);
+        NotebookLogEntity remote = local.copy();
+        remote.inkHash = InkFileStore.sha256(longBytes);
+        remote.inkBytes = longBytes.length;
+        remote.rev = Math.max(1, local.rev) + 5;
+        remote.updatedAt = local.updatedAt + 1;
+        SyncStore.PullPage pull = new SyncStore.PullPage();
+        pull.logs.add(remote);
+        pull.blobs.put(remote.inkHash, longBytes);
+        pull.cursor = remote.rev;
+        repo.applyPull(pull);
+
+        assertTrue(repo.scratchpadPages().size() >= 40);
+        assertEquals(longBytes.length, repo.localInkLogBytes(sheetId));
+        assertEquals(remote.inkHash, repo.localInkLogHash(sheetId));
+    }
+
+    @Test
     public void longerScratchpadPullDoesNotTouchOtherNotebookLog() throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
         Board blank = repo.scratchpadPages().get(0);

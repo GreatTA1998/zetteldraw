@@ -81,11 +81,22 @@ public final class SyncEngine {
                 result.restoredFromCloud = true;
             }
             if (!claimLiveWriter(result)) {
+                IOException pullError = null;
                 if (!neverSynced) {
-                    pull(result);
+                    try {
+                        pull(result);
+                    } catch (IOException e) {
+                        // Still reconcile: a failed large-blob pull must not skip
+                        // length heal for Scratchpad (v82 left devices at 23/23).
+                        pullError = e;
+                        Log.w(TAG, "pull failed; still reconciling longer logs", e);
+                        LaunchLog.mark("pull failed before reconcile: " + e.getMessage());
+                    }
                 }
-                // Pull-only devices still adopt longer cloud logs (per id).
                 reconcileLongerLogs(result);
+                if (pullError != null) {
+                    throw pullError;
+                }
                 return result;
             }
             if (neverSynced) {
@@ -95,11 +106,21 @@ public final class SyncEngine {
             // Nested parent_id repair (incl. rev>0 drift) is one-shot in SyncWorker.
             store.ensureUnsyncedQueued();
             push(result);
-            pull(result);
+            IOException pullError = null;
+            try {
+                pull(result);
+            } catch (IOException e) {
+                pullError = e;
+                Log.w(TAG, "pull failed; still reconciling longer logs", e);
+                LaunchLog.mark("pull failed before reconcile: " + e.getMessage());
+            }
             // Cursor pull only delivers rev > cursor. A truncated local log whose
             // cloud rev is already behind the cursor never reappears — reconcile
-            // by ink_bytes so longer cloud primaries still adopt (per log id only).
+            // by ink_bytes / hash so longer cloud primaries still adopt (per log id).
             reconcileLongerLogs(result);
+            if (pullError != null) {
+                throw pullError;
+            }
             // Only stamp last_ok_at when the outbox is empty. A sticky push
             // (forbidden / missing blob) must not look like "sync complete".
             if (store.outboxSize() == 0) {
@@ -218,10 +239,18 @@ public final class SyncEngine {
         JSONObject body;
         try {
             body = client.logHeads();
+        } catch (SyncClient.Unauthorized e) {
+            throw e;
+        } catch (SyncClient.SchemaMismatch e) {
+            throw e;
         } catch (IOException e) {
             // Older servers without the route must not fail the whole sync pass.
-            Log.w(TAG, "log-heads unavailable; skip length reconcile", e);
-            return;
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            if (msg.contains("404") || msg.contains(" -> 404")) {
+                Log.w(TAG, "log-heads unavailable; skip length reconcile", e);
+                return;
+            }
+            throw e;
         }
         JSONArray heads;
         try {
@@ -244,11 +273,19 @@ public final class SyncEngine {
                 continue;
             }
             long localBytes = store.localInkLogBytes(id);
-            if (remoteBytes <= localBytes) {
+            String localHash = store.localInkLogHash(id);
+            boolean sameHash = hash.equals(localHash);
+            // Never shorten via reconcile. Adopt when cloud is longer, or when
+            // byte length matches but the on-disk hash drifted from the primary.
+            if (remoteBytes < localBytes) {
+                continue;
+            }
+            if (remoteBytes == localBytes && sameHash) {
                 continue;
             }
             LaunchLog.mark("reconcile longer log " + id
-                    + " remoteBytes=" + remoteBytes + " localBytes=" + localBytes);
+                    + " remoteBytes=" + remoteBytes + " localBytes=" + localBytes
+                    + " hashMatch=" + sameHash);
             byte[] bytes = client.getBlob(hash);
             if (bytes == null || bytes.length == 0) {
                 throw new IOException("missing blob for longer log " + id);

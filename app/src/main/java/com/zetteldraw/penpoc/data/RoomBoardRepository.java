@@ -1285,15 +1285,27 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         try {
             byte[] existing = ink.readLog(sheetId);
-            if (existing != null) {
-                return existing.length;
-            }
+            return existing == null ? 0L : existing.length;
         } catch (IOException e) {
             Log.e(TAG, "local ink log size failed " + sheetId, e);
+            return 0L;
         }
-        synchronized (lock) {
-            NotebookLogEntity row = dao.notebookLog(sheetId);
-            return row == null || row.inkBytes < 0 ? 0L : row.inkBytes;
+    }
+
+    @Override
+    public String localInkLogHash(String sheetId) {
+        if (sheetId == null) {
+            return "";
+        }
+        try {
+            byte[] existing = ink.readLog(sheetId);
+            if (existing == null || existing.length == 0) {
+                return "";
+            }
+            return InkFileStore.sha256(existing);
+        } catch (IOException e) {
+            Log.e(TAG, "local ink log hash failed " + sheetId, e);
+            return "";
         }
     }
 
@@ -2073,7 +2085,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             NotebookPaper paper = NotebookPaper.replace(bytes);
             int localSlices = localReadySliceCountLocked(remote.id, open);
             int remoteSlices = paper.sliceCount();
-            if (LogLength.remoteShortens(localSlices, remoteSlices)) {
+            long diskBytes = localInkLogBytes(remote.id);
+            // Bytes win when the cloud primary is larger on disk than the local
+            // .zdl — recovers truncate even if Ready slice count is confused.
+            boolean remoteHasMoreBytes = bytes.length > diskBytes;
+            if (LogLength.remoteShortens(localSlices, remoteSlices) && !remoteHasMoreBytes) {
                 LaunchLog.mark("pull refused shorter log for " + remote.id
                         + " remoteSlices=" + remoteSlices
                         + " localSlices=" + localSlices);
@@ -2081,10 +2097,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 ensureLocalLogQueuedLocked(remote.id, open);
                 return;
             }
-            if (LogLength.remoteLengthens(localSlices, remoteSlices)) {
+            if (LogLength.remoteLengthens(localSlices, remoteSlices) || remoteHasMoreBytes) {
                 LaunchLog.mark("pull adopts longer log for " + remote.id
                         + " remoteSlices=" + remoteSlices
-                        + " localSlices=" + localSlices);
+                        + " localSlices=" + localSlices
+                        + " remoteBytes=" + bytes.length
+                        + " diskBytes=" + diskBytes);
                 installRemotePaperLocked(remote, paper, bytes, open, mirrorOps);
                 dao.upsertNotebookLog(remote);
                 dao.deleteOutbox(OutboxEntry.LOG, remote.id);
@@ -2141,6 +2159,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         } else {
             open.paper = paper;
             open.flushed = bytes.length;
+            open.generation++;
         }
         open.ready = true;
         for (Board board : cache.values()) {
@@ -2701,12 +2720,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return false;
         }
         byte[] all;
+        int generation;
         synchronized (lock) {
             OpenSheet open = sheets.get(sheetId);
             if (open == null || !open.ready) {
                 return false;
             }
             all = open.paper.bytes();
+            generation = open.generation;
         }
         try {
             ink.writeLog(sheetId, all);
@@ -2720,6 +2741,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             OpenSheet open = sheets.get(sheetId);
             if (open == null) {
                 return false;
+            }
+            // A pull/reconcile replaced paper while we held a stale snapshot —
+            // do not stamp short meta or leave the long disk overwritten without repair.
+            if (open.generation != generation) {
+                LaunchLog.mark("rewrite aborted; sheet generation advanced " + sheetId);
+                try {
+                    ink.writeLog(sheetId, open.paper.bytes());
+                    open.flushed = open.paper.bytes().length;
+                } catch (IOException e) {
+                    Log.e(TAG, "rewrite repair failed " + sheetId, e);
+                    return false;
+                }
+                return true;
             }
             open.flushed = all.length;
             NotebookLogEntity row = dao.notebookLog(sheetId);
@@ -2883,6 +2917,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         NotebookPaper paper;
         int flushed;
         boolean ready;
+        /** Bumped when {@link #paper} is replaced so stale rewrite/flush snapshots abort. */
+        int generation;
         /**
          * When true, {@link #flushSheetOrFalse} is a no-op. Set around
          * cross-notebook tear so a queued {@code saveInk} cannot persist the
