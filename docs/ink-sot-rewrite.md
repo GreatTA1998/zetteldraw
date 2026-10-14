@@ -19,10 +19,11 @@ Branch: `cursor/ink-sot-rewrite-8d38`. Tip **v84** until a coherent safer slice 
 
 `InkLogApply` (pure) → **`InkSheetStore`** (Ready + ensure + remote apply) → `SyncEngine.syncInkLogLengths`. `RoomBoardRepository` = projection / Move / meta. `CollectionNav` = scroll only.
 
-## Slice B + C (on branch; tip still v84)
+## Shipped tip v85 / 3.64
 
-- `InkSheetStore` + `Deps` — open / apply / length
-- `CollectionOpen` — UI bind Ready + scroll only; `CanvasActivity` uses it for snappy open + `showReady`
-- `CollectionNav` — purge legacy `trustPages_*` on construct
-- Tests: `InkLogApplyTest`, `RemoteLogTruncateTest`, `SheetReadyPagesTest`, `CollectionNavTest`, `CollectionOpenTest` (green with Android SDK)
-- Deleted `LogLengthTest` (predicates folded into `InkLogApplyTest`)
+- `InkSheetStore` + `InkLogApply` + `CollectionOpen` + trust purge
+- Post-tip: `InkLogSync` extracted from `SyncEngine` (length phase module)
+
+## Module sketch
+
+`InkLogApply` → `InkSheetStore` → `InkLogSync` / `SyncEngine` → `CollectionOpen` paint.

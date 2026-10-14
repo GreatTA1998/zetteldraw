@@ -4,14 +4,11 @@ import android.os.Build;
 import android.util.Log;
 
 import com.zetteldraw.penpoc.LaunchLog;
-import com.zetteldraw.penpoc.data.InkFileStore;
 import com.zetteldraw.penpoc.data.SyncStore;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 
-import org.json.JSONArray;
 import org.json.JSONException;
-import org.json.JSONObject;
 
 import java.io.File;
 import java.io.IOException;
@@ -37,6 +34,7 @@ public final class SyncEngine {
     private final SyncConfig config;
     private final int schemaVersion;
     private final LongSupplier clock;
+    private final InkLogSync inkLogSync;
 
     public SyncEngine(SyncStore store, SyncClient client, SyncConfig config, int schemaVersion, LongSupplier clock) {
         this.store = store;
@@ -44,6 +42,7 @@ public final class SyncEngine {
         this.config = config;
         this.schemaVersion = schemaVersion;
         this.clock = clock;
+        this.inkLogSync = new InkLogSync(store, client);
     }
 
     public static final class Result {
@@ -93,7 +92,7 @@ public final class SyncEngine {
                         LaunchLog.mark("pull failed before length sync: " + e.getMessage());
                     }
                 }
-                syncInkLogLengths(result);
+                runLengthSync(result);
                 if (pullError != null) {
                     throw pullError;
                 }
@@ -115,8 +114,8 @@ public final class SyncEngine {
                 LaunchLog.mark("pull failed before length sync: " + e.getMessage());
             }
             // Cursor pull only delivers rev > cursor. Length authority is per-id
-            // log-heads (ink_bytes / hash), not the global cursor.
-            syncInkLogLengths(result);
+            // via InkLogSync (log-heads), not the global cursor.
+            runLengthSync(result);
             if (pullError != null) {
                 throw pullError;
             }
@@ -229,102 +228,8 @@ public final class SyncEngine {
         }
     }
 
-    /**
-     * Length-sync phase: adopt cloud logs that are longer (by ink_bytes) than the
-     * on-disk file for the same log id. Not gated on cursor catch-up. Never
-     * shortens; never touches a different notebook's log. Cursor is left unchanged
-     * (synthetic page uses the current cursor).
-     */
-    private void syncInkLogLengths(Result result) throws IOException {
-        JSONObject body;
-        try {
-            body = client.logHeads();
-        } catch (SyncClient.Unauthorized e) {
-            throw e;
-        } catch (SyncClient.SchemaMismatch e) {
-            throw e;
-        } catch (IOException e) {
-            // Older servers without the route must not fail the whole sync pass.
-            String msg = e.getMessage() == null ? "" : e.getMessage();
-            if (msg.contains("404") || msg.contains(" -> 404")) {
-                Log.w(TAG, "log-heads unavailable; skip ink log length sync", e);
-                return;
-            }
-            throw e;
-        }
-        JSONArray heads;
-        try {
-            heads = body.getJSONArray("logs");
-        } catch (JSONException e) {
-            throw new IOException("bad log-heads response", e);
-        }
-        int adopted = 0;
-        for (int i = 0; i < heads.length(); i++) {
-            JSONObject head;
-            try {
-                head = heads.getJSONObject(i);
-            } catch (JSONException e) {
-                throw new IOException("bad log-heads row", e);
-            }
-            String id = head.optString("id", "");
-            String hash = head.optString("ink_hash", "");
-            long remoteBytes = head.optLong("ink_bytes", -1L);
-            if (id.isEmpty() || hash.isEmpty() || remoteBytes < 0) {
-                continue;
-            }
-            long localBytes = store.localInkLogBytes(id);
-            String localHash = store.localInkLogHash(id);
-            boolean sameHash = hash.equals(localHash);
-            // Never shorten via length sync. Adopt when cloud is longer, or when
-            // byte length matches but the on-disk hash drifted from the primary.
-            if (remoteBytes < localBytes) {
-                continue;
-            }
-            if (remoteBytes == localBytes && sameHash) {
-                continue;
-            }
-            LaunchLog.mark("length sync longer log " + id
-                    + " remoteBytes=" + remoteBytes + " localBytes=" + localBytes
-                    + " hashMatch=" + sameHash);
-            byte[] bytes = client.getBlob(hash);
-            if (bytes == null || bytes.length == 0) {
-                throw new IOException("missing blob for longer log " + id);
-            }
-            if (!InkFileStore.sha256(bytes).equals(hash)) {
-                throw new IOException("bad blob hash for longer log " + id);
-            }
-            NotebookLogEntity remote = new NotebookLogEntity();
-            remote.id = id;
-            remote.notebookId = optNullString(head, "notebook_id");
-            remote.inkHash = hash;
-            remote.inkBytes = remoteBytes;
-            remote.sliceHeight = head.optInt("slice_height", 0);
-            remote.createdAt = head.optLong("created_at", 0L);
-            remote.updatedAt = head.optLong("updated_at", 0L);
-            remote.rev = head.optLong("rev", 0L);
-            remote.deletedAt = null;
-            remote.conflictOf = null;
-            SyncStore.PullPage page = new SyncStore.PullPage();
-            page.logs.add(remote);
-            page.blobs.put(hash, bytes);
-            // Keep cursor: this is not a rev-stream advance.
-            page.cursor = store.pullCursor();
-            page.hasMore = false;
-            store.applyPull(page);
-            adopted++;
-        }
-        if (adopted > 0) {
-            result.pulledNotebooks += adopted;
-            LaunchLog.mark("length sync adopted " + adopted + " longer log(s)");
-        }
-    }
-
-    private static String optNullString(JSONObject o, String key) {
-        if (o.isNull(key)) {
-            return null;
-        }
-        String v = o.optString(key, "");
-        return v.isEmpty() ? null : v;
+    private void runLengthSync(Result result) throws IOException {
+        result.pulledNotebooks += inkLogSync.syncLengths();
     }
 
     /** Pull JSON omits large Base64 blobs; fetch them raw before applyPull. */
