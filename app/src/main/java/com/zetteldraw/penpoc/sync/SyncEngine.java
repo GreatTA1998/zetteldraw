@@ -86,14 +86,14 @@ public final class SyncEngine {
                     try {
                         pull(result);
                     } catch (IOException e) {
-                        // Still reconcile: a failed large-blob pull must not skip
-                        // length heal for Scratchpad (v82 left devices at 23/23).
+                        // Length sync is a separate phase: cursor pull failure must
+                        // not skip per-id longer-log adoption.
                         pullError = e;
-                        Log.w(TAG, "pull failed; still reconciling longer logs", e);
-                        LaunchLog.mark("pull failed before reconcile: " + e.getMessage());
+                        Log.w(TAG, "pull failed; still running ink log length sync", e);
+                        LaunchLog.mark("pull failed before length sync: " + e.getMessage());
                     }
                 }
-                reconcileLongerLogs(result);
+                syncInkLogLengths(result);
                 if (pullError != null) {
                     throw pullError;
                 }
@@ -111,13 +111,12 @@ public final class SyncEngine {
                 pull(result);
             } catch (IOException e) {
                 pullError = e;
-                Log.w(TAG, "pull failed; still reconciling longer logs", e);
-                LaunchLog.mark("pull failed before reconcile: " + e.getMessage());
+                Log.w(TAG, "pull failed; still running ink log length sync", e);
+                LaunchLog.mark("pull failed before length sync: " + e.getMessage());
             }
-            // Cursor pull only delivers rev > cursor. A truncated local log whose
-            // cloud rev is already behind the cursor never reappears — reconcile
-            // by ink_bytes / hash so longer cloud primaries still adopt (per log id).
-            reconcileLongerLogs(result);
+            // Cursor pull only delivers rev > cursor. Length authority is per-id
+            // log-heads (ink_bytes / hash), not the global cursor.
+            syncInkLogLengths(result);
             if (pullError != null) {
                 throw pullError;
             }
@@ -231,11 +230,12 @@ public final class SyncEngine {
     }
 
     /**
-     * Adopt cloud logs that are longer (by ink_bytes) than the on-disk file for
-     * the same log id. Never shortens; never touches a different notebook's log.
-     * Cursor is left unchanged (synthetic page uses the current cursor).
+     * Length-sync phase: adopt cloud logs that are longer (by ink_bytes) than the
+     * on-disk file for the same log id. Not gated on cursor catch-up. Never
+     * shortens; never touches a different notebook's log. Cursor is left unchanged
+     * (synthetic page uses the current cursor).
      */
-    private void reconcileLongerLogs(Result result) throws IOException {
+    private void syncInkLogLengths(Result result) throws IOException {
         JSONObject body;
         try {
             body = client.logHeads();
@@ -247,7 +247,7 @@ public final class SyncEngine {
             // Older servers without the route must not fail the whole sync pass.
             String msg = e.getMessage() == null ? "" : e.getMessage();
             if (msg.contains("404") || msg.contains(" -> 404")) {
-                Log.w(TAG, "log-heads unavailable; skip length reconcile", e);
+                Log.w(TAG, "log-heads unavailable; skip ink log length sync", e);
                 return;
             }
             throw e;

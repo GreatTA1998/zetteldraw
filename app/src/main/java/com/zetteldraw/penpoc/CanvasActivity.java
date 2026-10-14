@@ -81,9 +81,10 @@ public final class CanvasActivity extends Activity {
     /** Pages created before this device first ran v10 may keep the old full-window height. */
     private static final String SHORT_PAGES_SINCE = "short_pages_since";
     /**
-     * Scroll intent + trusted page-count snapshots live in {@link CollectionNav}.
-     * Remember via {@link #effectiveScrollY()}, never a ScrollView that has not
-     * yet applied {@link #pendingScrollY}. See notebook-nav-correctness.md.
+     * Scroll intent lives in {@link CollectionNav} (Y only — not page count).
+     * Length SoT is Ready ink-log via the repository. Remember via
+     * {@link #effectiveScrollY()}, never a ScrollView that has not yet applied
+     * {@link #pendingScrollY}. See docs/ink-sot-rewrite.md.
      */
     private BoardRepository repository;
     private CollectionNav collectionNav;
