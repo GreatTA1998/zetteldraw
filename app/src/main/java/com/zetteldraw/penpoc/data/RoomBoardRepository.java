@@ -45,6 +45,10 @@ import java.util.function.LongSupplier;
  * held for short metadata work: no ink encoding, no fsync'd data write, no
  * mirror I/O and no network happens while it is held.
  *
+ * <p>Ink-log <em>open / remote apply / length</em> live in {@link InkSheetStore}
+ * (+ {@link InkLogApply}). This class keeps board projection, Move/tear, and
+ * meta sync.
+ *
  * <p>Ink saves are write-behind. {@link #saveInk} takes an immutable snapshot
  * of the page's strokes and returns; one serialized writer thread encodes it,
  * writes and fsyncs a staged file without the lock, then commits (rename +
@@ -100,8 +104,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private final LinkedHashMap<String, byte[]> mirrorQueue = new LinkedHashMap<>();
     private boolean mirrorDraining;
 
-    /** Open notebook logs, keyed by sheet id. The pen appends; it does not rewrite them. */
-    private final HashMap<String, OpenSheet> sheets = new HashMap<>();
+    /**
+     * Ink-log sheet SoT (Ready + remote apply + length). Move/tear still use
+     * {@link InkSheetStore.OpenSheet} under {@link #lock}.
+     */
+    private final InkSheetStore sheetStore;
     private int knownPageHeight;
     private int knownLegacyHeight;
     private long knownShortPagesSince;
@@ -142,6 +149,43 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     + " pages (" + inked + " inked), outbox " + dao.outboxCount() + ", sync cursor "
                     + (state == null ? "none" : state.cursor));
         }
+        this.sheetStore = new InkSheetStore(new SheetDeps());
+    }
+
+    /** Bridge for {@link InkSheetStore} — keeps Room/outbox/mirror in this class. */
+    private final class SheetDeps implements InkSheetStore.Deps {
+        @Override public Object lock() { return RoomBoardRepository.this.lock; }
+        @Override public ZettelDao dao() { return RoomBoardRepository.this.dao; }
+        @Override public ZettelDatabase db() { return RoomBoardRepository.this.db; }
+        @Override public InkFileStore ink() { return RoomBoardRepository.this.ink; }
+        @Override public LongSupplier clock() { return RoomBoardRepository.this.clock; }
+        @Override public boolean pendingLog(String sheetId) {
+            return pendingLocked(OutboxEntry.LOG, sheetId);
+        }
+        @Override public void queueLogUpsert(String sheetId) {
+            queueLocked(OutboxEntry.LOG, sheetId, OutboxEntry.UPSERT);
+        }
+        @Override public void mirrorLog(String sheetId, byte[] bytes) {
+            RoomBoardRepository.this.mirrorLog(sheetId, bytes);
+        }
+        @Override
+        public List<NotebookPaper.SourcePage> migrationSources(
+                String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
+            return migrationSourcesForSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
+        }
+        @Override
+        public void bindPaperToBoards(String sheetId, NotebookPaper paper) {
+            for (Board board : cache.values()) {
+                if (sheetId.equals(board.sheetId)) {
+                    board.paper = paper;
+                }
+            }
+            for (Board blank : trailingBlanks.values()) {
+                if (sheetId.equals(blank.sheetId)) {
+                    blank.paper = paper;
+                }
+            }
+        }
     }
 
     // region BoardRepository
@@ -165,7 +209,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * <p>When an ink log exists (on-disk {@code .zdl} <em>or</em> a
      * {@code notebook_logs} row), the ink log is the source of truth: this
      * returns an empty list until {@link #ensureSheet} has installed a Ready
-     * {@link OpenSheet}. Room board rows must not be shown in that window — they
+     * {@link InkSheetStore.OpenSheet}. Room board rows must not be shown in that window — they
      * lag paper extends and were the ~50→~23 collapse path.
      */
     @Override
@@ -173,7 +217,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         notebookReads.incrementAndGet();
         String sheetId = NotebookPaper.sheetId(notebookId);
         synchronized (lock) {
-            OpenSheet sheet = sheets.get(sheetId);
+            InkSheetStore.OpenSheet sheet = sheetStore.get(sheetId);
             if (sheet != null && sheet.ready) {
                 return projectLocked(notebookId, sheet.paper);
             }
@@ -194,7 +238,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 }
                 // A log may have appeared while we decoded; never fall through.
                 if (isLogBackedLocked(sheetId)) {
-                    OpenSheet sheet = sheets.get(sheetId);
+                    InkSheetStore.OpenSheet sheet = sheetStore.get(sheetId);
                     if (sheet != null && sheet.ready) {
                         return projectLocked(notebookId, sheet.paper);
                     }
@@ -220,16 +264,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     /** Row or on-disk file — either means BoardEntity length is not SoT. */
     private boolean isLogBackedLocked(String sheetId) {
-        NotebookLogEntity row = dao.notebookLog(sheetId);
-        return (row != null && row.deletedAt == null) || ink.hasLog(sheetId);
+        return sheetStore.isLogBacked(sheetId);
     }
 
     @Override
     public boolean isSheetReady(String notebookId) {
-        synchronized (lock) {
-            OpenSheet sheet = sheets.get(NotebookPaper.sheetId(notebookId));
-            return sheet != null && sheet.ready;
-        }
+        return sheetStore.isSheetReady(notebookId);
     }
 
     private List<BoardEntity> uncachedInkLocked(List<BoardEntity> rows) {
@@ -537,7 +577,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             ensureSheet(destNotebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
         }
         synchronized (lock) {
-            OpenSheet dest = sheets.get(destSheetId);
+            InkSheetStore.OpenSheet dest = sheetStore.get(destSheetId);
             int sourceIndex = moving.paper.indexOfSliceId(boardId);
             if (dest == null || !dest.ready || sourceIndex < 0
                     || !moving.paper.containsInk(sourceIndex)) {
@@ -644,8 +684,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      */
     private void assertMoveLandedOrLog(String pageId, String destNotebookId, String sourceNotebookId) {
         synchronized (lock) {
-            OpenSheet dest = sheets.get(NotebookPaper.sheetId(destNotebookId));
-            OpenSheet source = sheets.get(NotebookPaper.sheetId(sourceNotebookId));
+            InkSheetStore.OpenSheet dest = sheetStore.get(NotebookPaper.sheetId(destNotebookId));
+            InkSheetStore.OpenSheet source = sheetStore.get(NotebookPaper.sheetId(sourceNotebookId));
             boolean onDest = dest != null && dest.ready && dest.paper.indexOfSliceId(pageId) >= 0;
             boolean onSource = source != null && source.ready && source.paper.indexOfSliceId(pageId) >= 0;
             if (!onDest || onSource) {
@@ -733,7 +773,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return;
         }
         synchronized (lock) {
-            OpenSheet open = sheets.get(sheetId);
+            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
             if (open == null) {
                 return;
             }
@@ -773,7 +813,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
             }
             synchronized (lock) {
-                OpenSheet dest = sheets.get(NotebookPaper.sheetId(notebookId));
+                InkSheetStore.OpenSheet dest = sheetStore.get(NotebookPaper.sheetId(notebookId));
                 int sourceIndex = moving.paper.indexOfSliceId(boardId);
                 if (dest != null && dest.ready && sourceIndex >= 0
                         && moving.paper.containsInk(sourceIndex)) {
@@ -1280,16 +1320,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public long localInkLogBytes(String sheetId) {
-        if (sheetId == null) {
-            return 0L;
-        }
-        try {
-            byte[] existing = ink.readLog(sheetId);
-            return existing == null ? 0L : existing.length;
-        } catch (IOException e) {
-            Log.e(TAG, "local ink log size failed " + sheetId, e);
-            return 0L;
-        }
+        return sheetStore.localInkLogBytes(sheetId);
     }
 
     @Override
@@ -1949,8 +1980,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         if (boardId == null) {
             return false;
         }
-        for (Map.Entry<String, OpenSheet> entry : sheets.entrySet()) {
-            OpenSheet sheet = entry.getValue();
+        for (Map.Entry<String, InkSheetStore.OpenSheet> entry : sheetStore.entrySet()) {
+            InkSheetStore.OpenSheet sheet = entry.getValue();
             if (!sheet.ready || sheet.paper == null) {
                 continue;
             }
@@ -2044,181 +2075,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * A pulled log replaces the notebook's log whole. It does not splice strokes
-     * and it does not delete the pre-migration page files.
-     *
-     * <p>All outcomes go through {@link InkLogApply#decide} — there is no path that
-     * overwrites a longer local primary with a shorter remote body.
+     * Remote ink-log apply — delegated to {@link InkSheetStore} (InkLogApply).
+     * Caller holds {@link #lock}.
      */
     private void applyRemoteLogLocked(NotebookLogEntity remote, Map<String, byte[]> logBytes,
                                       List<Runnable> mirrorOps) throws IOException {
-        NotebookLogEntity local = dao.notebookLog(remote.id);
-        if (local != null && local.deletedAt != null) {
-            local = null;
-        }
-        OpenSheet open = sheets.get(remote.id);
-        // Register meta for identity only — never queue. Queuing on heal stamped a
-        // truncated disk as push-SoT and blocked longer remotes via LWW (stuck 23).
-        if (remote.conflictOf == null
-                && local == null && open != null && open.ready && open.paper != null) {
-            local = ensureNotebookLogMetaLocked(open, open.paper.bytes(), false);
-        }
-
-        boolean conflictCopy = remote.conflictOf != null;
-        boolean hasBody = !conflictCopy && remote.deletedAt == null && remote.inkHash != null;
-        byte[] bytes = null;
-        NotebookPaper paper = null;
-        int localSlices = -1;
-        int remoteSlices = -1;
-        long diskBytes = 0L;
-        if (conflictCopy) {
-            bytes = logBytes.remove(remote.id);
-        } else if (hasBody) {
-            bytes = logBytes.remove(remote.id);
-            if (bytes == null) {
-                throw new IOException("bad ink log for " + remote.id);
-            }
-            paper = NotebookPaper.replace(bytes);
-            localSlices = localReadySliceCountLocked(remote.id, open);
-            remoteSlices = paper.sliceCount();
-            diskBytes = localInkLogBytes(remote.id);
-        }
-
-        boolean holdFlush = open != null && open.ready && open.holdFlush;
-        boolean unflushed = open != null && open.ready && open.paper != null
-                && open.paper.bytes().length > open.flushed;
-        InkLogApply.Facts facts = new InkLogApply.Facts(
-                conflictCopy,
-                remote.deletedAt != null,
-                hasBody,
-                localSlices,
-                remoteSlices,
-                diskBytes,
-                bytes == null ? 0L : bytes.length,
-                local == null ? null : local.rev,
-                remote.rev,
-                holdFlush,
-                unflushed,
-                pendingLocked(OutboxEntry.LOG, remote.id),
-                local == null ? 0L : local.updatedAt,
-                remote.updatedAt);
-        InkLogApply.Decision decision = InkLogApply.decide(facts);
-
-        switch (decision) {
-            case SHELVE_CONFLICT_COPY:
-                if (bytes != null) {
-                    ink.writeLog(remote.id, bytes);
-                    byte[] copy = bytes;
-                    mirrorOps.add(() -> mirrorLog(remote.id, copy));
-                }
-                dao.upsertNotebookLog(remote);
-                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
-                return;
-            case REFUSE_SHORTER:
-                LaunchLog.mark("pull refused shorter log for " + remote.id
-                        + " remoteSlices=" + remoteSlices
-                        + " localSlices=" + localSlices);
-                shelfShorterRemoteLogLocked(remote, bytes, mirrorOps);
-                ensureLocalLogQueuedLocked(remote.id, open);
-                return;
-            case ADOPT_LONGER:
-                LaunchLog.mark("pull adopts longer log for " + remote.id
-                        + " remoteSlices=" + remoteSlices
-                        + " localSlices=" + localSlices
-                        + " remoteBytes=" + bytes.length
-                        + " diskBytes=" + diskBytes);
-                installRemotePaperLocked(remote, paper, bytes, open, mirrorOps);
-                dao.upsertNotebookLog(remote);
-                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
-                return;
-            case SKIP_REV:
-            case SKIP_HOLD_FLUSH:
-            case SKIP_UNFLUSHED:
-            case SKIP_PENDING_NEWER:
-                return;
-            case LWW_REPLACE:
-                installRemotePaperLocked(remote, paper, bytes, open, mirrorOps);
-                dao.upsertNotebookLog(remote);
-                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
-                return;
-            case UPSERT_META_ONLY:
-                dao.upsertNotebookLog(remote);
-                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
-                return;
-            default:
-                throw new IllegalStateException("unhandled InkLogApply decision " + decision);
-        }
-    }
-
-    private void installRemotePaperLocked(NotebookLogEntity remote, NotebookPaper paper, byte[] bytes,
-                                          OpenSheet open, List<Runnable> mirrorOps) throws IOException {
-        ink.writeLog(remote.id, bytes);
-        mirrorOps.add(() -> mirrorLog(remote.id, bytes));
-        if (open == null) {
-            open = new OpenSheet(remote.id, remote.notebookId, paper, bytes.length);
-            sheets.put(remote.id, open);
-        } else {
-            open.paper = paper;
-            open.flushed = bytes.length;
-            open.generation++;
-        }
-        open.ready = true;
-        for (Board board : cache.values()) {
-            if (remote.id.equals(board.sheetId)) {
-                board.paper = paper;
-            }
-        }
-        for (Board blank : trailingBlanks.values()) {
-            if (remote.id.equals(blank.sheetId)) {
-                blank.paper = paper;
-            }
-        }
-    }
-
-    /**
-     * Slice count of the Ready open sheet, else of the on-disk log after replay.
-     * {@code -1} when neither is available.
-     */
-    private int localReadySliceCountLocked(String sheetId, OpenSheet open) {
-        if (open != null && open.ready && open.paper != null) {
-            return open.paper.sliceCount();
-        }
-        try {
-            byte[] existing = ink.readLog(sheetId);
-            if (existing == null || existing.length == 0) {
-                return -1;
-            }
-            return NotebookPaper.replay(existing).sliceCount();
-        } catch (IOException e) {
-            Log.e(TAG, "local log slice count failed " + sheetId, e);
-            return -1;
-        }
-    }
-
-    private void shelfShorterRemoteLogLocked(NotebookLogEntity remote, byte[] remoteBytes,
-                                            List<Runnable> mirrorOps) throws IOException {
-        NotebookLogEntity copy = remote.copy();
-        copy.id = UUID.randomUUID().toString();
-        copy.conflictOf = remote.id;
-        copy.rev = 0;
-        copy.deletedAt = null;
-        ink.writeLog(copy.id, remoteBytes);
-        String id = copy.id;
-        byte[] bytes = remoteBytes;
-        mirrorOps.add(() -> mirrorLog(id, bytes));
-        dao.upsertNotebookLog(copy);
-        queueLocked(OutboxEntry.LOG, copy.id, OutboxEntry.UPSERT);
-    }
-
-    private void ensureLocalLogQueuedLocked(String sheetId, OpenSheet open) {
-        if (open != null && open.ready && open.paper != null) {
-            ensureNotebookLogMetaLocked(open, open.paper.bytes(), true);
-            return;
-        }
-        NotebookLogEntity row = dao.notebookLog(sheetId);
-        if (row != null && row.conflictOf == null && row.deletedAt == null) {
-            queueLocked(OutboxEntry.LOG, sheetId, OutboxEntry.UPSERT);
-        }
+        sheetStore.applyRemoteLogLocked(remote, logBytes, mirrorOps);
     }
 
     private void applyRemoteLinkLocked(PageLinkEntity remote) {
@@ -2460,9 +2322,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * disk. Test / reload helper — not a length SoT.
      */
     public void invalidateOpenSheet(String notebookId) {
-        synchronized (lock) {
-            sheets.remove(NotebookPaper.sheetId(notebookId));
-        }
+        sheetStore.invalidate(notebookId);
     }
 
     /** @deprecated Prefer {@link #invalidateOpenSheet}. */
@@ -2478,7 +2338,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      */
     public void markSheetFlushedForTest(String notebookId) {
         synchronized (lock) {
-            OpenSheet open = sheets.get(NotebookPaper.sheetId(notebookId));
+            InkSheetStore.OpenSheet open = sheetStore.get(NotebookPaper.sheetId(notebookId));
             if (open != null && open.ready && open.paper != null) {
                 open.flushed = open.paper.bytes().length;
             }
@@ -2494,44 +2354,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         knownPageHeight = pageHeight;
         knownLegacyHeight = legacyPageHeight;
         knownShortPagesSince = shortPagesSince;
-        String sheetId = NotebookPaper.sheetId(notebookId);
-        synchronized (lock) {
-            OpenSheet open = sheets.get(sheetId);
-            if (open != null && open.ready) {
-                return true;
-            }
-            if (notebookId != null) {
-                NotebookEntity notebook = dao.notebook(notebookId);
-                if (notebook == null || notebook.deletedAt != null) {
-                    return false;
-                }
-            }
-        }
-        byte[] existing;
-        try {
-            existing = ink.readLog(sheetId);
-        } catch (IOException e) {
-            Log.e(TAG, "ink log unreadable " + sheetId, e);
-            return false;
-        }
-        if (existing != null) {
-            try {
-                logReplays.incrementAndGet();
-                installSheet(notebookId, sheetId, NotebookPaper.replay(existing), existing.length, false);
-                return isSheetReady(notebookId);
-            } catch (IOException e) {
-                Log.e(TAG, "ink log will not replay " + sheetId, e);
-                return false;
-            }
-        }
-        synchronized (lock) {
-            if (dao.notebookLog(sheetId) != null) {
-                // The log is the source of truth, and its file is missing. Do not rebuild
-                // it from the pre-migration pages; a pull can put the log back.
-                LaunchLog.mark("ink log missing for " + sheetId + "; page files left as they are");
-                return false;
-            }
-        }
+        return sheetStore.ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
+    }
+
+    /**
+     * Legacy page-file sources for first-time {@code .zdl} migration. Null aborts
+     * migration (decode failure). Empty list is a blank notebook.
+     */
+    private List<NotebookPaper.SourcePage> migrationSourcesForSheet(
+            String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
         List<BoardEntity> rows;
         synchronized (lock) {
             rows = new ArrayList<>(rowsLocked(notebookId));
@@ -2540,7 +2371,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 rows.remove(rows.size() - 1);
             }
         }
-        logReplays.incrementAndGet();
         ArrayList<NotebookPaper.SourcePage> sources = new ArrayList<>();
         for (BoardEntity row : rows) {
             if (row.conflictOf != null) {
@@ -2554,7 +2384,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         strokes = InkCodec.decode(bytes);
                     } catch (IOException e) {
                         Log.e(TAG, "page ink skipped in migration " + row.id, e);
-                        return false;
+                        return null;
                     }
                 }
             }
@@ -2562,102 +2392,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     row.createdAt, strokes, pageHeight, legacyPageHeight, shortPagesSince);
             sources.add(new NotebookPaper.SourcePage(row.id, height, strokes));
         }
-        NotebookPaper built = NotebookPaper.migrate(sources, pageHeight);
-        NotebookPaper readBack;
-        try {
-            readBack = NotebookPaper.replay(built.bytes());
-        } catch (IOException e) {
-            Log.e(TAG, "migration log will not replay " + sheetId, e);
-            return false;
-        }
-        if (!NotebookPaper.readsBack(sources, built) || !NotebookPaper.readsBack(sources, readBack)) {
-            Log.e(TAG, "migration refused for " + sheetId + "; page files left untouched");
-            return false;
-        }
-        byte[] bytes = built.bytes();
-        try {
-            ink.writeLog(sheetId, bytes);
-            byte[] onDisk = ink.readLog(sheetId);
-            if (onDisk == null || !java.util.Arrays.equals(bytes, onDisk)) {
-                Log.e(TAG, "migration read-back mismatch " + sheetId);
-                return false;
-            }
-            readBack = NotebookPaper.replay(onDisk);
-        } catch (IOException e) {
-            Log.e(TAG, "migration write failed " + sheetId, e);
-            return false;
-        }
-        if (!NotebookPaper.readsBack(sources, readBack)) {
-            Log.e(TAG, "migration disk read-back refused " + sheetId);
-            return false;
-        }
-        installSheet(notebookId, sheetId, readBack, bytes.length, true);
-        return isSheetReady(notebookId);
-    }
-
-    private void installSheet(String notebookId, String sheetId, NotebookPaper paper, int flushed, boolean queue) {
-        synchronized (lock) {
-            OpenSheet open = new OpenSheet(sheetId, notebookId, paper, flushed);
-            open.ready = true;
-            sheets.put(sheetId, open);
-            byte[] bytes;
-            try {
-                bytes = ink.readLog(sheetId);
-            } catch (IOException e) {
-                return;
-            }
-            if (bytes == null) {
-                bytes = paper.bytes();
-            }
-            // Always register notebook_logs when Ready so pull has a local row.
-            // Never queue solely because the row was missing — that stamped a
-            // truncated disk as push-SoT (v80 stuck-at-23). Queue only when the
-            // caller asked (migration / explicit local edit path).
-            ensureNotebookLogMetaLocked(open, bytes, queue);
-            if (queue && bytes != null) {
-                mirrorLog(sheetId, bytes);
-            }
-        }
-    }
-
-    /**
-     * Upserts live {@code notebook_logs} metadata for an open sheet. Queues an
-     * outbox UPSERT only when {@code queue} is true — never merely because the
-     * row is new.
-     */
-    private NotebookLogEntity ensureNotebookLogMetaLocked(OpenSheet open, byte[] bytes, boolean queue) {
-        if (open == null || open.paper == null) {
-            return null;
-        }
-        long now = clock.getAsLong();
-        NotebookLogEntity row = dao.notebookLog(open.sheetId);
-        if (row == null) {
-            row = new NotebookLogEntity();
-            row.id = open.sheetId;
-            row.notebookId = open.notebookId;
-            row.createdAt = now;
-            row.rev = 0;
-        }
-        row.inkHash = bytes == null ? null : InkFileStore.sha256(bytes);
-        row.inkBytes = bytes == null ? 0 : bytes.length;
-        row.sliceHeight = open.paper.sliceHeight;
-        // Only bump updatedAt when queueing a real local claim; a silent meta
-        // heal must not outrank a longer server log on the next pull.
-        if (queue) {
-            row.updatedAt = Math.max(row.updatedAt, now);
-        } else if (row.updatedAt == 0L) {
-            row.updatedAt = now;
-        }
-        row.deletedAt = null;
-        row.conflictOf = null;
-        NotebookLogEntity stored = row;
-        db.runInTransaction(() -> {
-            dao.upsertNotebookLog(stored);
-            if (queue) {
-                queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
-            }
-        });
-        return stored;
+        return sources;
     }
 
     private List<Board> projectLocked(String notebookId, NotebookPaper paper) {
@@ -2723,7 +2458,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         byte[] all;
         int generation;
         synchronized (lock) {
-            OpenSheet open = sheets.get(sheetId);
+            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
             if (open == null || !open.ready) {
                 return false;
             }
@@ -2739,7 +2474,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         String hash = InkFileStore.sha256(all);
         synchronized (lock) {
-            OpenSheet open = sheets.get(sheetId);
+            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
             if (open == null) {
                 return false;
             }
@@ -2808,7 +2543,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return;
         }
         synchronized (lock) {
-            OpenSheet open = sheets.get(sheetId);
+            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
             if (open != null) {
                 open.holdFlush = true;
             }
@@ -2820,7 +2555,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return;
         }
         synchronized (lock) {
-            OpenSheet open = sheets.get(sheetId);
+            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
             if (open != null) {
                 open.holdFlush = false;
             }
@@ -2835,7 +2570,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         byte[] suffix;
         int flushed;
         synchronized (lock) {
-            OpenSheet open = sheets.get(sheetId);
+            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
             if (open == null || !open.ready) {
                 return false;
             }
@@ -2870,7 +2605,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         String hash = InkFileStore.sha256(all);
         synchronized (lock) {
-            OpenSheet open = sheets.get(sheetId);
+            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
             if (open == null) {
                 return false;
             }
@@ -2910,29 +2645,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 mirror.writeLog(sheetId, bytes);
             }
         });
-    }
-
-    private static final class OpenSheet {
-        final String sheetId;
-        final String notebookId;
-        NotebookPaper paper;
-        int flushed;
-        boolean ready;
-        /** Bumped when {@link #paper} is replaced so stale rewrite/flush snapshots abort. */
-        int generation;
-        /**
-         * When true, {@link #flushSheetOrFalse} is a no-op. Set around
-         * cross-notebook tear so a queued {@code saveInk} cannot persist the
-         * source tear before the destination commit.
-         */
-        boolean holdFlush;
-
-        OpenSheet(String sheetId, String notebookId, NotebookPaper paper, int flushed) {
-            this.sheetId = sheetId;
-            this.notebookId = notebookId;
-            this.paper = paper;
-            this.flushed = flushed;
-        }
     }
 
     private static final class PendingInk {
