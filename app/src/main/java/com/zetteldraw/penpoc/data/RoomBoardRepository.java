@@ -2016,11 +2016,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * A pulled log replaces the notebook's log whole. It does not splice strokes
      * and it does not delete the pre-migration page files.
      *
-     * <p>Never shortens a Ready local sheet (or a longer on-disk log) to a
-     * fewer-slice remote — that was the ~49→~23 collapse when
-     * {@code notebook_logs} was missing after {@code installSheet(..., false)}
-     * and pull skipped every LWW guard. Shorter remotes are shelved as
-     * conflict copies; local ink stays authoritative and is queued for push.
+     * <p><b>Length is monotonic</b> ({@link LogLength}): a fewer-slice remote never
+     * overwrites Ready/disk; a <em>longer</em> remote always installs — even when a
+     * pending short local meta row has a newer {@code updated_at}. That recovers
+     * devices whose {@code .zdl} was truncated (v79 hole / v80 meta-queue lock-in)
+     * while the server still holds the full log. Equal-length ties keep LWW /
+     * holdFlush / unflushed guards.
      */
     private void applyRemoteLogLocked(NotebookLogEntity remote, Map<String, byte[]> logBytes,
                                       List<Runnable> mirrorOps) throws IOException {
@@ -2040,20 +2041,62 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             local = null;
         }
         OpenSheet open = sheets.get(remote.id);
-        // Disk/Ready install used to skip creating notebook_logs. Heal that so
-        // LWW guards always run, and so "local == null" cannot mean "remote wins".
+        // Register meta for identity only — never queue. Queuing on heal stamped a
+        // truncated disk as push-SoT and blocked longer remotes via LWW (stuck 23).
         if (local == null && open != null && open.ready && open.paper != null) {
-            local = ensureNotebookLogMetaLocked(open, open.paper.bytes(), true);
+            local = ensureNotebookLogMetaLocked(open, open.paper.bytes(), false);
         }
-        if (local != null) {
+        if (remote.deletedAt == null && remote.inkHash != null) {
+            byte[] bytes = logBytes.remove(remote.id);
+            if (bytes == null) {
+                throw new IOException("bad ink log for " + remote.id);
+            }
+            NotebookPaper paper = NotebookPaper.replace(bytes);
+            int localSlices = localReadySliceCountLocked(remote.id, open);
+            int remoteSlices = paper.sliceCount();
+            if (LogLength.remoteShortens(localSlices, remoteSlices)) {
+                LaunchLog.mark("pull refused shorter log for " + remote.id
+                        + " remoteSlices=" + remoteSlices
+                        + " localSlices=" + localSlices);
+                shelfShorterRemoteLogLocked(remote, bytes, mirrorOps);
+                ensureLocalLogQueuedLocked(remote.id, open);
+                return;
+            }
+            if (LogLength.remoteLengthens(localSlices, remoteSlices)) {
+                LaunchLog.mark("pull adopts longer log for " + remote.id
+                        + " remoteSlices=" + remoteSlices
+                        + " localSlices=" + localSlices);
+                installRemotePaperLocked(remote, paper, bytes, open, mirrorOps);
+                dao.upsertNotebookLog(remote);
+                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
+                return;
+            }
+            // Equal slice count: LWW / in-flight local edit guards.
+            if (local != null) {
+                if (remote.rev <= local.rev) {
+                    return;
+                }
+                // Cross-notebook place/move holds flushes while memory is torn but
+                // disk is not. Dest rewrite often shrinks the log below flushed, so
+                // the unflushed-bytes check alone would not skip — and a pull that
+                // replaced dest here would let persist tear the source with no page
+                // on dest.
+                if (open != null && open.ready && open.holdFlush) {
+                    return;
+                }
+                if (open != null && open.ready && open.paper.bytes().length > open.flushed) {
+                    return;
+                }
+                if (pendingLocked(OutboxEntry.LOG, remote.id)
+                        && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
+                    return;
+                }
+            }
+            installRemotePaperLocked(remote, paper, bytes, open, mirrorOps);
+        } else if (local != null) {
             if (remote.rev <= local.rev) {
                 return;
             }
-            // Cross-notebook place/move holds flushes while memory is torn but
-            // disk is not. Dest rewrite often shrinks the log below flushed, so
-            // the unflushed-bytes check alone would not skip — and a pull that
-            // replaced dest here would let persist tear the source with no page
-            // on dest.
             if (open != null && open.ready && open.holdFlush) {
                 return;
             }
@@ -2065,44 +2108,32 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 return;
             }
         }
-        if (remote.deletedAt == null && remote.inkHash != null) {
-            byte[] bytes = logBytes.remove(remote.id);
-            if (bytes == null) {
-                throw new IOException("bad ink log for " + remote.id);
-            }
-            NotebookPaper paper = NotebookPaper.replace(bytes);
-            int localSlices = localReadySliceCountLocked(remote.id, open);
-            if (localSlices >= 0 && paper.sliceCount() < localSlices) {
-                LaunchLog.mark("pull refused shorter log for " + remote.id
-                        + " remoteSlices=" + paper.sliceCount()
-                        + " localSlices=" + localSlices);
-                shelfShorterRemoteLogLocked(remote, bytes, mirrorOps);
-                ensureLocalLogQueuedLocked(remote.id, open);
-                return;
-            }
-            ink.writeLog(remote.id, bytes);
-            mirrorOps.add(() -> mirrorLog(remote.id, bytes));
-            if (open == null) {
-                open = new OpenSheet(remote.id, remote.notebookId, paper, bytes.length);
-                sheets.put(remote.id, open);
-            } else {
-                open.paper = paper;
-                open.flushed = bytes.length;
-            }
-            open.ready = true;
-            for (Board board : cache.values()) {
-                if (remote.id.equals(board.sheetId)) {
-                    board.paper = paper;
-                }
-            }
-            for (Board blank : trailingBlanks.values()) {
-                if (remote.id.equals(blank.sheetId)) {
-                    blank.paper = paper;
-                }
-            }
-        }
         dao.upsertNotebookLog(remote);
         dao.deleteOutbox(OutboxEntry.LOG, remote.id);
+    }
+
+    private void installRemotePaperLocked(NotebookLogEntity remote, NotebookPaper paper, byte[] bytes,
+                                          OpenSheet open, List<Runnable> mirrorOps) throws IOException {
+        ink.writeLog(remote.id, bytes);
+        mirrorOps.add(() -> mirrorLog(remote.id, bytes));
+        if (open == null) {
+            open = new OpenSheet(remote.id, remote.notebookId, paper, bytes.length);
+            sheets.put(remote.id, open);
+        } else {
+            open.paper = paper;
+            open.flushed = bytes.length;
+        }
+        open.ready = true;
+        for (Board board : cache.values()) {
+            if (remote.id.equals(board.sheetId)) {
+                board.paper = paper;
+            }
+        }
+        for (Board blank : trailingBlanks.values()) {
+            if (remote.id.equals(blank.sheetId)) {
+                blank.paper = paper;
+            }
+        }
     }
 
     /**
@@ -2539,10 +2570,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (bytes == null) {
                 bytes = paper.bytes();
             }
-            // Always register notebook_logs when Ready, even for disk replay
-            // (queue=false). Missing meta let pull skip LWW and overwrite Ready.
-            boolean queueMeta = queue || dao.notebookLog(sheetId) == null;
-            ensureNotebookLogMetaLocked(open, bytes, queueMeta);
+            // Always register notebook_logs when Ready so pull has a local row.
+            // Never queue solely because the row was missing — that stamped a
+            // truncated disk as push-SoT (v80 stuck-at-23). Queue only when the
+            // caller asked (migration / explicit local edit path).
+            ensureNotebookLogMetaLocked(open, bytes, queue);
             if (queue && bytes != null) {
                 mirrorLog(sheetId, bytes);
             }
@@ -2550,9 +2582,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Upserts live {@code notebook_logs} metadata for an open sheet. When
-     * {@code queue} is true (or the row is new), schedules an outbox UPSERT so
-     * a longer local log can win on the server.
+     * Upserts live {@code notebook_logs} metadata for an open sheet. Queues an
+     * outbox UPSERT only when {@code queue} is true — never merely because the
+     * row is new.
      */
     private NotebookLogEntity ensureNotebookLogMetaLocked(OpenSheet open, byte[] bytes, boolean queue) {
         if (open == null || open.paper == null) {
@@ -2560,7 +2592,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         long now = clock.getAsLong();
         NotebookLogEntity row = dao.notebookLog(open.sheetId);
-        boolean created = row == null;
         if (row == null) {
             row = new NotebookLogEntity();
             row.id = open.sheetId;
@@ -2571,14 +2602,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         row.inkHash = bytes == null ? null : InkFileStore.sha256(bytes);
         row.inkBytes = bytes == null ? 0 : bytes.length;
         row.sliceHeight = open.paper.sliceHeight;
-        row.updatedAt = Math.max(row.updatedAt, now);
+        // Only bump updatedAt when queueing a real local claim; a silent meta
+        // heal must not outrank a longer server log on the next pull.
+        if (queue) {
+            row.updatedAt = Math.max(row.updatedAt, now);
+        } else if (row.updatedAt == 0L) {
+            row.updatedAt = now;
+        }
         row.deletedAt = null;
         row.conflictOf = null;
         NotebookLogEntity stored = row;
-        boolean doQueue = queue || created;
         db.runInTransaction(() -> {
             dao.upsertNotebookLog(stored);
-            if (doQueue) {
+            if (queue) {
                 queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
             }
         });

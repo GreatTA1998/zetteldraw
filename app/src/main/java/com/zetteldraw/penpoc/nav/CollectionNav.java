@@ -8,11 +8,16 @@ import java.util.HashMap;
 import java.util.List;
 
 /**
- * Sole owner of per-collection scroll intent and trusted page-count snapshots.
+ * Sole owner of per-collection <em>scroll</em> intent (Jump → Restore → First-open).
  *
- * <p>CanvasActivity may paint a collection only from a Ready ink-log projection
- * or from a snapshot previously {@linkplain #commitTrusted committed} here.
- * Room {@code BoardEntity} row counts never enter this module.
+ * <p><b>Not</b> the source of truth for page count. Length comes only from the
+ * Ready ink-log ({@code .zdl} → {@code NotebookPaper.sliceCount} + trailing-blank
+ * projection in the repository). Prefs must never gate or freeze how many pages
+ * the UI may paint — that was the v80 trap that normalized a truncated 23-page
+ * Scratchpad after a short disk install.
+ *
+ * <p>CanvasActivity paints Ready {@code pages()} (or waits until Ready). This
+ * module only answers where to scroll once that list is already chosen.
  *
  * <p>See docs/notebook-nav-correctness.md (agent store).
  */
@@ -20,65 +25,22 @@ public final class CollectionNav {
     public static final String PREF_SCROLL_PREFIX = "scroll_";
     public static final String PREF_SCROLL_PAGES_PREFIX = "scrollPages_";
     public static final String PREF_SCROLL_PAGE_PREFIX = "scrollPage_";
+
+    /** Legacy v80 key — cleared on {@link #clear} so old trusts cannot linger. */
     public static final String PREF_TRUST_PAGES_PREFIX = "trustPages_";
 
     private final SharedPreferences prefs;
     private final HashMap<String, Integer> scrollByCollection = new HashMap<>();
-    private final HashMap<String, Integer> trustedPageCount = new HashMap<>();
 
     public CollectionNav(SharedPreferences prefs) {
         this.prefs = prefs;
     }
 
-    /** Last painted Ready page count for this collection, or null if never trusted. */
-    public Integer trustedCount(String collectionId) {
-        if (collectionId == null) {
-            return null;
-        }
-        Integer memory = trustedPageCount.get(collectionId);
-        if (memory != null) {
-            return memory;
-        }
-        String key = PREF_TRUST_PAGES_PREFIX + collectionId;
-        if (!prefs.contains(key)) {
-            return null;
-        }
-        int n = prefs.getInt(key, -1);
-        if (n <= 0) {
-            return null;
-        }
-        trustedPageCount.put(collectionId, n);
-        return n;
-    }
-
-    /**
-     * True when {@code pageCount} would shrink below a previously trusted Ready
-     * list. Callers must refuse show / reconcile in that case.
-     */
-    public boolean rejectsShorter(String collectionId, int pageCount) {
-        Integer trusted = trustedCount(collectionId);
-        return trusted != null && pageCount < trusted;
-    }
-
-    /**
-     * Record a Ready (or Ready-reconciled) list the UI actually painted.
-     * Structural local edits that legitimately shrink the list must call this
-     * with the new count after the edit.
-     */
-    public void commitTrusted(String collectionId, int pageCount, int scrollY, String anchorPageId) {
-        if (collectionId == null || pageCount <= 0) {
-            return;
-        }
-        trustedPageCount.put(collectionId, pageCount);
-        prefs.edit().putInt(PREF_TRUST_PAGES_PREFIX + collectionId, pageCount).apply();
-        rememberScroll(collectionId, scrollY, pageCount, anchorPageId);
-    }
-
-    public void clearTrusted(String collectionId) {
+    /** Drop scroll (+ any legacy trust mark) when a notebook is deleted. */
+    public void clear(String collectionId) {
         if (collectionId == null) {
             return;
         }
-        trustedPageCount.remove(collectionId);
         scrollByCollection.remove(collectionId);
         prefs.edit()
                 .remove(PREF_TRUST_PAGES_PREFIX + collectionId)
@@ -99,6 +61,8 @@ public final class CollectionNav {
             edit.putInt(PREF_SCROLL_PAGES_PREFIX + collectionId, pageCount)
                     .putString(PREF_SCROLL_PAGE_PREFIX + collectionId, anchorPageId);
         }
+        // Drop leftover v80 length-trust so it cannot affect a later install.
+        edit.remove(PREF_TRUST_PAGES_PREFIX + collectionId);
         edit.apply();
     }
 
@@ -154,8 +118,8 @@ public final class CollectionNav {
     }
 
     /**
-     * Jump → Restore (fingerprint) → First open. {@code pages} must already be a
-     * Ready projection (or trusted reconcile) the caller is willing to paint.
+     * Jump → Restore (fingerprint) → First open. {@code pages} must already be the
+     * Ready list the caller is painting (repository SoT).
      */
     public int resolveTargetY(String collectionId, Integer keepScroll, List<Board> pages,
                               boolean scratchpad, PageLayout layout) {

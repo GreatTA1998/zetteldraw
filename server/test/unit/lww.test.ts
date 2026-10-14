@@ -145,6 +145,28 @@ describe("resolveLog", () => {
     expect(lost.copy?.ink_hash).toBe(HASH_B);
     expect(lost.copy?.ink_bytes).toBe(80);
   });
+
+  it("refuses a shorter live incoming even with a newer clock or matching base_rev", () => {
+    const existing = log({ rev: 9, ink_bytes: 17_000_000, ink_hash: HASH_A, updated_at: 100 });
+    const { rev: _rev, ...shortRow } = log({
+      ink_hash: HASH_B,
+      ink_bytes: 500_000,
+      updated_at: 999_999,
+    });
+    const refused = resolveLog(existing, { ...shortRow, base_rev: 9 }, newId);
+    expect(refused.status).toBe("conflict_lost");
+    expect(refused.write).toBeNull();
+    expect(refused.restamp).toBe(true);
+    expect(refused.copy).toMatchObject({
+      conflict_of: ID,
+      ink_hash: HASH_B,
+      ink_bytes: 500_000,
+    });
+
+    const refusedLww = resolveLog(existing, { ...shortRow, base_rev: 4 }, newId);
+    expect(refusedLww.status).toBe("conflict_lost");
+    expect(refusedLww.write).toBeNull();
+  });
 });
 
 describe("resolveNotebook", () => {

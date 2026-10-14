@@ -883,20 +883,14 @@ public final class CanvasActivity extends Activity {
         collectionId = id;
         syncNav();
         // Snappy path: sheet already Ready in memory — paint on the main thread.
-        // No pen-hold / loader hop (Ready-gate wait tax on every switch).
+        // Page count SoT is Ready paper only (CollectionNav is scroll, not length).
         String notebook = SCRATCHPAD.equals(id) ? null : id;
         if (pageHeight > 0 && repository.isSheetReady(notebook)) {
             List<Board> pages = repository.pages(notebook);
-            if (!pages.isEmpty() && !collectionNav.rejectsShorter(id, pages.size())) {
+            if (!pages.isEmpty()) {
                 ++loadGeneration;
                 showReady(id, pages, keepScroll);
                 return;
-            }
-            if (!pages.isEmpty() && collectionNav.rejectsShorter(id, pages.size())) {
-                LaunchLog.mark("page list " + label(id) + " Ready shorter than trusted; re-ensure from disk");
-                if (repository instanceof RoomBoardRepository) {
-                    ((RoomBoardRepository) repository).invalidateOpenSheet(notebook);
-                }
             }
         }
         // Cold / not Ready: load off the main thread; old pages stay up with pen held.
@@ -1128,13 +1122,6 @@ public final class CanvasActivity extends Activity {
         if (!loaded.ready || loaded.pages.isEmpty()) {
             return;
         }
-        // Fresh ensureSheet just read disk — disk wins over a stale trust mark
-        // (e.g. after a pre-fix pull already rewrote .zdl). commitTrusted updates.
-        if (collectionNav.rejectsShorter(loaded.id, loaded.pages.size())) {
-            LaunchLog.mark("page list " + label(loaded.id) + " disk shorter than prior trust ("
-                    + loaded.pages.size() + " < " + collectionNav.trustedCount(loaded.id)
-                    + "); accepting disk SoT");
-        }
         showReady(loaded.id, loaded.pages, loaded.keepScroll);
         if (!firstListShown) {
             firstListShown = true;
@@ -1144,14 +1131,14 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Paint a Ready (or trusted-reconciled) page list. Sole UI commit path for
-     * collection pages — resolves scroll via {@link CollectionNav} and commits trust.
+     * Paint a Ready page list. Length comes from the repository; scroll intent
+     * from {@link CollectionNav}.
      */
     private void showReady(String id, List<Board> pages, Integer keepScroll) {
         int target = collectionNav.resolveTargetY(
                 id, keepScroll, pages, SCRATCHPAD.equals(id), pageLayout());
         String anchor = collectionNav.anchorPageId(pages, target, pageLayout());
-        collectionNav.commitTrusted(id, pages.size(), target, anchor);
+        collectionNav.rememberScroll(id, target, pages.size(), anchor);
         showPages(pages, target);
         syncNav();
     }
@@ -1200,18 +1187,12 @@ public final class CanvasActivity extends Activity {
             startLoad(collectionId, targetScrollY, false);
             return;
         }
-        // Never paint a sudden shrink over a trusted Ready list (BoardEntity / bad cache).
-        if (collectionNav.rejectsShorter(collectionId, pages.size())) {
-            LaunchLog.mark("reload refused shorter than trusted for " + label(collectionId));
-            startLoad(collectionId, targetScrollY, false);
-            return;
-        }
         if (tryAppendTrailingBlank(pages, targetScrollY)) {
             return;
         }
         ++loadGeneration;
         String anchor = collectionNav.anchorPageId(pages, targetScrollY, pageLayout());
-        collectionNav.commitTrusted(collectionId, pages.size(), targetScrollY, anchor);
+        collectionNav.rememberScroll(collectionId, targetScrollY, pages.size(), anchor);
         showPages(pages, targetScrollY);
     }
 
@@ -2093,8 +2074,7 @@ public final class CanvasActivity extends Activity {
         ++loadGeneration;
         int scroll = index < 0 ? effectiveScrollY() : target;
         String anchor = collectionNav.anchorPageId(pages, scroll, pageLayout());
-        // Local delete legitimately shrinks the list — refresh trust mark.
-        collectionNav.commitTrusted(collectionId, pages.size(), scroll, anchor);
+        collectionNav.rememberScroll(collectionId, scroll, pages.size(), anchor);
         showPages(pages, scroll);
     }
 
@@ -2445,7 +2425,7 @@ public final class CanvasActivity extends Activity {
         onTap(delete, v -> {
             dismissOverlay();
             repository.deleteNotebook(id);
-            collectionNav.clearTrusted(id);
+            collectionNav.clear(id);
             int cut = trail.indexOf(id);
             if (cut >= 0) {
                 trail.subList(cut, trail.size()).clear();

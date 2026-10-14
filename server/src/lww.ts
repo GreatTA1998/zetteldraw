@@ -154,8 +154,28 @@ function needsLogCopy(loser: Omit<LogRow, "rev">, winner: Omit<LogRow, "rev">): 
 }
 
 /**
+ * True when a live incoming log would shrink the live primary by ink_bytes.
+ * Length is monotonic: truncated clients must not clobber a longer cloud log.
+ */
+function incomingShrinksLog(existing: LogRow, incoming: Omit<LogRow, "rev">): boolean {
+  if (existing.deleted_at !== null || incoming.deleted_at !== null) {
+    return false;
+  }
+  if (existing.ink_hash === null || incoming.ink_hash === null) {
+    return false;
+  }
+  if (existing.ink_hash === incoming.ink_hash) {
+    return false;
+  }
+  return incoming.ink_bytes < existing.ink_bytes;
+}
+
+/**
  * Last-write-wins for a whole notebook log. The loser is shelved entire.
  * Nothing here splits a stroke.
+ *
+ * <p>A shorter live incoming log never replaces a longer live primary — the
+ * short copy is shelved and the primary is kept (client gets a restamp).
  */
 export function resolveLog(
   existing: LogRow | null,
@@ -163,6 +183,12 @@ export function resolveLog(
   newId: () => string,
 ): Decision<LogRow> {
   const row = stripBase(incoming);
+  if (existing !== null && incomingShrinksLog(existing, row)) {
+    const copy = needsLogCopy(row, existing)
+      ? { ...withoutLogRev(row), id: newId(), conflict_of: existing.id, deleted_at: null }
+      : null;
+    return { status: "conflict_lost", write: null, restamp: true, copy };
+  }
   if (existing === null || incoming.base_rev === existing.rev) {
     return { status: "applied", write: row, restamp: false, copy: null };
   }

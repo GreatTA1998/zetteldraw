@@ -48,17 +48,9 @@ public class CollectionNavTest {
     }
 
     @Test
-    public void rejectsShorterThanTrusted() {
-        nav.commitTrusted("scratchpad", 49, 4000, "page-41");
-        assertTrue(nav.rejectsShorter("scratchpad", 23));
-        assertFalse(nav.rejectsShorter("scratchpad", 49));
-        assertFalse(nav.rejectsShorter("scratchpad", 50));
-    }
-
-    @Test
     public void restoreUsesFingerprint() {
         List<Board> pages = pages(5);
-        nav.commitTrusted("scratchpad", 5, 200, pages.get(2).id);
+        nav.rememberScroll("scratchpad", 200, 5, pages.get(2).id);
         int y = nav.resolveTargetY("scratchpad", null, pages, true, layout);
         assertEquals(200, y);
     }
@@ -66,10 +58,32 @@ public class CollectionNavTest {
     @Test
     public void fingerprintMismatchFallsBackToFirstOpenTrailingBlank() {
         List<Board> pages = pages(5);
-        nav.commitTrusted("scratchpad", 5, 350, pages.get(2).id);
+        nav.rememberScroll("scratchpad", 350, 5, pages.get(2).id);
         List<Board> shorter = pages(3);
         int y = nav.resolveTargetY("scratchpad", null, shorter, true, layout);
         assertEquals("count mismatch ⇒ first-open trailing blank, not stale Y", 200, y);
+    }
+
+    @Test
+    public void clearRemovesLegacyTrustKey() {
+        android.content.SharedPreferences prefs = ApplicationProvider.getApplicationContext()
+                .getSharedPreferences("canvas-nav-clear", Context.MODE_PRIVATE);
+        prefs.edit().putInt(CollectionNav.PREF_TRUST_PAGES_PREFIX + "scratchpad", 23).apply();
+        CollectionNav local = new CollectionNav(prefs);
+        local.clear("scratchpad");
+        assertFalse(prefs.contains(CollectionNav.PREF_TRUST_PAGES_PREFIX + "scratchpad"));
+    }
+
+    @Test
+    public void rememberScrollDropsLegacyTrust() {
+        android.content.SharedPreferences prefs = ApplicationProvider.getApplicationContext()
+                .getSharedPreferences("canvas-nav-drop-trust", Context.MODE_PRIVATE);
+        prefs.edit().putInt(CollectionNav.PREF_TRUST_PAGES_PREFIX + "scratchpad", 23).apply();
+        CollectionNav local = new CollectionNav(prefs);
+        local.rememberScroll("scratchpad", 10, 39, "p0");
+        assertFalse("length trust must not survive paint",
+                prefs.contains(CollectionNav.PREF_TRUST_PAGES_PREFIX + "scratchpad"));
+        assertTrue(prefs.contains(CollectionNav.PREF_SCROLL_PREFIX + "scratchpad"));
     }
 
     private static List<Board> pages(int n) {

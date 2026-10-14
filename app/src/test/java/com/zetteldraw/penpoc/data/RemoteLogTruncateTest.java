@@ -130,6 +130,70 @@ public class RemoteLogTruncateTest {
         assertFalse(device.db.dao().conflictLogCopies().isEmpty());
     }
 
+    @Test
+    public void diskReplayDoesNotQueueTruncatedLogForPush() throws Exception {
+        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        Board blank = repo.scratchpadPages().get(0);
+        for (int i = 0; i < 6; i++) {
+            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+        }
+        repo.saveInk(blank);
+        for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
+            Thread.sleep(20);
+        }
+        String sheetId = NotebookPaper.sheetId(null);
+        device.db.dao().deleteOutbox(OutboxEntry.LOG, sheetId);
+        device.db.dao().deleteNotebookLog(sheetId);
+        repo.invalidateOpenSheet(null);
+        int before = repo.outboxSize();
+        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertNotNull(device.db.dao().notebookLog(sheetId));
+        assertEquals("meta heal must not enqueue truncated disk as push SoT",
+                before, repo.outboxSize());
+    }
+
+    @Test
+    public void longerRemoteRecoversTruncatedLocalDespitePendingNewerMeta() throws Exception {
+        // Device stuck at short Ready (v79 truncate) with a queued meta row whose
+        // updatedAt beats the server — v80 left this frozen at 23 forever.
+        byte[] shortBytes = shortLogBytes(22);
+        String sheetId = NotebookPaper.sheetId(null);
+        new InkFileStore(device.inkDir()).writeLog(sheetId, shortBytes);
+        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        int shortPages = repo.scratchpadPages().size();
+        assertTrue(shortPages < 30);
+
+        NotebookLogEntity local = device.db.dao().notebookLog(sheetId);
+        assertNotNull(local);
+        local.updatedAt = device.clock.get() + 1_000_000L;
+        device.db.dao().upsertNotebookLog(local);
+        device.db.dao().deleteOutbox(OutboxEntry.LOG, sheetId);
+        OutboxEntry pending = new OutboxEntry();
+        pending.entity = OutboxEntry.LOG;
+        pending.id = sheetId;
+        pending.op = OutboxEntry.UPSERT;
+        pending.queuedAt = device.clock.get();
+        device.db.dao().upsertOutbox(pending);
+
+        byte[] longBytes = shortLogBytes(40);
+        NotebookLogEntity remote = local.copy();
+        remote.inkHash = InkFileStore.sha256(longBytes);
+        remote.inkBytes = longBytes.length;
+        remote.rev = Math.max(1, local.rev) + 10;
+        remote.updatedAt = local.updatedAt - 500_000L; // older clock than pending local
+        SyncStore.PullPage pull = new SyncStore.PullPage();
+        pull.logs.add(remote);
+        pull.blobs.put(remote.inkHash, longBytes);
+        pull.cursor = remote.rev;
+        repo.applyPull(pull);
+
+        int recovered = repo.scratchpadPages().size();
+        assertTrue("longer remote must recover truncated Ready (" + shortPages
+                        + " → " + recovered + ")",
+                recovered > shortPages);
+        assertTrue(recovered >= 40);
+    }
+
     private int seedDenseScratchpad(int inkedSlices) throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
         Board blank = repo.scratchpadPages().get(0);
