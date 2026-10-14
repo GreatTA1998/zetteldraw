@@ -9,7 +9,7 @@ import {
 } from "./accounts.js";
 import { AuthService, issueAccessToken, type AuthPrincipal } from "./auth.js";
 import type { InkStorage } from "./storage.js";
-import { pull, push, sha256Hex, type SyncScope } from "./sync.js";
+import { logHeads, pull, push, sha256Hex, type SyncScope } from "./sync.js";
 import type { Thumbnailer } from "./thumbs.js";
 import { BadRequest, parsePushBody } from "./validate.js";
 import { Forbidden, NotFound, registerWebRoutes } from "./web.js";
@@ -281,6 +281,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       throw new BadRequest("since and limit must be non-negative integers");
     }
     return pull(deps.pool, deps.storage, deps.schemaVersion, since, limit, scopeOf(req.principal));
+  });
+
+  /** Metadata-only: live log id/hash/bytes for adopting longer cloud logs after cursor skip. */
+  app.get("/sync/log-heads", async (req) => {
+    return { logs: await logHeads(deps.pool, scopeOf(req.principal)) };
   });
 
   if (deps.thumbs) {

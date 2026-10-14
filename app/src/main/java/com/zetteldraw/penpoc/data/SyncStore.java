@@ -30,6 +30,15 @@ public interface SyncStore {
     /** Apply one pulled page and advance the cursor, atomically. */
     void applyPull(PullPage page) throws IOException;
 
+    /**
+     * On-disk ink-log byte length for {@code sheetId}, or {@code 0} if missing.
+     * Used by length reconcile so a longer cloud primary can still be adopted
+     * after the global pull cursor has skipped that log's rev.
+     */
+    default long localInkLogBytes(String sheetId) {
+        return 0L;
+    }
+
     void markSynced(long now);
 
     int outboxSize();

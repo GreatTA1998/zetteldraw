@@ -1,12 +1,17 @@
 package com.zetteldraw.penpoc.sync;
 
 import android.os.Build;
+import android.util.Log;
 
+import com.zetteldraw.penpoc.LaunchLog;
+import com.zetteldraw.penpoc.data.InkFileStore;
 import com.zetteldraw.penpoc.data.SyncStore;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 
+import org.json.JSONArray;
 import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.File;
 import java.io.IOException;
@@ -17,6 +22,7 @@ import java.util.function.LongSupplier;
 
 /** One sync pass: drain the outbox with pushes, then pull until caught up. */
 public final class SyncEngine {
+    private static final String TAG = "SyncEngine";
     static final int PUSH_BATCH = 50;
     static final int PULL_LIMIT = 200;
     private static final int MAX_ROUNDS = 1000;
@@ -78,6 +84,8 @@ public final class SyncEngine {
                 if (!neverSynced) {
                     pull(result);
                 }
+                // Pull-only devices still adopt longer cloud logs (per id).
+                reconcileLongerLogs(result);
                 return result;
             }
             if (neverSynced) {
@@ -88,6 +96,10 @@ public final class SyncEngine {
             store.ensureUnsyncedQueued();
             push(result);
             pull(result);
+            // Cursor pull only delivers rev > cursor. A truncated local log whose
+            // cloud rev is already behind the cursor never reappears — reconcile
+            // by ink_bytes so longer cloud primaries still adopt (per log id only).
+            reconcileLongerLogs(result);
             // Only stamp last_ok_at when the outbox is empty. A sticky push
             // (forbidden / missing blob) must not look like "sync complete".
             if (store.outboxSize() == 0) {
@@ -195,6 +207,87 @@ public final class SyncEngine {
                 return;
             }
         }
+    }
+
+    /**
+     * Adopt cloud logs that are longer (by ink_bytes) than the on-disk file for
+     * the same log id. Never shortens; never touches a different notebook's log.
+     * Cursor is left unchanged (synthetic page uses the current cursor).
+     */
+    private void reconcileLongerLogs(Result result) throws IOException {
+        JSONObject body;
+        try {
+            body = client.logHeads();
+        } catch (IOException e) {
+            // Older servers without the route must not fail the whole sync pass.
+            Log.w(TAG, "log-heads unavailable; skip length reconcile", e);
+            return;
+        }
+        JSONArray heads;
+        try {
+            heads = body.getJSONArray("logs");
+        } catch (JSONException e) {
+            throw new IOException("bad log-heads response", e);
+        }
+        int adopted = 0;
+        for (int i = 0; i < heads.length(); i++) {
+            JSONObject head;
+            try {
+                head = heads.getJSONObject(i);
+            } catch (JSONException e) {
+                throw new IOException("bad log-heads row", e);
+            }
+            String id = head.optString("id", "");
+            String hash = head.optString("ink_hash", "");
+            long remoteBytes = head.optLong("ink_bytes", -1L);
+            if (id.isEmpty() || hash.isEmpty() || remoteBytes < 0) {
+                continue;
+            }
+            long localBytes = store.localInkLogBytes(id);
+            if (remoteBytes <= localBytes) {
+                continue;
+            }
+            LaunchLog.mark("reconcile longer log " + id
+                    + " remoteBytes=" + remoteBytes + " localBytes=" + localBytes);
+            byte[] bytes = client.getBlob(hash);
+            if (bytes == null || bytes.length == 0) {
+                throw new IOException("missing blob for longer log " + id);
+            }
+            if (!InkFileStore.sha256(bytes).equals(hash)) {
+                throw new IOException("bad blob hash for longer log " + id);
+            }
+            NotebookLogEntity remote = new NotebookLogEntity();
+            remote.id = id;
+            remote.notebookId = optNullString(head, "notebook_id");
+            remote.inkHash = hash;
+            remote.inkBytes = remoteBytes;
+            remote.sliceHeight = head.optInt("slice_height", 0);
+            remote.createdAt = head.optLong("created_at", 0L);
+            remote.updatedAt = head.optLong("updated_at", 0L);
+            remote.rev = head.optLong("rev", 0L);
+            remote.deletedAt = null;
+            remote.conflictOf = null;
+            SyncStore.PullPage page = new SyncStore.PullPage();
+            page.logs.add(remote);
+            page.blobs.put(hash, bytes);
+            // Keep cursor: this is not a rev-stream advance.
+            page.cursor = store.pullCursor();
+            page.hasMore = false;
+            store.applyPull(page);
+            adopted++;
+        }
+        if (adopted > 0) {
+            result.pulledNotebooks += adopted;
+            LaunchLog.mark("reconcile adopted " + adopted + " longer log(s)");
+        }
+    }
+
+    private static String optNullString(JSONObject o, String key) {
+        if (o.isNull(key)) {
+            return null;
+        }
+        String v = o.optString(key, "");
+        return v.isEmpty() ? null : v;
     }
 
     /** Pull JSON omits large Base64 blobs; fetch them raw before applyPull. */

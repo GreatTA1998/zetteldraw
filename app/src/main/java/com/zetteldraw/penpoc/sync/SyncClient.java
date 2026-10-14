@@ -212,6 +212,11 @@ public final class SyncClient {
         return request("GET", "/sync/pull?since=" + since + "&limit=" + limit, null);
     }
 
+    /** Live log heads (id/hash/bytes) for length reconcile after cursor catch-up. */
+    JSONObject logHeads() throws IOException {
+        return request("GET", "/sync/log-heads", null);
+    }
+
     private JSONObject request(String method, String path, byte[] body) throws IOException {
         HttpURLConnection conn = (HttpURLConnection) new URL(config.serverUrl + path).openConnection();
         try {

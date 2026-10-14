@@ -1278,6 +1278,25 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
+    @Override
+    public long localInkLogBytes(String sheetId) {
+        if (sheetId == null) {
+            return 0L;
+        }
+        try {
+            byte[] existing = ink.readLog(sheetId);
+            if (existing != null) {
+                return existing.length;
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "local ink log size failed " + sheetId, e);
+        }
+        synchronized (lock) {
+            NotebookLogEntity row = dao.notebookLog(sheetId);
+            return row == null || row.inkBytes < 0 ? 0L : row.inkBytes;
+        }
+    }
+
     /**
      * Blobs are verified, decoded and staged (fsync'd) before the lock is
      * taken; under the lock each applied board only renames its staged file.

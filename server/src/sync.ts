@@ -285,6 +285,43 @@ export async function push(
   return results;
 }
 
+/** Live primary log metadata (no blobs) for length reconciliation after cursor catch-up. */
+export interface LogHead {
+  id: string;
+  notebook_id: string | null;
+  ink_hash: string;
+  ink_bytes: number;
+  slice_height: number;
+  created_at: number;
+  updated_at: number;
+  rev: number;
+}
+
+/**
+ * Heads of live notebook logs visible to {@code scope}. Used when a device's
+ * global pull cursor has advanced past an older log rev (e.g. Scratchpad stuck
+ * short while newer notebooks keep bumping the cursor) so the client can still
+ * adopt a longer cloud primary without replaying the whole library.
+ */
+export async function logHeads(pool: pg.Pool, scope: SyncScope = { kind: "unowned" }): Promise<LogHead[]> {
+  const params: unknown[] = [];
+  let userParam = 0;
+  if (scope.kind === "user") {
+    params.push(scope.userId);
+    userParam = params.length;
+  }
+  const lVis = visibilitySql("notebook_logs", "l", scope, userParam);
+  const res = await pool.query<LogHead>(
+    `SELECT l.id, l.notebook_id, l.ink_hash, l.ink_bytes, l.slice_height,
+            l.created_at, l.updated_at, l.rev
+     FROM notebook_logs l
+     WHERE l.deleted_at IS NULL AND l.conflict_of IS NULL AND l.ink_hash IS NOT NULL AND ${lVis}
+     ORDER BY l.id`,
+    params,
+  );
+  return res.rows;
+}
+
 export async function pull(
   pool: pg.Pool,
   storage: InkStorage,

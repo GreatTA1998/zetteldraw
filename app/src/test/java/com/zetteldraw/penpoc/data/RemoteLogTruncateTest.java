@@ -194,6 +194,58 @@ public class RemoteLogTruncateTest {
         assertTrue(recovered >= 40);
     }
 
+    @Test
+    public void longerScratchpadPullDoesNotTouchOtherNotebookLog() throws Exception {
+        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        Board blank = repo.scratchpadPages().get(0);
+        for (int i = 0; i < 8; i++) {
+            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+        }
+        repo.saveInk(blank);
+        for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
+            Thread.sleep(20);
+        }
+        String otherId = repo.createNotebook("safe-notes").id;
+        assertTrue(repo.ensureSheet(otherId, PAGE, PAGE, 0L));
+        Board otherBlank = repo.pages(otherId).get(0);
+        for (int i = 0; i < 5; i++) {
+            otherBlank.paper.appendStroke(TestInk.stroke(12f, i * PAGE + 30f, 6));
+        }
+        repo.saveInk(otherBlank);
+        for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
+            Thread.sleep(20);
+        }
+        int otherPages = repo.pages(otherId).size();
+        byte[] otherBytes = new InkFileStore(device.inkDir()).readLog(otherId);
+        assertNotNull(otherBytes);
+
+        // Truncate Scratchpad only; leave other notebook intact.
+        String scratchId = NotebookPaper.sheetId(null);
+        byte[] shortBytes = shortLogBytes(10);
+        new InkFileStore(device.inkDir()).writeLog(scratchId, shortBytes);
+        repo.invalidateOpenSheet(null);
+        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+
+        byte[] longScratch = shortLogBytes(30);
+        NotebookLogEntity remote = device.db.dao().notebookLog(scratchId).copy();
+        remote.inkHash = InkFileStore.sha256(longScratch);
+        remote.inkBytes = longScratch.length;
+        remote.rev = remote.rev + 3;
+        remote.updatedAt = remote.updatedAt + 1;
+        SyncStore.PullPage pull = new SyncStore.PullPage();
+        pull.logs.add(remote);
+        pull.blobs.put(remote.inkHash, longScratch);
+        pull.cursor = remote.rev;
+        repo.applyPull(pull);
+
+        assertTrue(repo.scratchpadPages().size() >= 30);
+        assertEquals("other notebook page count unchanged", otherPages, repo.pages(otherId).size());
+        byte[] otherAfter = new InkFileStore(device.inkDir()).readLog(otherId);
+        assertNotNull(otherAfter);
+        assertTrue("other notebook .zdl bytes unchanged",
+                java.util.Arrays.equals(otherBytes, otherAfter));
+    }
+
     private int seedDenseScratchpad(int inkedSlices) throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
         Board blank = repo.scratchpadPages().get(0);
