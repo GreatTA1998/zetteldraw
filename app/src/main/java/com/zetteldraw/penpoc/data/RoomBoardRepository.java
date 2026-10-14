@@ -112,6 +112,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private int knownPageHeight;
     private int knownLegacyHeight;
     private long knownShortPagesSince;
+    /** Sync-pass ink policy; default catch-up so unit tests can adopt. */
+    private volatile SyncStore.InkPullPolicy inkPullPolicy = SyncStore.InkPullPolicy.CATCH_UP;
 
     public RoomBoardRepository(ZettelDatabase db, InkFileStore ink, InkMirror mirror,
                                Executor background, Executor ui, LongSupplier clock) {
@@ -167,6 +169,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         @Override public void mirrorLog(String sheetId, byte[] bytes) {
             RoomBoardRepository.this.mirrorLog(sheetId, bytes);
+        }
+        @Override public boolean allowRemoteInkAdopt() {
+            return RoomBoardRepository.this.allowRemoteInkAdopt();
         }
         @Override
         public List<NotebookPaper.SourcePage> migrationSources(
@@ -1407,6 +1412,16 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 ui.execute(this::deliverRemoteChanges);
             }
         }
+    }
+
+    @Override
+    public void setInkPullPolicy(InkPullPolicy policy) {
+        inkPullPolicy = policy == null ? InkPullPolicy.CATCH_UP : policy;
+    }
+
+    @Override
+    public InkPullPolicy inkPullPolicy() {
+        return inkPullPolicy;
     }
 
     /**

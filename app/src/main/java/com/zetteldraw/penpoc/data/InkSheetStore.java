@@ -58,6 +58,9 @@ public final class InkSheetStore {
 
         /** After remote/local paper install: point cached boards at the new paper. */
         void bindPaperToBoards(String sheetId, NotebookPaper paper);
+
+        /** False while live writer — push-only ink (no adopt over local). */
+        boolean allowRemoteInkAdopt();
     }
 
     /**
@@ -286,6 +289,7 @@ public final class InkSheetStore {
                 conflictCopy,
                 remote.deletedAt != null,
                 hasBody,
+                deps.allowRemoteInkAdopt(),
                 localSlices,
                 remoteSlices,
                 diskBytes,
@@ -313,6 +317,14 @@ public final class InkSheetStore {
                         + " remoteSlices=" + remoteSlices
                         + " localSlices=" + localSlices);
                 shelfShorterRemoteLogLocked(remote, bytes, mirrorOps);
+                ensureLocalLogQueuedLocked(remote.id, open);
+                return;
+            case KEEP_LIVE_LOCAL:
+                LaunchLog.mark("live writer keeps local log " + remote.id
+                        + " remoteSlices=" + remoteSlices
+                        + " localSlices=" + localSlices
+                        + " remoteBytes=" + (bytes == null ? 0 : bytes.length)
+                        + " diskBytes=" + diskBytes);
                 ensureLocalLogQueuedLocked(remote.id, open);
                 return;
             case ADOPT_LONGER:
@@ -346,6 +358,12 @@ public final class InkSheetStore {
 
     private void installRemotePaperLocked(NotebookLogEntity remote, NotebookPaper paper, byte[] bytes,
                                           OpenSheet open, List<Runnable> mirrorOps) throws IOException {
+        // Disk guard: never shrink a longer local .zdl (Apply should already refuse).
+        long disk = localInkLogBytes(remote.id);
+        if (disk > 0 && bytes != null && bytes.length < disk) {
+            throw new IOException("refused shorter .zdl write for " + remote.id
+                    + " remoteBytes=" + bytes.length + " diskBytes=" + disk);
+        }
         deps.ink().writeLog(remote.id, bytes);
         mirrorOps.add(() -> deps.mirrorLog(remote.id, bytes));
         if (open == null) {

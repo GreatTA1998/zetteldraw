@@ -17,7 +17,12 @@ import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
 
-/** One sync pass: drain the outbox with pushes, then pull until caught up. */
+/**
+ * One sync pass: claim lease, push (live only), pull, optional length catch-up.
+ *
+ * <p>Live writer: ink is push-only — pull must not adopt remote over local.
+ * Non-writer / first restore: catch-up adopt via {@link InkLogSync}.
+ */
 public final class SyncEngine {
     private static final String TAG = "SyncEngine";
     static final int PUSH_BATCH = 50;
@@ -72,21 +77,21 @@ public final class SyncEngine {
         Result result = new Result();
         store.beginRemoteBatch();
         try {
-            // First sync on a device: cloud is the seed. Pull before push so
-            // empty local seed notebooks cannot clobber the server library.
+            // First sync: cloud seeds the device. Catch-up adopt before claim.
             boolean neverSynced = store.lastSyncedAt() == 0L && store.pullCursor() == 0L;
             if (neverSynced) {
+                store.setInkPullPolicy(SyncStore.InkPullPolicy.CATCH_UP);
                 pull(result);
                 result.restoredFromCloud = true;
             }
             if (!claimLiveWriter(result)) {
+                // Non-writer: read catch-up only.
+                store.setInkPullPolicy(SyncStore.InkPullPolicy.CATCH_UP);
                 IOException pullError = null;
                 if (!neverSynced) {
                     try {
                         pull(result);
                     } catch (IOException e) {
-                        // Length sync is a separate phase: cursor pull failure must
-                        // not skip per-id longer-log adoption.
                         pullError = e;
                         Log.w(TAG, "pull failed; still running ink log length sync", e);
                         LaunchLog.mark("pull failed before length sync: " + e.getMessage());
@@ -98,11 +103,12 @@ public final class SyncEngine {
                 }
                 return result;
             }
+            // Live writer: push-only for ink. Pull may update meta; never adopt
+            // remote ink over local (InkLogApply KEEP_LIVE_LOCAL).
+            store.setInkPullPolicy(SyncStore.InkPullPolicy.LIVE_PUSH_ONLY);
             if (neverSynced) {
                 store.queuePlaceholderSeedsForUpload();
             }
-            // Every pass: re-queue rev==0 rows whose outbox entry was lost.
-            // Nested parent_id repair (incl. rev>0 drift) is one-shot in SyncWorker.
             store.ensureUnsyncedQueued();
             push(result);
             IOException pullError = null;
@@ -110,21 +116,18 @@ public final class SyncEngine {
                 pull(result);
             } catch (IOException e) {
                 pullError = e;
-                Log.w(TAG, "pull failed; still running ink log length sync", e);
-                LaunchLog.mark("pull failed before length sync: " + e.getMessage());
+                Log.w(TAG, "pull failed after live push", e);
+                LaunchLog.mark("pull failed after live push: " + e.getMessage());
             }
-            // Cursor pull only delivers rev > cursor. Length authority is per-id
-            // via InkLogSync (log-heads), not the global cursor.
-            result.pulledNotebooks += inkLogSync.syncLengths();
+            // Live length work = push + refuse shorter on pull — not log-heads adopt.
             if (pullError != null) {
                 throw pullError;
             }
-            // Only stamp last_ok_at when the outbox is empty. A sticky push
-            // (forbidden / missing blob) must not look like "sync complete".
             if (store.outboxSize() == 0) {
                 store.markSynced(clock.getAsLong());
             }
         } finally {
+            store.setInkPullPolicy(SyncStore.InkPullPolicy.CATCH_UP);
             store.endRemoteBatch();
         }
         return result;
@@ -180,7 +183,6 @@ public final class SyncEngine {
             if (batch.isEmpty()) {
                 return;
             }
-            // Large files: raw PUT first so push JSON never Base64-encodes them.
             try {
                 for (Map.Entry<String, File> e : batch.blobFiles.entrySet()) {
                     client.putBlob(e.getKey(), e.getValue(), config.deviceId);
@@ -204,7 +206,6 @@ public final class SyncEngine {
             store.applyPushResults(batch, results);
             result.pushed += batch.notebooks.size() + batch.boards.size() + batch.logs.size();
             if (store.outboxSize() >= before) {
-                // Nothing drained (e.g. missing blobs or rows edited mid-flight); try next pass.
                 return;
             }
         }

@@ -14,14 +14,13 @@ import org.json.JSONObject;
 import java.io.IOException;
 
 /**
- * Per-id ink-log length sync via {@code GET /sync/log-heads}.
+ * Per-id ink-log length catch-up via {@code GET /sync/log-heads}.
  *
- * <p>Not gated on the global pull cursor — a truncated local {@code .zdl} whose
- * cloud rev is already behind the cursor still adopts a longer primary.
- * Never shortens; never touches a different notebook's log. Apply goes through
- * {@link com.zetteldraw.penpoc.data.InkSheetStore} / {@link com.zetteldraw.penpoc.data.InkLogApply}.
+ * <p><strong>Catch-up only</strong> (non-writer / restore). Live writer does
+ * not call this — length work while live is push + refuse shorter on pull.
+ * Never shortens; never touches a different notebook's log.
  *
- * @see docs/ink-sot-rewrite.md
+ * @see docs/system-architecture.md
  */
 public final class InkLogSync {
     private static final String TAG = "InkLogSync";
@@ -36,11 +35,14 @@ public final class InkLogSync {
 
     /**
      * Adopt cloud logs longer (by {@code ink_bytes}) than on-disk for the same
-     * id. Cursor is left unchanged (synthetic pull page).
+     * id. No-op under {@link SyncStore.InkPullPolicy#LIVE_PUSH_ONLY}.
      *
      * @return how many logs were adopted
      */
     public int syncLengths() throws IOException {
+        if (!store.allowRemoteInkAdopt()) {
+            return 0;
+        }
         JSONObject body;
         try {
             body = client.logHeads();

@@ -94,6 +94,27 @@ public interface SyncStore {
     default void endRemoteBatch() {
     }
 
+    /**
+     * Ink pull policy for the current sync pass.
+     * {@link InkPullPolicy#LIVE_PUSH_ONLY}: refuse shorter; keep local over remote body.
+     * {@link InkPullPolicy#CATCH_UP}: may {@code ADOPT_LONGER} (non-writer / restore).
+     */
+    enum InkPullPolicy {
+        CATCH_UP,
+        LIVE_PUSH_ONLY,
+    }
+
+    default void setInkPullPolicy(InkPullPolicy policy) {
+    }
+
+    default InkPullPolicy inkPullPolicy() {
+        return InkPullPolicy.CATCH_UP;
+    }
+
+    default boolean allowRemoteInkAdopt() {
+        return inkPullPolicy() == InkPullPolicy.CATCH_UP;
+    }
+
     final class PushBatch {
         public final List<NotebookEntity> notebooks = new ArrayList<>();
         public final List<BoardEntity> boards = new ArrayList<>();
