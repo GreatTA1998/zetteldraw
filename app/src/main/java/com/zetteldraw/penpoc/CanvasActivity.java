@@ -2087,7 +2087,8 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Shared indented notebook hierarchy for Move destination and Place-under
-     * parent. Sized larger than other panels so deep trees need less scrolling.
+     * parent. Fills nearly the full drawing-area height (minus safe margins)
+     * so deep trees need far less scrolling than the old ~55% chip.
      */
     private void showNotebookHierarchyMenu(
             View anchor,
@@ -2099,6 +2100,9 @@ public final class CanvasActivity extends Activity {
         if (shownNotebooks == null) {
             shownNotebooks = repository.notebooks();
         }
+        // Always lay out in the drawing band so height is the ink area, not the
+        // full window (top bars / Place-under tab anchor must not shrink it).
+        FrameLayout layoutHost = drawingArea != null ? drawingArea : host;
         LinearLayout list = hierarchyPanel();
         LinearLayout tree = new LinearLayout(this);
         tree.setOrientation(LinearLayout.VERTICAL);
@@ -2113,8 +2117,10 @@ public final class CanvasActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(false);
         scroll.addView(tree, matchWrap());
-        int hostH = host.getHeight() > 0 ? host.getHeight() : root.getHeight();
-        int maxH = Math.max(dp(280), Math.round(hostH * 0.55f));
+        int margin = dp(8);
+        int hostH = layoutHost.getHeight() > 0 ? layoutHost.getHeight() : root.getHeight();
+        // Nearly full available height — only chrome safe margins left empty.
+        int maxH = Math.max(dp(280), hostH - 2 * margin - list.getPaddingTop() - list.getPaddingBottom());
         tree.measure(
                 View.MeasureSpec.makeMeasureSpec(dp(320), View.MeasureSpec.AT_MOST),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
@@ -2123,10 +2129,45 @@ public final class CanvasActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 treeH > maxH ? maxH : LinearLayout.LayoutParams.WRAP_CONTENT);
         list.addView(scroll, scrollLp);
-        FrameLayout.LayoutParams lp = host == drawingArea
-                ? pageAnchoredLp(anchor, list)
-                : anchoredLp(anchor, list);
-        showOverlay(list, lp, host);
+        showOverlay(list, hierarchyMenuLp(list, layoutHost, anchor, margin), layoutHost);
+    }
+
+    /**
+     * Tall hierarchy panel: top of the drawing area with safe margins, not
+     * tucked above the Move/⋮ chip (that left most of the screen unused).
+     */
+    private FrameLayout.LayoutParams hierarchyMenuLp(
+            View content, FrameLayout host, View anchor, int margin) {
+        content.measure(
+                View.MeasureSpec.makeMeasureSpec(Math.max(dp(280), host.getWidth() - 2 * margin),
+                        View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(host.getHeight(), View.MeasureSpec.AT_MOST));
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = margin;
+        // Move (page chrome, right) → END; Place under (tab, usually left) → START.
+        boolean fromPageChrome = anchor != null && drawingArea != null
+                && isDescendantOf(anchor, drawingArea);
+        if (fromPageChrome) {
+            lp.gravity = Gravity.TOP | Gravity.END;
+            lp.rightMargin = margin;
+        } else {
+            lp.gravity = Gravity.TOP | Gravity.START;
+            lp.leftMargin = margin;
+        }
+        return lp;
+    }
+
+    private static boolean isDescendantOf(View child, View ancestor) {
+        View current = child;
+        while (current != null) {
+            if (current == ancestor) {
+                return true;
+            }
+            current = current.getParent() instanceof View ? (View) current.getParent() : null;
+        }
+        return false;
     }
 
     private boolean addNotebookHierarchy(

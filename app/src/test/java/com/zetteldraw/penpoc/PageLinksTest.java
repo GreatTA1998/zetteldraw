@@ -62,7 +62,7 @@ public class PageLinksTest {
         openNotebook(root, "dense");
         assertEquals(41, repo.pages(dense.id).size());
         // Return restores the left-behind scroll (page 1); move to the inked page so the
-        // source is also the front page and the banner stays "Linking from …".
+        // source is also the front page and the banner stays "Linking …".
         pageScroller(root).scrollTo(0, 39 * height);
         idle();
         relayout(root);
@@ -101,7 +101,7 @@ public class PageLinksTest {
             // Bottom strip does not shrink the drawing area or reflow pages.
             assertEquals("press " + press + " must not shrink the drawing area", areaBefore, area.getHeight());
             assertSame("press " + press + " rebuilt the page list", slot, control.getParent());
-            TextView banner = find(root, "Linking from dense 40");
+            TextView banner = find(root, "Linking dense 40");
             assertNotNull(banner);
             View strip = (View) banner.getParent().getParent(); // row -> mode stack
             assertFalse("snackbar must not sit under the notebook column",
@@ -214,7 +214,7 @@ public class PageLinksTest {
 
         clickOnPage(root, "1/2", "Link");
         assertNotNull(find(root, "Link"));
-        assertNotNull(find(root, "Linking from frombook 1"));
+        assertNotNull(find(root, "Linking frombook 1"));
         TextView confirmOnSource = find(root, "Confirm");
         assertNotNull("confirm stays visible on the source page", confirmOnSource);
         assertFalse("confirm is disabled on the source page", confirmOnSource.isEnabled());
@@ -224,7 +224,7 @@ public class PageLinksTest {
         assertNotNull("the linking line is a hole in the pen reader", cover(ink, linkingBar(root), ink.penExcludes()));
 
         openNotebook(root, "tobook");
-        assertNotNull(find(root, "Link from frombook 1 to tobook 1"));
+        assertNotNull(find(root, "Linking frombook 1 to tobook 1"));
         TextView confirm = find(root, "Confirm");
         assertNotNull(confirm);
         assertTrue(confirm.isEnabled());
@@ -269,7 +269,7 @@ public class PageLinksTest {
         assertNotNull(confirm);
         assertTrue(confirm.isEnabled());
         openNotebook(root, "frombook");
-        assertNotNull(find(root, "Linking from frombook 1"));
+        assertNotNull(find(root, "Linking frombook 1"));
         confirm = find(root, "Confirm");
         assertNotNull("back on the source, confirm stays visible", confirm);
         assertFalse("back on the source, confirm is disabled", confirm.isEnabled());
@@ -296,7 +296,7 @@ public class PageLinksTest {
         assertNotNull(find(root, "Confirm"));
         click(root, "Cancel");
 
-        assertNull(find(root, "Linking from frombook 1"));
+        assertNull(find(root, "Linking frombook 1"));
         assertNull(find(root, "Confirm"));
         assertTrue(repo.linksTouching(repo.pages(from.id).get(0).id).isEmpty());
         assertTrue(repo.linksTouching(repo.pages(to.id).get(0).id).isEmpty());
@@ -325,7 +325,7 @@ public class PageLinksTest {
         pageScroller(root).scrollTo(0, height);
         idle();
         relayout(root);
-        assertNotNull(find(root, "Link from frombook 1 to tobook 2"));
+        assertNotNull(find(root, "Linking frombook 1 to tobook 2"));
         click(root, "Confirm");
 
         String above = repo.pages(to.id).get(0).id;
@@ -402,17 +402,17 @@ public class PageLinksTest {
         click(root, "shelf");
         openNotebook(root, "chapter");
         // Return restores the scroll left behind (page 1), not the last inked page.
-        assertNotNull(find(root, "Link from frombook 1 to chapter 1"));
+        assertNotNull(find(root, "Linking frombook 1 to chapter 1"));
         View scroller = pageScroller(root);
         scroller.scrollTo(0, 2 * height);
         idle();
         relayout(root);
-        assertNotNull(find(root, "Link from frombook 1 to chapter 3"));
-        assertNull(find(root, "Link from frombook 1 to chapter 1"));
+        assertNotNull(find(root, "Linking frombook 1 to chapter 3"));
+        assertNull(find(root, "Linking frombook 1 to chapter 1"));
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
-        assertNotNull(find(root, "Link from frombook 1 to chapter 1"));
+        assertNotNull(find(root, "Linking frombook 1 to chapter 1"));
         click(root, "Confirm");
 
         openNotebook(root, "frombook");
@@ -443,7 +443,7 @@ public class PageLinksTest {
     }
 
     private static View linkingBar(View root) {
-        TextView text = find(root, "Linking from frombook 1");
+        TextView text = find(root, "Linking frombook 1");
         assertNotNull(text);
         return (View) text.getParent();
     }
