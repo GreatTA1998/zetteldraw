@@ -1337,24 +1337,52 @@ final class PageInkView extends FrameLayout {
         }
         removeCallbacks(dragFrame);
         RectF dirty = touchedArea(s);
-        Lasso.Move move = Lasso.move(s.page, s.ids, s.dx, s.dy);
-        // Hold the pen off before dropping the selection, so this cannot turn
-        // raw drawing back on in the lasso style while the tool is about to be pen.
-        scheduleResume();
-        endSelection();
-        invalidatePage(s.page.id);
-        requestFrame(false, dirty, UpdateMode.GC);
+        float dx = s.dx;
+        float dy = s.dy;
+        Lasso.Move move = Lasso.move(s.page, s.ids, dx, dy);
+        // Notes: keep the group selected after a drag so it can be moved again
+        // until tap-outside (or cut/delete / tool change). Do not scheduleResume —
+        // the pen stays paused while the selection is up.
         if (move == null) {
-            if (listener != null) {
-                listener.onLassoCancelled();
-            }
+            reseatSelection(s, 0f, 0f);
+            requestFrame(false, dirty, UpdateMode.GC);
             return;
         }
+        invalidatePage(s.page.id);
+        reseatSelection(s, dx, dy);
+        requestFrame(false, dirty, UpdateMode.GC);
         history.record(InkHistory.Edit.of(move.historyPart()));
         historyChanged();
         notifyChanged(s.page);
         if (listener != null) {
             listener.onLassoMoved(move);
+        }
+    }
+
+    /**
+     * After a drag commit (or a zero-delta lift inside the box), fold dx/dy into
+     * {@link Selection#bounds} and rebuild punched paper bases so the same
+     * selection stays draggable. Does not clear the selection.
+     */
+    private void reseatSelection(Selection s, float dx, float dy) {
+        if (dx != 0f || dy != 0f) {
+            s.bounds.offset(dx, dy);
+        }
+        s.dx = 0f;
+        s.dy = 0f;
+        s.dragging = false;
+        s.sawDown = true;
+        s.drawnBox = boxOnSurface(s);
+        if (s.acrossPaper) {
+            if (s.sliceBases != null) {
+                s.sliceBases.clear();
+            } else {
+                s.sliceBases = new HashMap<>();
+            }
+            ensureSliceBases(s);
+        }
+        if (listener != null) {
+            listener.onSelectionBoundsChanged();
         }
     }
 
@@ -1833,19 +1861,28 @@ final class PageInkView extends FrameLayout {
         RectF dirty = touchedArea(s);
         NotebookPaper paper = s.page.paper;
         Set<String> ids = s.ids;
-        if (paper == null || (dx == 0f && dy == 0f)) {
+        if (paper == null) {
             scheduleResume();
             endSelection();
-            // Full GC clears seam ghosts from the selection preview.
             requestFrame(true, null, UpdateMode.GC);
             if (listener != null) {
                 listener.onLassoCancelled();
             }
             return;
         }
-        // Translate while the sprite is still up, then paint once with the new
-        // points. The old order (drop selection → paint → translate) flashed the
-        // ink back to its origin and left a long stall before the real destination.
+        if (dx == 0f && dy == 0f) {
+            // Lift inside the box without moving: stay selected (Notes).
+            reseatSelection(s, 0f, 0f);
+            if (needFull) {
+                requestFrame(true, null, UpdateMode.GC);
+            } else {
+                requestFrame(false, dirty, UpdateMode.GC);
+            }
+            return;
+        }
+        // Translate while the sprite is still up, then reseat the selection at
+        // the drop point. Dropping the selection here used to force a re-lasso
+        // for every reposition (Elton v75).
         float bottom = s.bounds.bottom + dy;
         String adopt = null;
         if (bottom >= paper.origin(paper.sliceCount()) && !shown.isEmpty()) {
@@ -1858,10 +1895,9 @@ final class PageInkView extends FrameLayout {
         RectF touchedPaper = new RectF(s.bounds);
         touchedPaper.union(s.bounds.left + dx, s.bounds.top + dy, s.bounds.right + dx, s.bounds.bottom + dy);
         invalidatePaperRegion(paper, touchedPaper);
-        scheduleResume();
-        endSelection();
-        // Multi-slice commits repaint the whole surface so seam ghosts clear.
-        if (needFull) {
+        reseatSelection(s, dx, dy);
+        // Multi-slice commits (origin or destination) repaint the whole surface.
+        if (needFull || spansMultipleSlices(s)) {
             requestFrame(true, null, UpdateMode.GC);
         } else {
             requestFrame(false, dirty, UpdateMode.GC);

@@ -292,9 +292,14 @@ public final class CanvasActivity extends Activity {
             @Override
             public void onLassoMoved(Lasso.Move move) {
                 showHint("", false);
-                hideLassoMenu();
-                // Stay on Lasso after commit (Boox Notes). Do not force Pen —
-                // a secondary setTool here was a chrome/ink footgun.
+                // Selection stays active after a move (Notes): keep the floating
+                // menu and drag handles until tap-outside / dismiss / tool change.
+                // Stay on Lasso — do not force Pen (v59).
+                if (inkView != null && inkView.hasSelection()) {
+                    positionLassoMenu();
+                } else {
+                    hideLassoMenu();
+                }
             }
 
             @Override

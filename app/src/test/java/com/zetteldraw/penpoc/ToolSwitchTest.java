@@ -179,8 +179,15 @@ public class ToolSwitchTest {
         settle();
 
         assertEquals("after a lasso move the tool stays LASSO", PageInkView.Tool.LASSO, ink.tool());
-        assertFalse(ink.hasSelection());
+        assertTrue("selection stays active after move (Notes)", ink.hasSelection());
         assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
+        assertFalse("pen stays paused while the group is still selected", ink.penOn());
+
+        // Tap outside to dismiss, then drawing resumes as Lasso.
+        touch(ink, MotionEvent.ACTION_DOWN, 20f, 900f);
+        touch(ink, MotionEvent.ACTION_UP, 20f, 900f);
+        settle();
+        assertFalse(ink.hasSelection());
 
         ShadowLooper.idleMainLooper(600, TimeUnit.MILLISECONDS);
         settle();
@@ -531,7 +538,7 @@ public class ToolSwitchTest {
         touch(ink, MotionEvent.ACTION_UP, 310f, 285f);
         settle();
 
-        assertFalse(ink.hasSelection());
+        assertTrue("selection stays after move", ink.hasSelection());
         assertEquals(PageInkView.Tool.LASSO, ink.tool());
         assertTrue("underline stays on Lasso after move", lassoButton.isSelected());
         assertFalse(penButton.isSelected());

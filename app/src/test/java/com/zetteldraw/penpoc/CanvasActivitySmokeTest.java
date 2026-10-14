@@ -416,7 +416,9 @@ public class CanvasActivitySmokeTest {
         touch(ink, MotionEvent.ACTION_UP, 310f, 285f);
         idle();
 
-        assertFalse(ink.hasSelection());
+        // Notes: stay in the selection / move process after a drag commit.
+        assertTrue("selection stays after move so it can be dragged again", ink.hasSelection());
+        assertFloatingLassoPill(root, ink);
         assertEquals("stays on Lasso after one move (Notes)", PageInkView.Tool.LASSO, ink.tool());
         assertTrue(byDescription(root, "Lasso").get(0).isSelected());
         InkRenderer.InkStroke moved = page.paper.stroke(original.id);
@@ -427,6 +429,27 @@ public class CanvasActivitySmokeTest {
         assertEquals(other.points.get(0).x, page.paper.stroke(other.id).points.get(0).x, 0.001f);
         assertTrue(undo.isEnabled());
 
+        // Second drag without re-lassoing (Elton v75 → v76).
+        touch(ink, MotionEvent.ACTION_DOWN, 310f, 285f);
+        touch(ink, MotionEvent.ACTION_MOVE, 360f, 315f);
+        touch(ink, MotionEvent.ACTION_UP, 360f, 315f);
+        idle();
+        assertTrue(ink.hasSelection());
+        moved = page.paper.stroke(original.id);
+        assertEquals(original.points.get(0).x + 150f, moved.points.get(0).x, 0.001f);
+        assertEquals(original.points.get(0).y + 110f, moved.points.get(0).y, 0.001f);
+
+        touch(ink, MotionEvent.ACTION_DOWN, 20f, 900f);
+        touch(ink, MotionEvent.ACTION_UP, 20f, 900f);
+        idle();
+        assertFalse("tap outside dismisses selection", ink.hasSelection());
+
+        clickDesc(root, "Undo");
+        // Undo of second move; selection was already dismissed.
+        assertEquals(original.points.get(0).x + 100f, page.paper.stroke(original.id).points.get(0).x, 0.001f);
+        assertEquals(original.points.get(0).y + 80f, page.paper.stroke(original.id).points.get(0).y, 0.001f);
+        assertTrue(undo.isEnabled());
+        assertTrue(redo.isEnabled());
         clickDesc(root, "Undo");
         assertEquals(original.points.get(0).x, page.paper.stroke(original.id).points.get(0).x, 0.001f);
         assertEquals(original.points.get(0).y, page.paper.stroke(original.id).points.get(0).y, 0.001f);
