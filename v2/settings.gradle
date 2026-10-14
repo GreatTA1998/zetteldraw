@@ -1,0 +1,27 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        // Onyx / Boox pen SDK (Boox Go 7). HTTP required by vendor repos today.
+        maven {
+            url "http://repo.boox.com/repository/maven-public/"
+            allowInsecureProtocol = true
+        }
+        maven {
+            url "http://repo.boox.com/repository/proxy-public/"
+            allowInsecureProtocol = true
+        }
+    }
+}
+
+rootProject.name = "zetteldraw-v2"
+include(":app")

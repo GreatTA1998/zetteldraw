@@ -4,12 +4,16 @@
 
 **Preference (2026-10-14):** prefer a **greenfield rewrite** from these condensed docs + screenshots over continued in-place refactor of god files (`CanvasActivity`, `RoomBoardRepository`, dual board+`.zdl` paths, silent pull-heal while live).
 
+### In-tree scaffold
+
+Fresh code lives at **[`v2/`](../../v2/README.md)** in this repo (Android `com.zetteldraw.v2` + Hono sync stubs + Vite shell). Do **not** carve legacy root `app/` / `server/` / `web/`. A sibling `zetteldraw-v2` GitHub repo is **not** required.
+
 ---
 
 ## How to start a new repo from this pack
 
-1. Create an empty GitHub repo (or a sibling folder). Do **not** copy `app/`, `server/`, or `web/` source as a starting point.
-2. Copy this entire `docs/greenfield/` tree into the new project (keep `media/` next to the markdown).
+1. Prefer the in-tree **[`v2/`](../../v2/README.md)** scaffold. Or create an empty sibling folder/repo — do **not** copy legacy `app/`, `server/`, or `web/` source as a starting point.
+2. Copy this entire `docs/greenfield/` tree into the new project (keep `media/` next to the markdown) — already present under `v2/docs/greenfield/`.
 3. Treat **[product-behavior.md](./product-behavior.md)** as the must-not-regress acceptance list.
 4. Treat **[architecture.md](./architecture.md)** as the first-principles module map and structural impossibility rules.
 5. Treat **[sync-model.md](./sync-model.md)** as the locked sync ceremony.

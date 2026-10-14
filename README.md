@@ -6,6 +6,8 @@ Tip APK: [https://zetteldraw.com/apk](https://zetteldraw.com/apk). **Product beh
 
 **Greenfield rewrite pack** → [docs/greenfield/](docs/greenfield/) — condensed product/architecture/sync specs + screenshots for a **from-scratch** rewrite. Tip v86 is reference behavior only; prefer greenfield over continued in-place refactor of the legacy tree.
 
+**Greenfield v2 (in-tree)** → [v2/README.md](v2/README.md) — fresh Android / sync / web scaffold (`com.zetteldraw.v2`). Legacy root `app/` `server/` `web/` stay untouched as tip reference.
+
 ---
 
 ## The only three irreversible bugs
