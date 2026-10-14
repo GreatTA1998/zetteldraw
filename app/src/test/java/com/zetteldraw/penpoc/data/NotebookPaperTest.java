@@ -284,4 +284,31 @@ public class NotebookPaperTest {
         assertEquals(8f + 12f, paper.stroke("s0").points.get(0).x, 0.01f);
         assertEquals(20f, paper.stroke("s200").points.get(0).y, 0.01f);
     }
+
+    /**
+     * v70 routed {@code trimTail} through an empty Y-index during {@code replay},
+     * so any log with a tear collapsed to 0 slices and Scratchpad opened as 1/1.
+     * Replay after tear must keep the same slice count and stroke ids as live paper.
+     */
+    @Test
+    public void replayAfterTearKeepsSliceCountMatchingLivePaper() throws Exception {
+        NotebookPaper paper = NotebookPaper.empty(400);
+        paper.appendStroke(line("p0", 10f, 20f, 40f));
+        paper.appendStroke(line("p1", 10f, 420f, 440f));
+        paper.appendStroke(line("p2", 10f, 820f, 840f));
+        assertEquals(3, paper.sliceCount());
+        paper.tearDelete(1);
+        assertEquals("live tear leaves inked slices + no empty tail", 2, paper.sliceCount());
+        assertEquals("p0", paper.stroke("p0").id);
+        assertEquals("p2", paper.stroke("p2").id);
+        assertNull(paper.stroke("p1"));
+
+        NotebookPaper again = NotebookPaper.replay(paper.bytes());
+        assertEquals("replay must not strip slices via trimTail", paper.sliceCount(), again.sliceCount());
+        assertEquals(paper.strokes().size(), again.strokes().size());
+        assertEquals("p0", again.stroke("p0").id);
+        assertEquals("p2", again.stroke("p2").id);
+        assertTrue(again.containsInk(0));
+        assertTrue(again.containsInk(1));
+    }
 }
