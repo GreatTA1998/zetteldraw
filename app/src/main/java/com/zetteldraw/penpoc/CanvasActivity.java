@@ -81,7 +81,9 @@ public final class CanvasActivity extends Activity {
     private static final String SHORT_PAGES_SINCE = "short_pages_since";
     /**
      * Per-collection vertical scroll (prefs key {@code scroll_} + id). Survives
-     * process death. First open (no key) still jumps to the last inked page.
+     * process death. First open (no key) still jumps to last page / last inked.
+     * See docs/notebook-navigation.md: remember via {@link #effectiveScrollY()},
+     * never a ScrollView that has not yet applied {@link #pendingScrollY}.
      */
     private static final String PREF_SCROLL_PREFIX = "scroll_";
 
@@ -266,7 +268,7 @@ public final class CanvasActivity extends Activity {
                 boolean last = !slots.isEmpty() && slots.get(slots.size() - 1) == slot;
                 if (slot != null && !loading() && (page.isBlank() || last)
                         && pagesIn(collectionId).size() != slots.size()) {
-                    reloadPages(scroller.getScrollY());
+                    reloadPages(effectiveScrollY());
                 }
             }
 
@@ -274,7 +276,7 @@ public final class CanvasActivity extends Activity {
             public void onPageBecameNonEmpty(Board page) {
                 // The first stroke stored the trailing blank, and the repository added a new one.
                 if (slotFor(page.id) != null && !loading() && pagesIn(collectionId).size() != slots.size()) {
-                    reloadPages(scroller.getScrollY());
+                    reloadPages(effectiveScrollY());
                 }
             }
 
@@ -327,9 +329,14 @@ public final class CanvasActivity extends Activity {
                 return;
             }
             int target = pendingScrollY;
-            pendingScrollY = -1;
+            // Keep pending until scrollTo runs so leave/reflow still see the
+            // intended Y (ScrollView may read 0 until then).
             scroller.post(() -> {
+                if (pendingScrollY != target) {
+                    return; // superseded by a newer layoutPages target
+                }
                 scroller.scrollTo(0, target);
+                pendingScrollY = -1;
                 inkView.setContentScrollY(scroller.getScrollY());
                 refreshModeBar();
                 updateExcludeRects();
@@ -390,10 +397,12 @@ public final class CanvasActivity extends Activity {
                 Loaded loaded = awaitingLayout;
                 awaitingLayout = null;
                 pageReflows.incrementAndGet();
+                // Same open intent (jump / restore / first-open); do not substitute scroller Y.
                 startLoad(loaded.id, loaded.keepScroll, false);
             } else if (!first && currentPages != null && !loading()) {
                 pageReflows.incrementAndGet();
-                startLoad(collectionId, scroller.getScrollY(), false);
+                // Hold place across a size change; pending target wins over ScrollView lag.
+                startLoad(collectionId, effectiveScrollY(), false);
             }
         });
     }
@@ -729,7 +738,7 @@ public final class CanvasActivity extends Activity {
         }
         // A pull replaces a notebook's log whole. Local undo must not splice it.
         inkView.clearHistory();
-        Integer keep = loading() ? pendingKeepScroll : Integer.valueOf(scroller.getScrollY());
+        Integer keep = loading() ? pendingKeepScroll : Integer.valueOf(effectiveScrollY());
         startLoad(collectionId, keep, false);
     }
 
@@ -865,16 +874,19 @@ public final class CanvasActivity extends Activity {
         if (!id.equals(collectionId)) {
             inkView.clearHistory();
         }
+        // Persist the collection we leave using the intended Y (pending apply wins).
+        // Skip only while a load for this collection has not yet shown — the
+        // ScrollView may still display a previous notebook's pages.
         if (pagesLoaded && !loading()) {
-            rememberScroll(collectionId, scroller.getScrollY());
+            rememberScroll(collectionId, effectiveScrollY());
         }
         pagesLoaded = true;
         collectionId = id;
         syncNav();
         // The tab is marked now; its pages load off the main thread, so a tap never waits on
         // storage. The old pages stay up with the pen held until the new ones replace them.
-        // A non-null keepScroll (a page link) wins over a remembered scroll and the
-        // first-open last-inked jump.
+        // A non-null keepScroll (a page link / hold-place reload) wins over remembered
+        // scroll and the first-open last-page jump. See notebook-navigation.md.
         startLoad(id, keepScroll, true);
     }
 
@@ -883,7 +895,7 @@ public final class CanvasActivity extends Activity {
         if (!pagesLoaded || loading() || collectionId == null) {
             return;
         }
-        rememberScroll(collectionId, scroller.getScrollY());
+        rememberScroll(collectionId, effectiveScrollY());
     }
 
     private void rememberScroll(String id, int scrollY) {
@@ -899,7 +911,7 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Scroll for a collection that was opened before in this install. Null means
-     * never visited: the first open still jumps to the last inked page.
+     * never visited: the first open still jumps to last page / last inked.
      */
     private Integer rememberedScroll(String id) {
         Integer memory = scrollByCollection.get(id);
@@ -914,6 +926,15 @@ public final class CanvasActivity extends Activity {
         int saved = Math.max(0, prefs.getInt(key, 0));
         scrollByCollection.put(id, saved);
         return saved;
+    }
+
+    /**
+     * Intended vertical scroll for the open collection. While {@link #pendingScrollY}
+     * is set, the ScrollView may still read {@code 0}; callers that remember or
+     * hold place across a reload must use this, not {@code scroller.getScrollY()}.
+     */
+    private int effectiveScrollY() {
+        return pendingScrollY >= 0 ? pendingScrollY : scroller.getScrollY();
     }
 
     /**
@@ -1055,26 +1076,30 @@ public final class CanvasActivity extends Activity {
         if (loaded.generation != loadGeneration || shownGeneration == loaded.generation) {
             return;
         }
+        // One intent → one target after the sheet is ready (notebook-navigation.md).
         int target;
         if (loaded.keepScroll != null) {
-            // Explicit navigation (page link, refresh, Move) wins.
+            // Jump: page link, Move, or hold-place reload/reflow.
             target = loaded.keepScroll;
         } else {
             Integer remembered = rememberedScroll(loaded.id);
             if (remembered != null) {
-                // Returning to a notebook (or Scratchpad) restores where the user left.
+                // Restore: return to where the user left.
                 target = remembered;
             } else if (SCRATCHPAD.equals(loaded.id)) {
-                // First Scratchpad open: last page (trailing blank).
+                // First open: Scratchpad trailing blank.
                 target = 0;
                 for (int i = 0; i < loaded.pages.size() - 1; i++) {
                     target += heightOf(loaded.pages.get(i)) + layoutGap(loaded.pages);
                 }
             } else {
-                // First notebook open: last inked page.
+                // First open: notebook last inked slice.
                 target = lastInkOffset(loaded.pages);
             }
         }
+        // Persist the resolved intent before ScrollView layout applies it, so a
+        // leave/reflow in the pending window cannot store Y=0 as "visited".
+        rememberScroll(loaded.id, target);
         showPages(loaded.pages, target);
         syncNav();
         if (!firstListShown) {
@@ -1134,7 +1159,7 @@ public final class CanvasActivity extends Activity {
         if (pages.size() != currentPages.size() + 1 || pages.size() != slots.size() + 1) {
             return false;
         }
-        if (targetScrollY != scroller.getScrollY()) {
+        if (targetScrollY != effectiveScrollY()) {
             return false;
         }
         int gap = layoutGap(pages);
@@ -1602,7 +1627,7 @@ public final class CanvasActivity extends Activity {
             return;
         }
         repository.createLink(linkSourceId, front.page.id);
-        int scroll = scroller.getScrollY();
+        int scroll = effectiveScrollY();
         cancelLinking();
         reloadPages(scroll);
     }
@@ -1681,9 +1706,9 @@ public final class CanvasActivity extends Activity {
             scroll += heightOf(pages.get(i)) + gap;
         }
         if (notebookId == null) {
-            openScratchpad(scroller.getScrollY());
+            openScratchpad(effectiveScrollY());
         } else {
-            openNotebook(notebookId, scroller.getScrollY());
+            openNotebook(notebookId, effectiveScrollY());
         }
     }
 
@@ -2062,7 +2087,7 @@ public final class CanvasActivity extends Activity {
             target += heightOf(pages.get(i)) + layoutGap(pages);
         }
         ++loadGeneration;
-        showPages(pages, index < 0 ? scroller.getScrollY() : target);
+        showPages(pages, index < 0 ? effectiveScrollY() : target);
     }
 
     /** The blank page that ends every list: it has nothing to wipe, move or delete. */
@@ -2729,7 +2754,7 @@ public final class CanvasActivity extends Activity {
         repository.wipePage(slot.page.id);
         inkView.invalidatePage(slot.page.id);
         if (pagesIn(collectionId).size() != slots.size()) {
-            reloadPages(scroller.getScrollY());
+            reloadPages(effectiveScrollY());
         } else {
             inkView.redrawAll();
             slot.syncEnabled();
