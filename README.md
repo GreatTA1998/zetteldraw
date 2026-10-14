@@ -4,6 +4,8 @@ Handwriting-first notes on Boox. Proven on a **Go 7 Color II**: a third-party ap
 
 Tip APK: [https://zetteldraw.com/apk](https://zetteldraw.com/apk). **Product behavior (UI + sync, regression checklist):** [docs/product-behavior.md](docs/product-behavior.md). Full correctness argument: [docs/CORRECTNESS.md](docs/CORRECTNESS.md).
 
+**Greenfield rewrite pack** → [docs/greenfield/](docs/greenfield/) — condensed product/architecture/sync specs + screenshots for a **from-scratch** rewrite. Tip v86 is reference behavior only; prefer greenfield over continued in-place refactor of the legacy tree.
+
 ---
 
 ## The only three irreversible bugs
@@ -253,3 +255,4 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 - `server/` — sync service, shared SQL migrations, live-writer lease, thumbnail rendering, web endpoints, docker-compose.
 - `web/` — Next.js read-only overview + Hand off Settings ceremony.
 - `docs/CORRECTNESS.md` — invariants, concurrency model, tests, non-guarantees, and **Scale** (heap / sync payload / OOM envelope) for the three irreversible bugs.
+- `docs/greenfield/` — **Greenfield rewrite pack** (product behavior, architecture, sync model, non-goals, key screenshots).
