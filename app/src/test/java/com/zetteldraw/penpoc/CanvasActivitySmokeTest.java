@@ -336,12 +336,10 @@ public class CanvasActivitySmokeTest {
         assertEquals(java.util.Arrays.asList("1/3", "2/3", "3/3"), pageLabels(root));
         String movedFirst = repo.scratchpadPages().get(0).id;
         clickFirstEnabled(root, "Move");
-        assertNotNull(find(root, "Moving Scratchpad 1"));
-        click(root, "journal");
-        idle();
-        assertNotNull(find(root, "Place Scratchpad 1 in journal"));
-        click(root, "Confirm");
-        idle();
+        assertNull("Move opens notebook menu", find(root, "Moving Scratchpad 1"));
+        assertNull(find(root, "Reordering Scratchpad 1"));
+        // Overlay menu item is last; tab bars match earlier in DFS.
+        clickLast(root, "journal");
         assertEquals(2, repo.notebookPages(Notebook.JOURNAL.uuid).size());
         assertEquals(movedFirst, repo.notebookPages(Notebook.JOURNAL.uuid).get(0).id);
         assertEquals("moving a page away updates the count", java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
@@ -362,11 +360,7 @@ public class CanvasActivitySmokeTest {
         idle();
         String movedSecond = repo.scratchpadPages().get(0).id;
         clickFirstEnabled(root, "Move");
-        click(root, "fresh");
-        idle();
-        assertNotNull(find(root, "Place Scratchpad 1 in fresh"));
-        click(root, "Confirm");
-        idle();
+        clickLast(root, "fresh");
         assertEquals(2, repo.notebookPages(fresh.id).size());
         assertEquals(movedSecond, repo.notebookPages(fresh.id).get(0).id);
         assertEquals(1, repo.scratchpadPages().size());

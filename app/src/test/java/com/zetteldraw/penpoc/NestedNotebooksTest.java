@@ -132,13 +132,10 @@ public class NestedNotebooksTest {
         clickDesc(root, "Scratchpad");
         idle();
         click(root, "Move");
-        assertNotNull(find(root, "Moving Scratchpad 1"));
-        click(root, "shelf");
-        idle();
-        click(root, "chapter");
-        idle();
-        assertNotNull(find(root, "Place Scratchpad 1 in chapter"));
-        click(root, "Confirm");
+        assertNull("Move opens hierarchy menu, not snackbar", find(root, "Moving Scratchpad 1"));
+        assertNull(find(root, "Reordering Scratchpad 1"));
+        // Overlay menu item is the last match (tab bars are earlier in the tree).
+        assertTrue(last(root, "chapter").performClick());
         idle();
         Board moved = repo.pages(chapter.id).get(0);
         assertEquals(sourceId, moved.id);
@@ -285,7 +282,7 @@ public class NestedNotebooksTest {
     }
 
     @Test
-    public void placeUnderUsesSnackbarAndSelectedNotebookNotPageMidline() {
+    public void placeUnderUsesSharedHierarchyMenuNotSnackbar() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
@@ -299,52 +296,31 @@ public class NestedNotebooksTest {
         assertTrue(find(root, "notes").performLongClick());
         idle();
         click(root, "Place under…");
-        assertNotNull(find(root, "Placing notes under…"));
-        View confirm = find(root, "Confirm");
-        assertNotNull(confirm);
-        assertFalse("Scratchpad is not a place target", confirm.isEnabled());
-
-        click(root, "notes");
-        idle();
-        assertFalse("cannot place under itself", find(root, "Confirm").isEnabled());
-        assertNotNull(find(root, "Placing notes under…"));
-
-        click(root, "shelf");
-        idle();
-        assertNotNull(find(root, "Place notes under shelf"));
-        assertTrue(find(root, "Confirm").isEnabled());
-
-        click(root, "chapter");
-        idle();
-        assertNotNull(find(root, "Place notes under chapter"));
-        click(root, "Confirm");
+        assertNull("Place under is hierarchy menu, not snackbar", find(root, "Placing notes under…"));
+        assertNull(find(root, "Confirm"));
+        // Self omitted from picker: only the standing tab named "notes" remains.
+        ArrayList<TextView> notesHits = new ArrayList<>();
+        collectText(root, "notes", notesHits);
+        assertEquals("cannot place under itself", 1, notesHits.size());
+        assertTrue(last(root, "chapter").performClick());
         idle();
 
         assertEquals(chapter.id, repo.notebooks().stream()
                 .filter(n -> n.id.equals(notes.id)).findFirst().get().parentId);
-        assertNull("snackbar closes after confirm", find(root, "Place notes under chapter"));
-        assertNull(find(root, "Placing notes under…"));
 
-        assertTrue(find(root, "notes").performLongClick());
-        idle();
-        click(root, "Place under…");
-        click(root, "chapter");
-        idle();
-        assertFalse("already under chapter keeps Confirm disabled", find(root, "Confirm").isEnabled());
-        assertNotNull(find(root, "Placing notes under…"));
-        click(root, "Cancel");
-        idle();
-        assertNull(find(root, "Placing notes under…"));
-
-        // shelf → chapter → notes; filing shelf under chapter (or notes) would cycle.
+        // shelf → chapter → notes; descendants omitted from the picker (child-bar
+        // "chapter" may still show; nested "notes" is not a menu row).
         assertTrue(find(root, "shelf").performLongClick());
         idle();
         click(root, "Place under…");
-        click(root, "chapter");
-        idle();
-        assertFalse("cannot place under a descendant", find(root, "Confirm").isEnabled());
-        assertNotNull(find(root, "Placing shelf under…"));
-        click(root, "Cancel");
+        ArrayList<TextView> chapterHits = new ArrayList<>();
+        collectText(root, "chapter", chapterHits);
+        assertEquals("chapter only as standing child tab, not a second menu row",
+                1, chapterHits.size());
+        ArrayList<TextView> notesHitsAfter = new ArrayList<>();
+        collectText(root, "notes", notesHitsAfter);
+        assertEquals("nested notes omitted from place-under picker", 0, notesHitsAfter.size());
+        assertNotNull("seed notebooks still offered as parents", last(root, "journal"));
 
         controller.pause().stop().destroy();
     }

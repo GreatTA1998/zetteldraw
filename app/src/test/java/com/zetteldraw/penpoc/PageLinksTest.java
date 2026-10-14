@@ -126,7 +126,7 @@ public class PageLinksTest {
     }
 
     @Test
-    public void linkAndMoveSitInOppositeCornersWithRefsAboveLink() {
+    public void linkAndReorderSitLeftMoveAndMoreSitRight() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
@@ -149,34 +149,41 @@ public class PageLinksTest {
         assertNotNull(page);
         View slot = (View) page.getParent();
         TextView link = textIn(slot, "Link");
+        TextView reorder = textIn(slot, "Reorder");
         TextView move = textIn(slot, "Move");
         TextView more = textIn(slot, "⋮");
         TextView ref = find(root, "→ tobook 1/2");
         assertNotNull(link);
-        assertNull("Reorder control is removed; Move covers both", textIn(slot, "Reorder"));
+        assertNotNull("Reorder sits next to Link", reorder);
         assertNotNull(move);
         assertNotNull(more);
         assertNotNull(ref);
         int[] linkLoc = new int[2];
+        int[] reorderLoc = new int[2];
         int[] moveLoc = new int[2];
         int[] refLoc = new int[2];
         int[] slotLoc = new int[2];
         link.getLocationOnScreen(linkLoc);
+        reorder.getLocationOnScreen(reorderLoc);
         move.getLocationOnScreen(moveLoc);
         ref.getLocationOnScreen(refLoc);
         slot.getLocationOnScreen(slotLoc);
         int mid = slotLoc[0] + slot.getWidth() / 2;
         assertTrue("Link sits on the left", linkLoc[0] < mid);
+        assertTrue("Reorder sits next to Link on the left", reorderLoc[0] < mid);
+        assertTrue("Reorder is to the right of Link", reorderLoc[0] > linkLoc[0]);
         assertTrue("Move sits on the right", moveLoc[0] > mid);
         assertTrue("⋮ is a menu, not an ellipsis", "⋮".contentEquals(more.getText()));
+        assertEquals("Link and Reorder share the bottom inset",
+                linkLoc[1] + link.getHeight(), reorderLoc[1] + reorder.getHeight());
         assertEquals("Link and Move share the bottom inset",
                 linkLoc[1] + link.getHeight(), moveLoc[1] + move.getHeight());
         int[] moreLoc = new int[2];
         more.getLocationOnScreen(moreLoc);
         assertEquals("Move and ⋮ share the chrome-row bottom",
                 moveLoc[1] + move.getHeight(), moreLoc[1] + more.getHeight());
-        assertEquals("Link, Move, and ⋮ share one row height", link.getHeight(), more.getHeight());
-        assertEquals("Link, Move, and ⋮ share one row height", move.getHeight(), more.getHeight());
+        assertEquals("Link, Reorder, Move, and ⋮ share one row height", link.getHeight(), more.getHeight());
+        assertEquals("Link, Reorder, Move, and ⋮ share one row height", move.getHeight(), more.getHeight());
         assertTrue("references stack above Link",
                 refLoc[1] + ref.getHeight() <= linkLoc[1] + 2);
         // ← and → are the first glyph; both must match ⋮'s 18sp weight.

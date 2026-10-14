@@ -104,8 +104,9 @@ public final class CanvasActivity extends Activity {
     private int settingsGeneration;
     private LinearLayout topBar;
     /**
-     * Bottom strip for Link / Move / Place under. Floated on {@link #root},
+     * Bottom strip for Link / Reorder. Floated on {@link #root},
      * not parented into the notebook bars, so it stays separate from the top nav.
+     * Move and Place under use the shared notebook hierarchy menu instead.
      */
     private LinearLayout modeBar;
     private TextView modeText;
@@ -124,14 +125,11 @@ public final class CanvasActivity extends Activity {
     private String linkSourceId;
     /** "notebook k" captured from the slot on screen. Not looked up again. */
     private String linkSourceRef;
-    /** Page the Move control was pressed on. Null when moving is closed. */
-    private String moveSourceId;
-    private String moveSourceRef;
-    /** Notebook id of the move source ({@code null} = Scratchpad). */
-    private String moveSourceNotebookId;
-    /** Notebook being filed under another via Place under. Null when closed. */
-    private String placeSourceId;
-    private String placeSourceTitle;
+    /** Page the Reorder control was pressed on. Null when reorder is closed. */
+    private String reorderSourceId;
+    private String reorderSourceRef;
+    /** Notebook id of the reorder source ({@code null} = Scratchpad). */
+    private String reorderSourceNotebookId;
     private View toolbar;
     private PageInkView inkView;
     private PageScroller scroller;
@@ -1277,7 +1275,7 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Floating bottom chip for Link, Move, and Place under. Not parented into
+     * Floating bottom chip for Link and Reorder. Not parented into
      * the notebook tab bars; a hole in the Onyx reader when visible (bounds follow margins).
      */
     private LinearLayout buildModeBar() {
@@ -1520,8 +1518,7 @@ public final class CanvasActivity extends Activity {
         if (slot.page.isBlank()) {
             return;
         }
-        cancelMoving();
-        cancelPlacing();
+        cancelReorder();
         hideLassoMenu();
         linkSourceId = slot.page.id;
         linkSourceRef = refOnScreen(slot);
@@ -1530,30 +1527,15 @@ public final class CanvasActivity extends Activity {
         updateExcludeRects();
     }
 
-    private void startMoving(PageSlot slot) {
+    private void startReorder(PageSlot slot) {
         if (slot.page.isBlank()) {
             return;
         }
         cancelLinking();
-        cancelPlacing();
         hideLassoMenu();
-        moveSourceId = slot.page.id;
-        moveSourceRef = refOnScreen(slot);
-        moveSourceNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
-        modeBar.setVisibility(View.VISIBLE);
-        refreshModeBar();
-        updateExcludeRects();
-    }
-
-    private void startPlacing(String notebookId) {
-        if (notebookId == null || notebookById(notebookId) == null) {
-            return;
-        }
-        cancelLinking();
-        cancelMoving();
-        hideLassoMenu();
-        placeSourceId = notebookId;
-        placeSourceTitle = titleOf(notebookId);
+        reorderSourceId = slot.page.id;
+        reorderSourceRef = refOnScreen(slot);
+        reorderSourceNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
         modeBar.setVisibility(View.VISIBLE);
         refreshModeBar();
         updateExcludeRects();
@@ -1562,25 +1544,21 @@ public final class CanvasActivity extends Activity {
     private void cancelMode() {
         if (linkSourceId != null) {
             cancelLinking();
-        } else if (moveSourceId != null) {
-            cancelMoving();
         } else {
-            cancelPlacing();
+            cancelReorder();
         }
     }
 
     private void confirmMode() {
         if (linkSourceId != null) {
             confirmLinking();
-        } else if (moveSourceId != null) {
-            confirmMoving();
-        } else if (placeSourceId != null) {
-            confirmPlacing();
+        } else if (reorderSourceId != null) {
+            confirmReorder();
         }
     }
 
     private boolean modeActive() {
-        return linkSourceId != null || moveSourceId != null || placeSourceId != null;
+        return linkSourceId != null || reorderSourceId != null;
     }
 
     private void cancelLinking() {
@@ -1595,22 +1573,10 @@ public final class CanvasActivity extends Activity {
         updateExcludeRects();
     }
 
-    private void cancelMoving() {
-        moveSourceId = null;
-        moveSourceRef = null;
-        moveSourceNotebookId = null;
-        if (!modeActive()) {
-            modeBar.setVisibility(View.GONE);
-            modeConfirm.setVisibility(View.GONE);
-        } else {
-            refreshModeBar();
-        }
-        updateExcludeRects();
-    }
-
-    private void cancelPlacing() {
-        placeSourceId = null;
-        placeSourceTitle = null;
+    private void cancelReorder() {
+        reorderSourceId = null;
+        reorderSourceRef = null;
+        reorderSourceNotebookId = null;
         if (!modeActive()) {
             modeBar.setVisibility(View.GONE);
             modeConfirm.setVisibility(View.GONE);
@@ -1632,9 +1598,9 @@ public final class CanvasActivity extends Activity {
         reloadPages(scroll);
     }
 
-    private void confirmMoving() {
-        PageSlot target = moveTargetSlot();
-        if (moveSourceId == null || target == null || target.page.id.equals(moveSourceId)) {
+    private void confirmReorder() {
+        PageSlot target = reorderTargetSlot();
+        if (reorderSourceId == null || target == null || target.page.id.equals(reorderSourceId)) {
             refreshModeBar();
             return;
         }
@@ -1644,15 +1610,15 @@ public final class CanvasActivity extends Activity {
             refreshModeBar();
             return;
         }
-        if (!target.page.isBlank() && sameNotebookForMove(target) && isAlreadyBeforeTarget(target)) {
+        if (!target.page.isBlank() && sameNotebookForReorder(target) && isAlreadyBeforeTarget(target)) {
             refreshModeBar();
             return;
         }
-        if (target.page.isBlank() && sameNotebookForMove(target) && isSourceLastInked()) {
+        if (target.page.isBlank() && sameNotebookForReorder(target) && isSourceLastInked()) {
             refreshModeBar();
             return;
         }
-        String sourceId = moveSourceId;
+        String sourceId = reorderSourceId;
         // Destination is the open collection (snackbar name), not the target
         // page's sheet — that page can be a stale slot from the parent notebook.
         String destNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
@@ -1662,7 +1628,7 @@ public final class CanvasActivity extends Activity {
         repository.saveInk(target.page);
         Board source = pageOnScreen(sourceId);
         if (source == null) {
-            for (Board page : repository.pages(moveSourceNotebookId)) {
+            for (Board page : repository.pages(reorderSourceNotebookId)) {
                 if (page.id.equals(sourceId)) {
                     source = page;
                     break;
@@ -1673,12 +1639,12 @@ public final class CanvasActivity extends Activity {
             repository.saveInk(source);
         }
         if (!repository.placePageBefore(sourceId, target.page.id, destNotebookId)) {
-            LaunchLog.mark("place-before Confirm refused; leave Move mode open");
+            LaunchLog.mark("place-before Confirm refused; leave Reorder mode open");
             refreshModeBar();
             return;
         }
-        cancelMoving();
-        openAfterMove(sourceId, destNotebookId);
+        cancelReorder();
+        openAfterReorder(sourceId, destNotebookId);
     }
 
     private Board pageOnScreen(String pageId) {
@@ -1690,7 +1656,7 @@ public final class CanvasActivity extends Activity {
         return null;
     }
 
-    private void openAfterMove(String pageId, String notebookId) {
+    private void openAfterReorder(String pageId, String notebookId) {
         List<Board> pages = repository.pages(notebookId);
         int gap = layoutGap(pages);
         int scroll = 0;
@@ -1712,9 +1678,9 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    private boolean sameNotebookForMove(PageSlot target) {
+    private boolean sameNotebookForReorder(PageSlot target) {
         String targetNotebook = SCRATCHPAD.equals(collectionId) ? null : collectionId;
-        return java.util.Objects.equals(targetNotebook, moveSourceNotebookId);
+        return java.util.Objects.equals(targetNotebook, reorderSourceNotebookId);
     }
 
     /** True when source already sits immediately before {@code target} in this list. */
@@ -1725,7 +1691,7 @@ public final class CanvasActivity extends Activity {
         }
         int sourceIndex = -1;
         for (int i = 0; i < slots.size(); i++) {
-            if (slots.get(i).page.id.equals(moveSourceId)) {
+            if (slots.get(i).page.id.equals(reorderSourceId)) {
                 sourceIndex = i;
                 break;
             }
@@ -1739,7 +1705,7 @@ public final class CanvasActivity extends Activity {
         int sourceIndex = -1;
         for (int i = 0; i < slots.size(); i++) {
             PageSlot slot = slots.get(i);
-            if (slot.page.id.equals(moveSourceId)) {
+            if (slot.page.id.equals(reorderSourceId)) {
                 sourceIndex = i;
             }
             if (!slot.page.isBlank()) {
@@ -1762,10 +1728,10 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Move target: the page that owns the vertical center of the drawing
+     * Reorder target: the page that owns the vertical center of the drawing
      * viewport, even when only partially visible.
      */
-    private PageSlot moveTargetSlot() {
+    private PageSlot reorderTargetSlot() {
         int viewport = scroller.getHeight();
         if (viewport <= 0 && drawingArea != null) {
             viewport = drawingArea.getHeight();
@@ -1821,50 +1787,30 @@ public final class CanvasActivity extends Activity {
             }
             return;
         }
-        if (moveSourceId != null && moveSourceRef != null) {
-            PageSlot target = moveTargetSlot();
+        if (reorderSourceId != null && reorderSourceRef != null) {
+            PageSlot target = reorderTargetSlot();
             if (loading()) {
-                modeText.setText(getString(R.string.moving, moveSourceRef));
+                modeText.setText(getString(R.string.reordering, reorderSourceRef));
                 setModeConfirmEnabled(false);
-            } else if (target == null || target.page.id.equals(moveSourceId)) {
-                modeText.setText(getString(R.string.moving, moveSourceRef));
+            } else if (target == null || target.page.id.equals(reorderSourceId)) {
+                modeText.setText(getString(R.string.reordering, reorderSourceRef));
                 setModeConfirmEnabled(false);
-            } else if (!target.page.isBlank() && sameNotebookForMove(target)
+            } else if (!target.page.isBlank() && sameNotebookForReorder(target)
                     && isAlreadyBeforeTarget(target)) {
-                modeText.setText(getString(R.string.moving, moveSourceRef));
+                modeText.setText(getString(R.string.reordering, reorderSourceRef));
                 setModeConfirmEnabled(false);
-            } else if (target.page.isBlank() && sameNotebookForMove(target)
+            } else if (target.page.isBlank() && sameNotebookForReorder(target)
                     && isSourceLastInked()) {
-                modeText.setText(getString(R.string.moving, moveSourceRef));
+                modeText.setText(getString(R.string.reordering, reorderSourceRef));
                 setModeConfirmEnabled(false);
             } else if (target.page.isBlank()) {
-                modeText.setText(getString(R.string.place_in, moveSourceRef, nameOnScreen()));
+                modeText.setText(getString(R.string.place_in, reorderSourceRef, nameOnScreen()));
                 setModeConfirmEnabled(true);
             } else {
-                modeText.setText(getString(R.string.place_before, moveSourceRef, refOnScreen(target)));
-                setModeConfirmEnabled(true);
-            }
-            return;
-        }
-        if (placeSourceId != null && placeSourceTitle != null) {
-            String targetId = placeTargetNotebookId();
-            if (!canPlaceUnder(placeSourceId, targetId)) {
-                modeText.setText(getString(R.string.placing_under, placeSourceTitle));
-                setModeConfirmEnabled(false);
-            } else {
-                modeText.setText(getString(R.string.place_under_target, placeSourceTitle,
-                        titleOf(targetId)));
+                modeText.setText(getString(R.string.place_before, reorderSourceRef, refOnScreen(target)));
                 setModeConfirmEnabled(true);
             }
         }
-    }
-
-    /** Selected notebook tab (pages ignored). Null on Scratchpad. */
-    private String placeTargetNotebookId() {
-        if (SCRATCHPAD.equals(collectionId)) {
-            return null;
-        }
-        return collectionId;
     }
 
     /**
@@ -1886,25 +1832,6 @@ public final class CanvasActivity extends Activity {
         return !descendantIds(sourceId).contains(targetId);
     }
 
-    private void confirmPlacing() {
-        String targetId = placeTargetNotebookId();
-        if (placeSourceId == null || !canPlaceUnder(placeSourceId, targetId)) {
-            refreshModeBar();
-            return;
-        }
-        String sourceId = placeSourceId;
-        if (!repository.placeNotebook(sourceId, targetId)) {
-            refreshModeBar();
-            return;
-        }
-        cancelPlacing();
-        if (trail.contains(sourceId) || sourceId.equals(collectionId)) {
-            openNotebook(sourceId);
-        } else {
-            rebuildNotebookTabs();
-        }
-    }
-
     /** Confirm stays visible while the mode chip is up; greyed when the action is a no-op. */
     private void setModeConfirmEnabled(boolean enabled) {
         modeConfirm.setVisibility(View.VISIBLE);
@@ -1913,7 +1840,7 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Notebook name and current page index for Link / Move snackbars.
+     * Notebook name and current page index for Link / Reorder snackbars.
      * Totals stay on the top-left chrome only ({@code k/n}); snackbars omit
      * {@code /n} so two page numbers are easier to compare.
      */
@@ -2107,7 +2034,7 @@ public final class CanvasActivity extends Activity {
         LinearLayout menu = panel();
         menu.setMinimumWidth(Math.max(dp(200), tab.getWidth()));
         addPanelButton(menu, getString(R.string.rename), 0, () -> showNameForm(id, tab));
-        addPanelButton(menu, getString(R.string.place_under), 0, () -> startPlacing(id));
+        addPanelButton(menu, getString(R.string.place_under), 0, () -> showPlaceUnderMenu(id, tab));
         addPanelButton(menu, getString(R.string.make_top_level), 0, () -> {
             if (repository.placeNotebook(id, null) && trail.contains(id)) {
                 openNotebook(id);
@@ -2117,6 +2044,147 @@ public final class CanvasActivity extends Activity {
         });
         addPanelButton(menu, getString(R.string.delete), 0, () -> confirmDelete(id, tab));
         showOverlay(menu, anchoredLp(tab, menu), root);
+    }
+
+    /**
+     * In-window Move destination picker (not snackbar+nav). Appends the page
+     * as newest in the chosen notebook. Uses the shared hierarchy menu.
+     */
+    private void showMoveMenu(PageSlot slot) {
+        if (slot.page.isBlank()) {
+            return;
+        }
+        cancelLinking();
+        cancelReorder();
+        hideLassoMenu();
+        showNotebookHierarchyMenu(slot.moveButton, drawingArea, null, true, slot,
+                notebookId -> movePageToNotebook(slot, notebookId));
+    }
+
+    /**
+     * Place under parent picker — same hierarchy menu as Move, with self and
+     * descendants omitted.
+     */
+    private void showPlaceUnderMenu(String notebookId, View anchor) {
+        if (notebookId == null || notebookById(notebookId) == null) {
+            return;
+        }
+        HashSet<String> skip = descendantIds(notebookId);
+        skip.add(notebookId);
+        showNotebookHierarchyMenu(anchor, root, skip, false, null, parentId -> {
+            if (!canPlaceUnder(notebookId, parentId)) {
+                return;
+            }
+            if (repository.placeNotebook(notebookId, parentId)) {
+                if (trail.contains(notebookId) || notebookId.equals(collectionId)) {
+                    openNotebook(notebookId);
+                } else {
+                    rebuildNotebookTabs();
+                }
+            }
+        });
+    }
+
+    /**
+     * Shared indented notebook hierarchy for Move destination and Place-under
+     * parent. Sized larger than other panels so deep trees need less scrolling.
+     */
+    private void showNotebookHierarchyMenu(
+            View anchor,
+            FrameLayout host,
+            HashSet<String> skipIds,
+            boolean includeNewNotebook,
+            PageSlot moveAfter,
+            NotebookPick onPick) {
+        if (shownNotebooks == null) {
+            shownNotebooks = repository.notebooks();
+        }
+        LinearLayout list = hierarchyPanel();
+        LinearLayout tree = new LinearLayout(this);
+        tree.setOrientation(LinearLayout.VERTICAL);
+        boolean any = addNotebookHierarchy(tree, null, 0, skipIds, onPick);
+        if (!any) {
+            tree.addView(panelText(getString(R.string.no_place_target), 14));
+        }
+        if (includeNewNotebook) {
+            addPanelButton(tree, getString(R.string.new_notebook_item), 0,
+                    () -> showNameForm(null, null, null, moveAfter));
+        }
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.addView(tree, matchWrap());
+        int hostH = host.getHeight() > 0 ? host.getHeight() : root.getHeight();
+        int maxH = Math.max(dp(280), Math.round(hostH * 0.55f));
+        tree.measure(
+                View.MeasureSpec.makeMeasureSpec(dp(320), View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int treeH = tree.getMeasuredHeight();
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                treeH > maxH ? maxH : LinearLayout.LayoutParams.WRAP_CONTENT);
+        list.addView(scroll, scrollLp);
+        FrameLayout.LayoutParams lp = host == drawingArea
+                ? pageAnchoredLp(anchor, list)
+                : anchoredLp(anchor, list);
+        showOverlay(list, lp, host);
+    }
+
+    private boolean addNotebookHierarchy(
+            LinearLayout tree,
+            String parentId,
+            int depth,
+            HashSet<String> skipIds,
+            NotebookPick onPick) {
+        boolean any = false;
+        for (BoardRepository.NotebookInfo each : childrenOf(parentId)) {
+            if (skipIds != null && skipIds.contains(each.id)) {
+                // Still walk children in case a skipped node has eligible cousins
+                // via another branch — skipIds already includes descendants of
+                // Place-under source, so children are also skipped.
+                continue;
+            }
+            any = true;
+            String id = each.id;
+            addPanelButton(tree, each.title, depth, () -> onPick.onPick(id));
+            if (addNotebookHierarchy(tree, each.id, depth + 1, skipIds, onPick)) {
+                any = true;
+            }
+        }
+        return any;
+    }
+
+    /**
+     * Cross-notebook append Move (menu path). Places before the dest trailing
+     * blank via {@code placePageBefore} so page id + holdFlush / dest-id (v63+)
+     * stay intact — not the legacy append tear that dropped the slice id.
+     */
+    private void movePageToNotebook(PageSlot slot, String targetNotebookId) {
+        if (slot == null || slot.page.isBlank() || targetNotebookId == null) {
+            return;
+        }
+        repository.saveInk(slot.page);
+        List<Board> destPages = repository.pages(targetNotebookId);
+        if (destPages.isEmpty()) {
+            return;
+        }
+        Board trailing = destPages.get(destPages.size() - 1);
+        if (!repository.placePageBefore(slot.page.id, trailing.id, targetNotebookId)) {
+            LaunchLog.mark("Move menu place-before refused for " + targetNotebookId);
+            return;
+        }
+        reloadPages(effectiveScrollY());
+    }
+
+    private interface NotebookPick {
+        void onPick(String notebookId);
+    }
+
+    /** Roomier than {@link #panel()} for deep Move / Place-under trees. */
+    private LinearLayout hierarchyPanel() {
+        LinearLayout list = panel();
+        list.setMinimumWidth(dp(280));
+        list.setPadding(dp(10), dp(8), dp(10), dp(8));
+        return list;
     }
 
     private HashSet<String> descendantIds(String id) {
@@ -2139,7 +2207,7 @@ public final class CanvasActivity extends Activity {
      * in the top bar the form hangs under it.
      */
     private void showNameForm(String id, View anchor) {
-        showNameForm(id, anchor, null);
+        showNameForm(id, anchor, null, null);
     }
 
     /**
@@ -2147,6 +2215,14 @@ public final class CanvasActivity extends Activity {
      * the parent of a notebook created from a child bar; null is top-level.
      */
     private void showNameForm(String id, View anchor, String parentId) {
+        showNameForm(id, anchor, parentId, null);
+    }
+
+    /**
+     * Create / rename. When {@code moveAfter} is set (Move → + New notebook),
+     * the page is filed into the created notebook instead of opening it empty.
+     */
+    private void showNameForm(String id, View anchor, String parentId, PageSlot moveAfter) {
         LinearLayout form = panel();
         form.addView(panelText(getString(id == null ? R.string.new_notebook : R.string.rename_notebook), 15));
         EditText name = new EditText(this);
@@ -2180,6 +2256,8 @@ public final class CanvasActivity extends Activity {
             rebuildNotebookTabs();
             if (created == null) {
                 syncNav();
+            } else if (moveAfter != null) {
+                movePageToNotebook(moveAfter, created.id);
             } else {
                 openNotebook(created.id);
             }
@@ -2655,7 +2733,8 @@ public final class CanvasActivity extends Activity {
 
     private void addPanelButton(LinearLayout list, String label, int depth, Runnable action) {
         Button item = tinyButton(label, 16);
-        item.setPadding(dp(12 + 16 * depth), 0, dp(12), 0);
+        // Hierarchy indent: 20dp/level (was 16) so nested notebooks read clearly.
+        item.setPadding(dp(12 + 20 * depth), 0, dp(12), 0);
         item.setMinimumHeight(dp(48));
         item.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         item.setSingleLine(true);
@@ -2872,8 +2951,9 @@ public final class CanvasActivity extends Activity {
         int last = indexAt(Math.max(top, bottom - 1));
         for (int i = first; i >= 0 && i <= last && i < slots.size(); i++) {
             PageSlot slot = slots.get(i);
-            // Move and Link are only the word. The link lines are the same kind of hole.
+            // Link / Reorder / Move are only the word. The link lines are the same kind of hole.
             addExclude(rects, slot.linkButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
+            addExclude(rects, slot.reorderButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
             addExclude(rects, slot.moveButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
             addExclude(rects, slot.moreButton, dp(6), origin, loc);
             addExclude(rects, slot.number, dp(6), origin, loc);
@@ -2941,10 +3021,10 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Transparent stand-in for one page above the ink surface: carries the
-     * page's "k/n" number (top-left, n counting the trailing blank), Link with
-     * stacked references (bottom-left), Move and ⋮ (bottom-right), and the
-     * dashed separator below it. Slots are rebuilt whenever the list changes,
-     * so n is always current.
+     * page's "k/n" number (top-left, n counting the trailing blank), Link and
+     * Reorder with stacked references (bottom-left), Move and ⋮ (bottom-right),
+     * and the dashed separator below it. Slots are rebuilt whenever the list
+     * changes, so n is always current.
      */
     private final class PageSlot extends FrameLayout {
         final Board page;
@@ -2953,6 +3033,7 @@ public final class CanvasActivity extends Activity {
         final TextView number;
         final LinearLayout actions;
         final Button linkButton;
+        final Button reorderButton;
         final Button moveButton;
         final Button moreButton;
         final ArrayList<View> linkLines = new ArrayList<>();
@@ -2974,29 +3055,34 @@ public final class CanvasActivity extends Activity {
             addView(number, labelLp);
 
             linkButton = tinyButton(getString(R.string.link), 14);
+            reorderButton = tinyButton(getString(R.string.reorder), 14);
             moveButton = tinyButton(getString(R.string.move), 14);
             // Word-wide, same row height and vertical center as ⋮ (stylus-sized).
             chromeWord(linkButton);
+            chromeWord(reorderButton);
             chromeWord(moveButton);
             moreButton = tinyButton(getString(R.string.notebook_options), 18);
             moreButton.setMinimumHeight(dp(48));
             moreButton.setMinimumWidth(dp(48));
             moreButton.setMinHeight(dp(48));
             moreButton.setMinWidth(dp(48));
-            // Optical: END-align ⋮ in the 48dp hit box (not centered). With rightMargin 4
-            // and padRight 10, edge→ink is 14dp — same as Link (leftMargin 10 + pad 4).
-            moreButton.setPadding(dp(10), 0, dp(10), 0);
+            // Optical (v74): END-align ⋮ in the 48dp hit box. Glyph sits high in the
+            // em box, so padTop 2 nudges ink down to match Link/Reorder text.
+            // rightMargin 8 + padRight 10 → 18dp edge→ink (was 14); Link left stays 14.
+            // Equal visual weight left vs right without hugging the screen edge.
+            moreButton.setPadding(dp(10), dp(2), dp(10), 0);
             moreButton.setIncludeFontPadding(false);
             moreButton.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
             moreButton.setContentDescription(getString(R.string.page_options));
             onTap(linkButton, v -> startLinking(this));
-            onTap(moveButton, v -> startMoving(this));
+            onTap(reorderButton, v -> startReorder(this));
+            onTap(moveButton, v -> showMoveMenu(this));
             onTap(moreButton, v -> showPageMenu(this));
 
             int mark = page.paper != null ? dp(2) : pageGap;
             int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(10);
 
-            // Left: references stack up above Link; Link shares ⋮'s bottom inset.
+            // Left: references above Link · Reorder (both navigate-to-target).
             LinearLayout left = new LinearLayout(context);
             left.setOrientation(LinearLayout.VERTICAL);
             left.setGravity(Gravity.START);
@@ -3004,7 +3090,15 @@ public final class CanvasActivity extends Activity {
             lines.setOrientation(LinearLayout.VERTICAL);
             fillLinkLines(lines);
             left.addView(lines, wrap());
-            left.addView(linkButton, wrap());
+            LinearLayout leftRow = new LinearLayout(context);
+            leftRow.setOrientation(LinearLayout.HORIZONTAL);
+            leftRow.setGravity(Gravity.CENTER_VERTICAL);
+            leftRow.setBaselineAligned(false);
+            leftRow.addView(linkButton, wrap());
+            LinearLayout.LayoutParams reorderLp = wrap();
+            reorderLp.leftMargin = dp(6);
+            leftRow.addView(reorderButton, reorderLp);
+            left.addView(leftRow, wrap());
             FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
@@ -3013,9 +3107,7 @@ public final class CanvasActivity extends Activity {
             leftLp.bottomMargin = chromeBottom;
             addView(left, leftLp);
 
-            // Right: Move and ⋮ share one chrome row. rightMargin is tighter than Link's
-            // leftMargin so ⋮ ink (END-aligned inside the 48dp target) optically matches
-            // Link's edge→ink gutter; Move stays grouped with ⋮.
+            // Right: Move (notebook menu) and ⋮ share one chrome row.
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
             actions.setGravity(Gravity.CENTER_VERTICAL);
@@ -3028,7 +3120,7 @@ public final class CanvasActivity extends Activity {
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
             actionsLp.gravity = Gravity.BOTTOM | Gravity.END;
-            actionsLp.rightMargin = dp(4);
+            actionsLp.rightMargin = dp(8);
             actionsLp.bottomMargin = chromeBottom;
             addView(actions, actionsLp);
 
@@ -3046,13 +3138,14 @@ public final class CanvasActivity extends Activity {
         }
 
         /**
-         * Blank pages: Link and Move greyed like each other. Trailing blank:
+         * Blank pages: Link, Reorder, and Move greyed alike. Trailing blank:
          * ⋮ stays visible and uses the same disabled alpha (no invisible chrome).
          */
         void syncEnabled() {
             boolean blank = page.isBlank();
             boolean trailing = isTrailingBlank(this);
             setChromeEnabled(linkButton, !blank);
+            setChromeEnabled(reorderButton, !blank);
             setChromeEnabled(moveButton, !blank);
             moreButton.setVisibility(View.VISIBLE);
             setChromeEnabled(moreButton, !trailing);
@@ -3107,8 +3200,8 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Link and Move stay as wide as the word, but match the ⋮ row height so
-     * they share one vertical center above the dashed edge.
+     * Link, Reorder, and Move stay as wide as the word, but match the ⋮ row
+     * height so they share one vertical center above the dashed edge.
      */
     private void chromeWord(Button button) {
         button.setMinimumWidth(0);

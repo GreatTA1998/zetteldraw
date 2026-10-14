@@ -30,7 +30,10 @@ import org.robolectric.shadows.ShadowLooper;
 import java.time.Duration;
 import java.util.List;
 
-/** Move mode: bottom snackbar, same-notebook reorder and cross-notebook place-after. */
+/**
+ * Reorder = snackbar + midline place-before (Link family).
+ * Move = notebook hierarchy menu (append into chosen notebook).
+ */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class, qualifiers = "w600dp-h1000dp",
         shadows = IdleSurfaceViewShadow.class)
@@ -42,7 +45,7 @@ public class PageMoveUiTest {
     }
 
     @Test
-    public void movePageThreeBeforePageTwoYieldsOneThreeTwoFour() {
+    public void reorderPageThreeBeforePageTwoYieldsOneThreeTwoFour() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -64,17 +67,15 @@ public class PageMoveUiTest {
         String id4 = before.get(3).id;
 
         View scroller = pageScroller(root);
-        // Open lands on last inked; scroll to page 3 so Confirm is disabled on source.
         scroller.scrollTo(0, 2 * height);
         idle();
         relayout(root);
-        clickOnPage(root, "3/5", "Move");
-        assertNotNull(find(root, "Moving book 3"));
+        clickOnPage(root, "3/5", "Reorder");
+        assertNotNull(find(root, "Reordering book 3"));
         TextView confirmOnSource = find(root, "Confirm");
         assertNotNull("confirm stays visible on the source page", confirmOnSource);
         assertFalse("confirm is disabled on the source page", confirmOnSource.isEnabled());
 
-        // Center page 2 (viewport midline owns that page).
         scroller.scrollTo(0, height);
         idle();
         relayout(root);
@@ -92,14 +93,14 @@ public class PageMoveUiTest {
         assertEquals(id2, after.get(2).id);
         assertEquals(id4, after.get(3).id);
         assertTrue(after.get(4).isBlank());
-        assertNull(find(root, "Moving book 3"));
+        assertNull(find(root, "Reordering book 3"));
         assertNull(find(root, "Confirm"));
 
         controller.pause().stop().destroy();
     }
 
     @Test
-    public void confirmDisabledOnSourceAndCancelNoOps() {
+    public void reorderConfirmDisabledOnSourceAndCancelNoOps() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -118,13 +119,13 @@ public class PageMoveUiTest {
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
-        clickOnPage(root, "1/3", "Move");
-        assertNotNull(find(root, "Moving book 1"));
+        clickOnPage(root, "1/3", "Reorder");
+        assertNotNull(find(root, "Reordering book 1"));
         TextView confirm = find(root, "Confirm");
         assertNotNull(confirm);
         assertFalse(confirm.isEnabled());
         click(root, "Cancel");
-        assertNull(find(root, "Moving book 1"));
+        assertNull(find(root, "Reordering book 1"));
         assertEquals(first, repo.pages(book.id).get(0).id);
         assertEquals(second, repo.pages(book.id).get(1).id);
 
@@ -132,7 +133,7 @@ public class PageMoveUiTest {
     }
 
     @Test
-    public void crossNotebookPlaceBeforeMovesThePage() {
+    public void moveMenuFilesPageIntoChosenNotebook() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -141,34 +142,28 @@ public class PageMoveUiTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "book");
-        openNotebook(root, "other");
         ink(repo, book.id, 10f);
-        ink(repo, other.id, 10f);
         openNotebook(root, "book");
         String source = repo.pages(book.id).get(0).id;
-        String anchor = repo.pages(other.id).get(0).id;
 
         clickOnPage(root, "1/2", "Move");
-        assertNotNull(find(root, "Moving book 1"));
-        openNotebook(root, "other");
-        assertNotNull(find(root, "Place book 1 before other 1"));
-        assertNotNull(find(root, "Confirm"));
-        click(root, "Confirm");
+        assertNull("Move is menu, not snackbar", find(root, "Reordering book 1"));
+        assertNull(find(root, "Moving book 1"));
+        // Menu row is the last "other" (tab bar match is earlier).
+        assertTrue(last(root, "other").performClick());
         idleForPaint();
 
         assertEquals(1, repo.pages(book.id).size());
         assertTrue(repo.pages(book.id).get(0).isBlank());
         List<Board> dest = repo.pages(other.id);
-        assertEquals(3, dest.size());
         assertEquals(source, dest.get(0).id);
-        assertEquals(anchor, dest.get(1).id);
-        assertTrue(dest.get(2).isBlank());
+        assertTrue(dest.get(dest.size() - 1).isBlank());
 
         controller.pause().stop().destroy();
     }
 
     @Test
-    public void snackbarIsNotParentedIntoTopTabStrip() {
+    public void reorderSnackbarIsNotParentedIntoTopTabStrip() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
@@ -185,10 +180,10 @@ public class PageMoveUiTest {
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
-        clickOnPage(root, "1/2", "Move");
+        clickOnPage(root, "1/2", "Reorder");
         relayout(root);
         assertEquals("bottom strip must not shrink the drawing area", areaBefore, area.getHeight());
-        TextView banner = find(root, "Moving book 1");
+        TextView banner = find(root, "Reordering book 1");
         assertNotNull(banner);
         View strip = (View) banner.getParent().getParent();
         assertFalse(isDescendant(strip, (View) area.getParent()));
@@ -277,6 +272,28 @@ public class PageMoveUiTest {
 
     private static TextView find(View root, String text) {
         return textIn(root, text);
+    }
+
+    private static TextView last(View root, String text) {
+        java.util.ArrayList<TextView> all = new java.util.ArrayList<>();
+        collectText(root, text, all);
+        assertFalse(all.isEmpty());
+        return all.get(all.size() - 1);
+    }
+
+    private static void collectText(View view, String text, java.util.List<TextView> out) {
+        if (view.getVisibility() != View.VISIBLE) {
+            return;
+        }
+        if (view instanceof TextView && text.contentEquals(((TextView) view).getText())) {
+            out.add((TextView) view);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                collectText(group.getChildAt(i), text, out);
+            }
+        }
     }
 
     private static void idle() {
