@@ -2,9 +2,9 @@
 
 Branch: `cursor/ink-sot-rewrite-8d38`. Tip **v84** until a coherent safer slice ships.
 
-**Goals:** Android main ~**6k**; server sync core ~**500–1k**. Make short-overwrite / cursor-skip / wrong-notebook-paint structurally impossible.
+**Goal:** modular SoT paths you can explain locally. Soft LOC ambition (~6k / ~500–1k) is a **gauge**, not the success metric.
 
-**Hard override:** never sacrifice reliability or ease of reasoning for vanity LOC. Drop lines only by truly simplifying while preserving specs; if a cut makes correctness harder to prove, keep the lines. Delete wrong abstractions / duplicate SoTs — do not golf.
+**Hard override:** reliability > golf. Delete dual paths when that clarifies SoT; report LOC deltas as signal only.
 
 ## Slice A (landed on branch; tip still v84)
 

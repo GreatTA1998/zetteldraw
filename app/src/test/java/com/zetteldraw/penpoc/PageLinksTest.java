@@ -74,8 +74,8 @@ public class PageLinksTest {
         room.ensureSheet(otherB.id, height, height, 1L);
         ink(repo, otherA.id, 10f);
         ink(repo, otherB.id, 30f * height + 10f);
-        room.forgetSheetForTest(otherA.id);
-        room.forgetSheetForTest(otherB.id);
+        room.invalidateOpenSheet(otherA.id);
+        room.invalidateOpenSheet(otherB.id);
 
         TextView control = textIn((View) find(root, "40/41").getParent(), "Link");
         assertNotNull(control);

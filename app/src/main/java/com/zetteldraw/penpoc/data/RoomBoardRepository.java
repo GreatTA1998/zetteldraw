@@ -221,7 +221,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (sheet != null && sheet.ready) {
                 return projectLocked(notebookId, sheet.paper);
             }
-            if (isLogBackedLocked(sheetId)) {
+            if (sheetStore.isLogBacked(sheetId)) {
                 // Log-backed: refuse legacy BoardEntity projection.
                 return new ArrayList<>();
             }
@@ -237,7 +237,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     }
                 }
                 // A log may have appeared while we decoded; never fall through.
-                if (isLogBackedLocked(sheetId)) {
+                if (sheetStore.isLogBacked(sheetId)) {
                     InkSheetStore.OpenSheet sheet = sheetStore.get(sheetId);
                     if (sheet != null && sheet.ready) {
                         return projectLocked(notebookId, sheet.paper);
@@ -260,11 +260,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         scheduleWarmCache();
         return pages;
-    }
-
-    /** Row or on-disk file — either means BoardEntity length is not SoT. */
-    private boolean isLogBackedLocked(String sheetId) {
-        return sheetStore.isLogBacked(sheetId);
     }
 
     @Override
@@ -1523,7 +1518,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                             applyRemoteBoardLocked(remote, staged, refreshed, mirrorOps);
                         }
                         for (NotebookLogEntity remote : page.logs) {
-                            applyRemoteLogLocked(remote, logBytes, mirrorOps);
+                            sheetStore.applyRemoteLogLocked(remote, logBytes, mirrorOps);
                         }
                         for (PageLinkEntity remote : page.links) {
                             applyRemoteLinkLocked(remote);
@@ -2074,15 +2069,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         dao.deleteOutbox(OutboxEntry.NOTEBOOK, remote.id);
     }
 
-    /**
-     * Remote ink-log apply — delegated to {@link InkSheetStore} (InkLogApply).
-     * Caller holds {@link #lock}.
-     */
-    private void applyRemoteLogLocked(NotebookLogEntity remote, Map<String, byte[]> logBytes,
-                                      List<Runnable> mirrorOps) throws IOException {
-        sheetStore.applyRemoteLogLocked(remote, logBytes, mirrorOps);
-    }
-
     private void applyRemoteLinkLocked(PageLinkEntity remote) {
         PageLinkEntity local = dao.pageLink(remote.id);
         if (local != null) {
@@ -2323,12 +2309,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      */
     public void invalidateOpenSheet(String notebookId) {
         sheetStore.invalidate(notebookId);
-    }
-
-    /** @deprecated Prefer {@link #invalidateOpenSheet}. */
-    @Deprecated
-    public void forgetSheetForTest(String notebookId) {
-        invalidateOpenSheet(notebookId);
     }
 
     /**

@@ -207,7 +207,7 @@ public class ScratchpadNavigationTest {
                 .edit()
                 .clear()
                 .apply();
-        ((RoomBoardRepository) repo).forgetSheetForTest(null);
+        ((RoomBoardRepository) repo).invalidateOpenSheet(null);
 
         // Gate the first loader task so we can switch notebooks while ensureSheet is pending.
         java.util.concurrent.CountDownLatch gate = new java.util.concurrent.CountDownLatch(1);
@@ -275,7 +275,7 @@ public class ScratchpadNavigationTest {
         }
         repo.saveInk(blank);
         idle();
-        ((RoomBoardRepository) repo).forgetSheetForTest(null);
+        ((RoomBoardRepository) repo).invalidateOpenSheet(null);
         probe.pause().stop().destroy();
         return height;
     }

@@ -92,7 +92,7 @@ public final class SyncEngine {
                         LaunchLog.mark("pull failed before length sync: " + e.getMessage());
                     }
                 }
-                runLengthSync(result);
+                result.pulledNotebooks += inkLogSync.syncLengths();
                 if (pullError != null) {
                     throw pullError;
                 }
@@ -115,7 +115,7 @@ public final class SyncEngine {
             }
             // Cursor pull only delivers rev > cursor. Length authority is per-id
             // via InkLogSync (log-heads), not the global cursor.
-            runLengthSync(result);
+            result.pulledNotebooks += inkLogSync.syncLengths();
             if (pullError != null) {
                 throw pullError;
             }
@@ -226,10 +226,6 @@ public final class SyncEngine {
                 return;
             }
         }
-    }
-
-    private void runLengthSync(Result result) throws IOException {
-        result.pulledNotebooks += inkLogSync.syncLengths();
     }
 
     /** Pull JSON omits large Base64 blobs; fetch them raw before applyPull. */

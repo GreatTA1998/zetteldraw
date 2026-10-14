@@ -56,7 +56,7 @@ public class ScratchpadReentryUiTest {
         blank.paper.tearDelete(1);
         repo.saveInk(blank);
         idle();
-        ((RoomBoardRepository) repo).forgetSheetForTest(null);
+        ((RoomBoardRepository) repo).invalidateOpenSheet(null);
         probe.pause().stop().destroy();
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();

@@ -116,7 +116,7 @@ public class SheetReadyPagesTest {
         assertTrue(repo.pages(Notebook.COMEDY.uuid).size() >= 1);
 
         // Forget Scratchpad sheet (simulates cold return / lost cache), ensure again.
-        repo.forgetSheetForTest(null);
+        repo.invalidateOpenSheet(null);
         assertFalse(repo.isSheetReady(null));
         assertEquals(0, repo.scratchpadPages().size());
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
