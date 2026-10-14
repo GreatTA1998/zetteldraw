@@ -3126,7 +3126,9 @@ public final class CanvasActivity extends Activity {
             onTap(moreButton, v -> showPageMenu(this));
 
             int mark = page.paper != null ? dp(2) : pageGap;
-            int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(10);
+            // v78: shared bottom margin 10→8dp lowers the whole Link/Reorder/Move/⋮
+            // row by 2dp toward the dashed edge (optical nudge). ⋮ padBottom 1 stays.
+            int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(8);
 
             // Left: references above Link · Reorder (both navigate-to-target).
             LinearLayout left = new LinearLayout(context);

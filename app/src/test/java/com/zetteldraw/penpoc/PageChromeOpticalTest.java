@@ -76,16 +76,27 @@ public class PageChromeOpticalTest {
         float moreCenter = glyphCenterOnScreen(more);
         float density = root.getResources().getDisplayMetrics().density;
         float deltaDp = (moreCenter - linkCenter) / density;
+
+        View pageSlot = pageSlotOf(link);
+        assertNotNull(pageSlot);
+        int[] slotLoc = new int[2];
+        int[] linkLoc = new int[2];
+        pageSlot.getLocationOnScreen(slotLoc);
+        link.getLocationOnScreen(linkLoc);
+        float gapToDashDp = (slotLoc[1] + pageSlot.getHeight()
+                - (linkLoc[1] + link.getHeight())) / density;
         System.out.println("CHROME_OPTICAL linkCenter=" + linkCenter
                 + " moreCenter=" + moreCenter
                 + " deltaDp=" + deltaDp
+                + " gapToDashDp=" + gapToDashDp
                 + " morePadT/B=" + more.getPaddingTop() + "/" + more.getPaddingBottom()
                 + " moreTy=" + more.getTranslationY());
 
         Bitmap full = render(root);
-        Bitmap crop = cropChromeBand(full, link, more);
-        annotateCenters(crop, link, more, full);
-        save(crop, "page-chrome-optical.png");
+        Bitmap crop = cropChromeBandFromSlot(full, pageSlot, link, more);
+        annotateCentersFromSlot(crop, pageSlot, link, more);
+        String outName = System.getProperty("zd.chromeShot", "page-chrome-optical.png");
+        save(crop, outName);
 
         // Positive delta ⇒ ⋮ sits lower than Link. Optical align zeros this.
         assertTrue("⋮ glyph center vs Link deltaDp=" + deltaDp + " (want |δ|≤0.75)",
@@ -105,34 +116,55 @@ public class PageChromeOpticalTest {
                 + (bounds.top + bounds.bottom) / 2f;
     }
 
-    private static Bitmap cropChromeBand(Bitmap full, TextView link, TextView more) {
-        int[] linkLoc = new int[2];
-        int[] moreLoc = new int[2];
-        link.getLocationOnScreen(linkLoc);
-        more.getLocationOnScreen(moreLoc);
-        int top = Math.max(0, Math.min(linkLoc[1], moreLoc[1]) - 24);
-        int bottom = Math.min(full.getHeight(),
-                Math.max(linkLoc[1] + link.getHeight(), moreLoc[1] + more.getHeight()) + 24);
-        int left = 0;
-        int right = full.getWidth();
-        return Bitmap.createBitmap(full, left, top, right - left, bottom - top);
+    /** PageSlot = leftRow → left column → PageSlot FrameLayout. */
+    private static View pageSlotOf(View link) {
+        View leftRow = (View) link.getParent();
+        if (leftRow == null) {
+            return null;
+        }
+        View left = (View) leftRow.getParent();
+        if (left == null) {
+            return null;
+        }
+        return (View) left.getParent();
     }
 
-    private static void annotateCenters(Bitmap crop, TextView link, TextView more, Bitmap full) {
-        int[] linkLoc = new int[2];
-        int[] moreLoc = new int[2];
-        link.getLocationOnScreen(linkLoc);
-        more.getLocationOnScreen(moreLoc);
-        int top = Math.max(0, Math.min(linkLoc[1], moreLoc[1]) - 24);
+    /**
+     * Bottom-anchored crop: fixed band ending at the page slot bottom (dashed
+     * edge), so a shared chromeBottom nudge is visible vs the dash.
+     */
+    private static Bitmap cropChromeBandFromSlot(
+            Bitmap full, View pageSlot, TextView link, TextView more) {
+        int[] slotLoc = new int[2];
+        pageSlot.getLocationOnScreen(slotLoc);
+        int bottom = Math.min(full.getHeight(), slotLoc[1] + pageSlot.getHeight() + 8);
+        int band = Math.round(120f * full.getWidth() / 632f); // ~120dp at this width
+        int top = Math.max(0, bottom - band);
+        return Bitmap.createBitmap(full, 0, top, full.getWidth(), bottom - top);
+    }
+
+    private static void annotateCentersFromSlot(
+            Bitmap crop, View pageSlot, TextView link, TextView more) {
+        int[] slotLoc = new int[2];
+        pageSlot.getLocationOnScreen(slotLoc);
+        int bottom = Math.min(
+                slotLoc[1] + pageSlot.getHeight() + 8,
+                slotLoc[1] + pageSlot.getHeight() + 8);
+        int band = crop.getHeight();
+        int top = bottom - band;
         Canvas c = new Canvas(crop);
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         p.setStrokeWidth(2f);
+        // Green = dashed-edge reference (page slot bottom).
+        p.setColor(Color.rgb(0, 160, 0));
+        float dashY = slotLoc[1] + pageSlot.getHeight() - top;
+        c.drawLine(0, dashY, crop.getWidth(), dashY, p);
         p.setColor(Color.RED);
-        float linkY = glyphCenterOnScreen(link) - top;
-        float moreY = glyphCenterOnScreen(more) - top;
-        c.drawLine(0, linkY, crop.getWidth(), linkY, p);
+        c.drawLine(0, glyphCenterOnScreen(link) - top, crop.getWidth(),
+                glyphCenterOnScreen(link) - top, p);
         p.setColor(Color.BLUE);
-        c.drawLine(0, moreY, crop.getWidth(), moreY, p);
+        c.drawLine(0, glyphCenterOnScreen(more) - top, crop.getWidth(),
+                glyphCenterOnScreen(more) - top, p);
     }
 
     private static void ink(BoardRepository repo, String notebookId, float y) {
