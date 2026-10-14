@@ -2,7 +2,7 @@
 
 Handwriting-first notes on Boox. Proven on a **Go 7 Color II**: a third-party app can match Notes-like stylus latency via the **Onyx Pen SDK `TouchHelper` raw/scribble path** (live ink by the e-ink controller, not Android `View` drawing).
 
-Tip APK: [https://zetteldraw.com/apk](https://zetteldraw.com/apk). Full correctness argument: [docs/CORRECTNESS.md](docs/CORRECTNESS.md).
+Tip APK: [https://zetteldraw.com/apk](https://zetteldraw.com/apk). **Product behavior (UI + sync, regression checklist):** [docs/product-behavior.md](docs/product-behavior.md). Full correctness argument: [docs/CORRECTNESS.md](docs/CORRECTNESS.md).
 
 ---
 
