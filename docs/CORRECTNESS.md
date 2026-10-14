@@ -1,6 +1,6 @@
 # Correctness: the three irreversible bugs
 
-UI glitches, wrong underlines, and awkward snackbars are recoverable. These three are not. This document states what the code **actually enforces**, which tests lock those claims, and what remains **unguaranteed**. Tip app versions referenced: **v63** (Move dest), **v64** (Hand off / live writer), **v66** (Prepare transfer gate), **v67** (Sign-In error/Prepare reasons), **v68** (Prepare transfer on-device only; crash-on-retry + blank `/` redirect fixed), **v69** (stream large ink via `PUT/GET /sync/blob` — Prepare/push no longer Base64’s multi‑MB logs into JSON), **v70** (Y-bucket spatial index — paper lasso/erase/`touching` are O(region), not O(all strokes)). **Scale** below is honesty about heap and payload size — not a race proof.
+UI glitches, wrong underlines, and awkward snackbars are recoverable. These three are not. This document states what the code **actually enforces**, which tests lock those claims, and what remains **unguaranteed**. Tip app versions referenced: **v63** (Move dest), **v64** (Hand off / live writer), **v66** (Prepare transfer gate), **v67** (Sign-In error/Prepare reasons), **v68** (Prepare transfer on-device only; crash-on-retry + blank `/` redirect fixed), **v69** (stream large ink via `PUT/GET /sync/blob` — Prepare/push no longer Base64’s multi‑MB logs into JSON). **Scale** below is honesty about heap and payload size — not a race proof.
 
 For the short version, see the [README](../README.md#the-only-three-irreversible-bugs).
 
@@ -157,31 +157,30 @@ The sections above argue **logical** safety under concurrency. They do **not** c
 
 Server `bodyLimit` is **256 MB** (v69; was 64 MB) for both JSON and octet `/sync/blob` bodies. Large ink still prefers `/sync/blob` so push JSON stays small. Small blobs (≤ 256 KiB) still ride Base64 in JSON.
 
-### What improved vs still O(n) (tip `main` / v70)
+### What is O(n) today (tip `main` / v69)
 
 | Path | Cost in n | Notes |
 | --- | --- | --- |
-| Open notebook (`ensureSheet` + `NotebookPaper.replay`) | **Still** O(log bytes) + O(strokes) | Whole `.zdl` into RAM; decoded stroke list kept. Opened sheets are **not** evicted on tab switch (only test hook / delete). |
-| Pen-up / erase / lasso translate append | **Still** O(log bytes) | `append` does `Arrays.copyOf` of the full in-memory log each record. |
-| Writer `flushSheet` | **Still** O(log bytes) | Copies log, appends suffix, **re-reads entire file** for SHA-256 + mirrors. |
-| Dense Move (`appendMoved`) | **Still** O(taken strokes + dest log growth) | Atomic batch (v29); still one big dest suffix + rollback copies. Tear scans strokes intersecting the slice (via Y index candidates where wired). |
-| Sync **push** / Prepare (v69+) | **Still** O(log bytes) **I/O**, bounded heap for large blobs | `PUT /sync/blob` streams file; **one large blob per push round**. JSON push no longer holds the Scratchpad as Base64. |
-| Sync **pull** (v69+) | **Still** O(log bytes) heap per large blob | Large blobs fetched raw into a `byte[]` then applied; no Base64×4/3 spike, still one full copy in RAM. |
-| Outbox drain time | **Still** O(outbox × rounds × blob size) | Each Scratchpad edit re-uploads the **entire** log. Wall time ∝ log size × RTT. |
-| Lasso hit-test (**v70**) | **Improved** — O(strokes overlapping outline Y-range × points × ≤64 verts) | `StrokeYIndex` (256 px buckets) + `strokesOverlapping`; outline still thinned (`MAX_HIT_VERTICES = 64`). Not O(all strokes on sheet). |
-| Eraser (**v70**) | **Improved** — O(strokes overlapping eraser Y-span) | Same Y-bucket cull before `InkRenderer.hits`. |
-| Slice paint `touching` (**v70**) | **Improved** — O(strokes overlapping slice Y) | No full-sheet scan to filter a page. |
-| Render / scroll bitmaps | Bounded bitmaps | `BITMAP_CACHE_SIZE = 3`; visible pages only. |
+| Open notebook (`ensureSheet` + `NotebookPaper.replay`) | O(log bytes) + O(strokes) | Whole `.zdl` into RAM; decoded stroke list kept. Opened sheets are **not** evicted on tab switch (only test hook / delete). |
+| Pen-up / erase / lasso translate append | O(log bytes) | `append` does `Arrays.copyOf` of the full in-memory log each record. |
+| Writer `flushSheet` | O(log bytes) | Copies log, appends suffix, **re-reads entire file** for SHA-256 + mirrors. |
+| Dense Move (`appendMoved`) | O(taken strokes + dest log growth) | Atomic batch (v29); still one big dest suffix + rollback copies. Tear scans strokes intersecting the slice. |
+| Sync **push** / Prepare (v69) | O(log bytes) **I/O**, bounded heap for large blobs | `PUT /sync/blob` streams file; **one large blob per push round**. JSON push no longer holds the Scratchpad as Base64. |
+| Sync **pull** (v69) | O(log bytes) heap per large blob | Large blobs fetched raw into a `byte[]` then applied; no Base64×4/3 spike, still one full copy in RAM. |
+| Outbox drain time | O(outbox × rounds × blob size) | `PUSH_BATCH = 50`, `MAX_ROUNDS = 1000`; each Scratchpad edit re-uploads the **entire** log (content-addressed, but still full transfer). Wall time ∝ log size × RTT. |
+| Lasso hit-test | O(strokes × points × ≤64 verts) | Outline thinned (`MAX_HIT_VERTICES = 64`); paper lasso walks **all** strokes on the sheet. |
+| Eraser | O(all strokes on sheet) | Hits every stroke against the wipe path. |
+| Render / scroll | Bounded bitmaps | `BITMAP_CACHE_SIZE = 3`; visible pages only. Dense **page** rebuild is O(strokes on that page), not whole library. |
 
 ### Envelope: ~100 / ~1 000 / ~10 000
 
 Orders of magnitude for **one notebook** (Scratchpad counts). “Strokes” = ink strokes on that sheet, not UI events. Judgments from code + the v68 OOM / v69 streaming fix — **not** device load-test certificates.
 
-| Scale | Memory / open | Sync payload & Prepare (v69+) | Hit-test / lasso / erase (v70) | Move (page tear) | Render / scroll | Outbox drain |
+| Scale | Memory / open | Sync payload & Prepare (v69) | Hit-test / lasso / erase | Move (page tear) | Render / scroll | Outbox drain |
 | --- | --- | --- | --- | --- | --- | --- |
-| **~100 pages**, light–moderate ink (log ≲ few MB) | **OK** — normal tip use | **OK** — small logs may still Base64; peak modest | **OK** | **OK** — dense page still atomic | **OK** — 3-page bitmap cache | Seconds–minutes depending on network |
-| **~1 000 pages** or dense ink (log ~10–20 MB; prod Scratchpad ~14 MB) | **Degrades** — full log + stroke list resident; multiple opened notebooks stack | **OK for Prepare/push heap** (streamed PUT) — still pays full upload time; pull holds one ~14 MB `byte[]` | **Mostly OK** for local gestures — cost tracks **ink near the gesture**, not sheet length. Dense **single page** can still hitch. | **Degrades** — tear/appendMoved copies grow with density + log size; still prefer both-intact over drop | **Mostly OK** — 3 bitmaps; dense-page rebuild O(page strokes) via index | **Degrades** — whole-log re-upload each change; minutes possible on slow links |
-| **~10 000 pages** or log tens of MB→100 MB+ | **Likely fail / severe degrade** — open/replay + retained sheets vs ~256 MB heap | **Push path OK-ish** (stream); **open / pull / flush still OOM risk** when a full `byte[]` + stroke list + copies coexist | Gestures stay regional; **open/heap** still fail first | **Fail risk** — large intermediate arrays during tear/rewrite | Open/replay may OOM before UI settles | Drain can take very long; process may die on flush/pull before `outbox == 0` |
+| **~100 pages**, light–moderate ink (log ≲ few MB) | **OK** — normal tip use | **OK** — small logs may still Base64; peak modest | **OK** — select stays responsive with thinning | **OK** — dense page still atomic | **OK** — 3-page bitmap cache | Seconds–minutes depending on network |
+| **~1 000 pages** or dense ink (log ~10–20 MB; prod Scratchpad ~14 MB) | **Degrades** — full log + stroke list resident; multiple opened notebooks stack | **OK for Prepare/push heap** (streamed PUT) — still pays full upload time; pull holds one ~14 MB `byte[]` | **Degrades** — paper lasso/erase O(all strokes); may hitch on lift | **Degrades** — tear/appendMoved copies grow with density + log size; still prefer both-intact over drop | **Mostly OK** — 3 bitmaps; dense-page rebuild O(page strokes) | **Degrades** — whole-log re-upload each change; minutes possible on slow links |
+| **~10 000 pages** or log tens of MB→100 MB+ | **Likely fail / severe degrade** — open/replay + retained sheets vs ~256 MB heap | **Push path OK-ish** (stream); **open / pull / flush still OOM risk** when a full `byte[]` + stroke list + copies coexist | **Degrades → unusable** — O(n) walks on huge stroke lists | **Fail risk** — large intermediate arrays during tear/rewrite | Open/replay may OOM before UI settles | Drain can take very long; process may die on flush/pull before `outbox == 0` |
 
 **Beyond:** no compaction/GC of notebook logs; append-only `.zdl` only grows. Splitting Scratchpad / archiving pages is an operational mitigation, not a product guarantee.
 
@@ -194,10 +193,9 @@ Orders of magnitude for **one notebook** (Scratchpad counts). “Strokes” = in
 | Dense Move does not drop ink mid-append (v29) | **Guaranteed** when Move completes without OOM; on OOM mid-rewrite see crash windows |
 | Prepare/push does not Base64 a multi‑MB Scratchpad into JSON (v69) | **Guaranteed** for blobs **> 256 KiB** (`PUT /sync/blob` first) |
 | Sync / Prepare / open succeed for arbitrary library size | **Not guaranteed** — open/replay, flush re-read, pull `byte[]`, and stacked sheets can still **fail** by OOM |
-| Lasso/erase stay interactive when **far** ink grows | **Improved in v70** — Y-bucket cull; still **not guaranteed** if the **query region** itself is huge (dense page) |
-| Render stays O(visible pages) | **Mostly guaranteed** — cache size 3 + indexed `touching`; opening the sheet still pays full replay |
-| Streaming upload of large ink | **Landed in v69** — remaining gap is streaming **decode/open/pull-apply** + incremental sync, not the Prepare Base64 spike |
-| Spatial hit-test (lasso/erase/`touching`) | **Landed in v70** — `StrokeYIndex` 256 px buckets |
+| Lasso/erase stay interactive at 10k strokes | **Not guaranteed** — **degrades** (O(n)); thinning helps select, does not cap sheet size |
+| Render stays O(visible pages) | **Mostly guaranteed** — cache size 3; opening the sheet still pays full replay |
+| Streaming upload of large ink | **Landed in v69** — remaining gap is streaming **decode/open/pull-apply**, not the Prepare Base64 spike |
 
 ---
 

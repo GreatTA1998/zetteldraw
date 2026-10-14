@@ -31,12 +31,7 @@ final class Lasso {
     private Lasso() {
     }
 
-    /**
-     * Strokes with at least half their points inside the closed polygon; a
-     * dot needs its one point inside. Pass a spatially culled candidate list
-     * (e.g. {@code paper.strokesOverlapping}) so cost stays O(region), not
-     * O(all strokes on the sheet).
-     */
+    /** Strokes with at least half their points inside the closed polygon; a dot needs its one point inside. */
     static List<InkRenderer.InkStroke> select(List<InkRenderer.InkStroke> strokes, List<TouchPoint> polygon) {
         ArrayList<InkRenderer.InkStroke> selected = new ArrayList<>();
         if (strokes == null || polygon == null || polygon.size() < 3) {

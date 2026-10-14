@@ -1703,16 +1703,8 @@ final class PageInkView extends FrameLayout {
         int index = view.pageIndexAt(eraserPath.get(0).y);
         Board page = view.page(index < 0 ? 0 : index);
         List<TouchPoint> path = toPaper(eraserPath, view.scrollY);
-        // Query the Y span of the eraser path (+ pad) so erase is not O(all strokes).
-        float pad = 18f + 16f;
-        float top = path.get(0).y;
-        float bottom = top;
-        for (TouchPoint p : path) {
-            top = Math.min(top, p.y);
-            bottom = Math.max(bottom, p.y);
-        }
         ArrayList<InkRenderer.InkStroke> removed = new ArrayList<>();
-        for (InkRenderer.InkStroke stroke : paper.strokesOverlapping(top - pad, bottom + pad)) {
+        for (InkRenderer.InkStroke stroke : new ArrayList<>(paper.strokes())) {
             if (InkRenderer.hits(stroke, path)) {
                 removed.add(stroke);
             }
@@ -1743,15 +1735,7 @@ final class PageInkView extends FrameLayout {
             reportLasso(0);
             return;
         }
-        // Spatial cull: only strokes whose bounds meet the outline's Y span.
-        float top = outline.get(0).y;
-        float bottom = top;
-        for (TouchPoint p : outline) {
-            top = Math.min(top, p.y);
-            bottom = Math.max(bottom, p.y);
-        }
-        List<InkRenderer.InkStroke> candidates = paper.strokesOverlapping(top, bottom);
-        List<InkRenderer.InkStroke> picked = Lasso.select(candidates, outline);
+        List<InkRenderer.InkStroke> picked = Lasso.select(paper.strokes(), outline);
         if (picked.isEmpty()) {
             reportLasso(0);
             return;
