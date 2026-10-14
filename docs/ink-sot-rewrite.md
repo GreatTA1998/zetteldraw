@@ -19,8 +19,10 @@ Branch: `cursor/ink-sot-rewrite-8d38`. Tip **v84** until a coherent safer slice 
 
 `InkLogApply` (pure) → **`InkSheetStore`** (Ready + ensure + remote apply) → `SyncEngine.syncInkLogLengths`. `RoomBoardRepository` = projection / Move / meta. `CollectionNav` = scroll only.
 
-## Slice B (on branch; tip still v84)
+## Slice B + C (on branch; tip still v84)
 
-- `InkSheetStore` + `Deps` bridge from `RoomBoardRepository`
-- Open / apply / length reasoned in `InkSheetStore` + `InkLogApply` without the god-path
-- Repo still ~2.6k (Move/projection); further CanvasActivity splits are later slices
+- `InkSheetStore` + `Deps` — open / apply / length
+- `CollectionOpen` — UI bind Ready + scroll only; `CanvasActivity` uses it for snappy open + `showReady`
+- `CollectionNav` — purge legacy `trustPages_*` on construct
+- Tests: `InkLogApplyTest`, `RemoteLogTruncateTest`, `SheetReadyPagesTest`, `CollectionNavTest`, `CollectionOpenTest` (green with Android SDK)
+- Deleted `LogLengthTest` (predicates folded into `InkLogApplyTest`)

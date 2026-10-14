@@ -11,39 +11,50 @@ import java.util.List;
  * Sole owner of per-collection <em>scroll</em> intent (Jump → Restore → First-open).
  *
  * <p><b>Not</b> the source of truth for page count. Length comes only from the
- * Ready ink-log ({@code .zdl} → {@code NotebookPaper.sliceCount} + trailing-blank
- * projection in the repository). Prefs must never gate or freeze how many pages
- * the UI may paint — that was the v80 trap that normalized a truncated 23-page
- * Scratchpad after a short disk install.
+ * Ready ink-log via {@link com.zetteldraw.penpoc.data.InkSheetStore}. Prefs must
+ * never gate how many pages the UI may paint (v80 trust trap).
  *
- * <p>CanvasActivity paints Ready {@code pages()} (or waits until Ready). This
- * module only answers where to scroll once that list is already chosen.
- *
- * <p>See docs/notebook-nav-correctness.md (agent store).
+ * <p>See docs/ink-sot-rewrite.md.
  */
 public final class CollectionNav {
     public static final String PREF_SCROLL_PREFIX = "scroll_";
     public static final String PREF_SCROLL_PAGES_PREFIX = "scrollPages_";
     public static final String PREF_SCROLL_PAGE_PREFIX = "scrollPage_";
 
-    /** Legacy v80 key — cleared on {@link #clear} so old trusts cannot linger. */
-    public static final String PREF_TRUST_PAGES_PREFIX = "trustPages_";
+    /** Legacy v80 length-trust — purged on construct; not a SoT. */
+    static final String PREF_TRUST_PAGES_PREFIX = "trustPages_";
 
     private final SharedPreferences prefs;
     private final HashMap<String, Integer> scrollByCollection = new HashMap<>();
 
     public CollectionNav(SharedPreferences prefs) {
         this.prefs = prefs;
+        purgeLegacyTrustKeys();
     }
 
-    /** Drop scroll (+ any legacy trust mark) when a notebook is deleted. */
+    /** One-shot: drop any leftover v80 trustPages_* so length cannot come from prefs. */
+    private void purgeLegacyTrustKeys() {
+        SharedPreferences.Editor edit = null;
+        for (String key : prefs.getAll().keySet()) {
+            if (key != null && key.startsWith(PREF_TRUST_PAGES_PREFIX)) {
+                if (edit == null) {
+                    edit = prefs.edit();
+                }
+                edit.remove(key);
+            }
+        }
+        if (edit != null) {
+            edit.apply();
+        }
+    }
+
+    /** Drop scroll when a notebook is deleted. */
     public void clear(String collectionId) {
         if (collectionId == null) {
             return;
         }
         scrollByCollection.remove(collectionId);
         prefs.edit()
-                .remove(PREF_TRUST_PAGES_PREFIX + collectionId)
                 .remove(PREF_SCROLL_PREFIX + collectionId)
                 .remove(PREF_SCROLL_PAGES_PREFIX + collectionId)
                 .remove(PREF_SCROLL_PAGE_PREFIX + collectionId)
@@ -61,8 +72,6 @@ public final class CollectionNav {
             edit.putInt(PREF_SCROLL_PAGES_PREFIX + collectionId, pageCount)
                     .putString(PREF_SCROLL_PAGE_PREFIX + collectionId, anchorPageId);
         }
-        // Drop leftover v80 length-trust so it cannot affect a later install.
-        edit.remove(PREF_TRUST_PAGES_PREFIX + collectionId);
         edit.apply();
     }
 

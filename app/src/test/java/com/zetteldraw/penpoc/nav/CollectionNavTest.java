@@ -2,7 +2,6 @@ package com.zetteldraw.penpoc.nav;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
 import android.content.Context;
@@ -65,25 +64,13 @@ public class CollectionNavTest {
     }
 
     @Test
-    public void clearRemovesLegacyTrustKey() {
+    public void constructPurgesLegacyTrustKeys() {
         android.content.SharedPreferences prefs = ApplicationProvider.getApplicationContext()
-                .getSharedPreferences("canvas-nav-clear", Context.MODE_PRIVATE);
+                .getSharedPreferences("canvas-nav-purge", Context.MODE_PRIVATE);
         prefs.edit().putInt(CollectionNav.PREF_TRUST_PAGES_PREFIX + "scratchpad", 23).apply();
-        CollectionNav local = new CollectionNav(prefs);
-        local.clear("scratchpad");
-        assertFalse(prefs.contains(CollectionNav.PREF_TRUST_PAGES_PREFIX + "scratchpad"));
-    }
-
-    @Test
-    public void rememberScrollDropsLegacyTrust() {
-        android.content.SharedPreferences prefs = ApplicationProvider.getApplicationContext()
-                .getSharedPreferences("canvas-nav-drop-trust", Context.MODE_PRIVATE);
-        prefs.edit().putInt(CollectionNav.PREF_TRUST_PAGES_PREFIX + "scratchpad", 23).apply();
-        CollectionNav local = new CollectionNav(prefs);
-        local.rememberScroll("scratchpad", 10, 39, "p0");
-        assertFalse("length trust must not survive paint",
+        new CollectionNav(prefs);
+        assertFalse("v80 length trust must not survive CollectionNav construct",
                 prefs.contains(CollectionNav.PREF_TRUST_PAGES_PREFIX + "scratchpad"));
-        assertTrue(prefs.contains(CollectionNav.PREF_SCROLL_PREFIX + "scratchpad"));
     }
 
     private static List<Board> pages(int n) {

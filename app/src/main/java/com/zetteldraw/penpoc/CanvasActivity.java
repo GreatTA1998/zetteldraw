@@ -52,6 +52,7 @@ import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.ZettelData;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 import com.zetteldraw.penpoc.nav.CollectionNav;
+import com.zetteldraw.penpoc.nav.CollectionOpen;
 import com.zetteldraw.penpoc.sync.GoogleAuth;
 import com.zetteldraw.penpoc.sync.SyncClient;
 import com.zetteldraw.penpoc.sync.SyncConfig;
@@ -886,14 +887,16 @@ public final class CanvasActivity extends Activity {
         pagesLoaded = true;
         collectionId = id;
         syncNav();
-        // Snappy path: sheet already Ready in memory — paint on the main thread.
-        // Page count SoT is Ready paper only (CollectionNav is scroll, not length).
+        // Snappy path: Ready sheet → CollectionOpen bind (pages + scroll Y only).
         String notebook = SCRATCHPAD.equals(id) ? null : id;
-        if (pageHeight > 0 && repository.isSheetReady(notebook)) {
-            List<Board> pages = repository.pages(notebook);
-            if (!pages.isEmpty()) {
+        if (pageHeight > 0) {
+            CollectionOpen.Bind bind = CollectionOpen.tryBindReady(
+                    repository, collectionNav, id, notebook, keepScroll,
+                    SCRATCHPAD.equals(id), pageLayout());
+            if (bind != null) {
                 ++loadGeneration;
-                showReady(id, pages, keepScroll);
+                showPages(bind.pages, bind.scrollY);
+                syncNav();
                 return;
             }
         }
@@ -1155,15 +1158,16 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Paint a Ready page list. Length comes from the repository; scroll intent
-     * from {@link CollectionNav}.
+     * Paint a Ready page list via {@link CollectionOpen} (scroll bind only).
+     * Length SoT remains the repository / ink sheet.
      */
     private void showReady(String id, List<Board> pages, Integer keepScroll) {
-        int target = collectionNav.resolveTargetY(
-                id, keepScroll, pages, SCRATCHPAD.equals(id), pageLayout());
-        String anchor = collectionNav.anchorPageId(pages, target, pageLayout());
-        collectionNav.rememberScroll(id, target, pages.size(), anchor);
-        showPages(pages, target);
+        CollectionOpen.Bind bind = CollectionOpen.bindScroll(
+                collectionNav, id, pages, keepScroll, SCRATCHPAD.equals(id), pageLayout());
+        if (bind == null) {
+            return;
+        }
+        showPages(bind.pages, bind.scrollY);
         syncNav();
     }
 

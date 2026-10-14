@@ -77,6 +77,16 @@ public class InkLogApplyTest {
         }
     }
 
+    @Test
+    public void logLengthPredicatesRemainMonotonic() {
+        assertTrue(LogLength.remoteShortens(40, 22));
+        assertFalse(LogLength.remoteShortens(22, 40));
+        assertTrue(LogLength.remoteLengthens(22, 40));
+        assertFalse(LogLength.remoteLengthens(40, 40));
+        assertTrue(LogLength.incomingBytesShrink(17_000_000, 500_000, true, true, false));
+        assertFalse(LogLength.incomingBytesShrink(17_000_000, 500_000, true, true, true));
+    }
+
     private static InkLogApply.Facts body(
             int localSlices, int remoteSlices,
             long localBytes, long remoteBytes,
