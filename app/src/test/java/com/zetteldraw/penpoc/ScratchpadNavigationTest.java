@@ -161,6 +161,7 @@ public class ScratchpadNavigationTest {
                 .remove("scroll_scratchpad")
                 .remove("scrollPages_scratchpad")
                 .remove("scrollPage_scratchpad")
+                .remove("trustPages_scratchpad")
                 .apply();
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();

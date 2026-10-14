@@ -162,8 +162,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * so a large list never blocks the notebook list, saves or other loads.
      * Only pages that keep changing under it (two rounds) decode under the lock.
      *
-     * <p>When a {@code notebook_log} exists, the ink log is the source of truth:
-     * this returns an empty list until {@link #ensureSheet} has installed a Ready
+     * <p>When an ink log exists (on-disk {@code .zdl} <em>or</em> a
+     * {@code notebook_logs} row), the ink log is the source of truth: this
+     * returns an empty list until {@link #ensureSheet} has installed a Ready
      * {@link OpenSheet}. Room board rows must not be shown in that window — they
      * lag paper extends and were the ~50→~23 collapse path.
      */
@@ -176,7 +177,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (sheet != null && sheet.ready) {
                 return projectLocked(notebookId, sheet.paper);
             }
-            if (dao.notebookLog(sheetId) != null) {
+            if (isLogBackedLocked(sheetId)) {
                 // Log-backed: refuse legacy BoardEntity projection.
                 return new ArrayList<>();
             }
@@ -192,7 +193,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     }
                 }
                 // A log may have appeared while we decoded; never fall through.
-                if (dao.notebookLog(sheetId) != null) {
+                if (isLogBackedLocked(sheetId)) {
                     OpenSheet sheet = sheets.get(sheetId);
                     if (sheet != null && sheet.ready) {
                         return projectLocked(notebookId, sheet.paper);
@@ -215,6 +216,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         scheduleWarmCache();
         return pages;
+    }
+
+    /** Row or on-disk file — either means BoardEntity length is not SoT. */
+    private boolean isLogBackedLocked(String sheetId) {
+        NotebookLogEntity row = dao.notebookLog(sheetId);
+        return (row != null && row.deletedAt == null) || ink.hasLog(sheetId);
     }
 
     @Override
@@ -2008,6 +2015,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
      * A pulled log replaces the notebook's log whole. It does not splice strokes
      * and it does not delete the pre-migration page files.
+     *
+     * <p>Never shortens a Ready local sheet (or a longer on-disk log) to a
+     * fewer-slice remote — that was the ~49→~23 collapse when
+     * {@code notebook_logs} was missing after {@code installSheet(..., false)}
+     * and pull skipped every LWW guard. Shorter remotes are shelved as
+     * conflict copies; local ink stays authoritative and is queued for push.
      */
     private void applyRemoteLogLocked(NotebookLogEntity remote, Map<String, byte[]> logBytes,
                                       List<Runnable> mirrorOps) throws IOException {
@@ -2023,7 +2036,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return;
         }
         NotebookLogEntity local = dao.notebookLog(remote.id);
+        if (local != null && local.deletedAt != null) {
+            local = null;
+        }
         OpenSheet open = sheets.get(remote.id);
+        // Disk/Ready install used to skip creating notebook_logs. Heal that so
+        // LWW guards always run, and so "local == null" cannot mean "remote wins".
+        if (local == null && open != null && open.ready && open.paper != null) {
+            local = ensureNotebookLogMetaLocked(open, open.paper.bytes(), true);
+        }
         if (local != null) {
             if (remote.rev <= local.rev) {
                 return;
@@ -2050,6 +2071,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 throw new IOException("bad ink log for " + remote.id);
             }
             NotebookPaper paper = NotebookPaper.replace(bytes);
+            int localSlices = localReadySliceCountLocked(remote.id, open);
+            if (localSlices >= 0 && paper.sliceCount() < localSlices) {
+                LaunchLog.mark("pull refused shorter log for " + remote.id
+                        + " remoteSlices=" + paper.sliceCount()
+                        + " localSlices=" + localSlices);
+                shelfShorterRemoteLogLocked(remote, bytes, mirrorOps);
+                ensureLocalLogQueuedLocked(remote.id, open);
+                return;
+            }
             ink.writeLog(remote.id, bytes);
             mirrorOps.add(() -> mirrorLog(remote.id, bytes));
             if (open == null) {
@@ -2073,6 +2103,52 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         dao.upsertNotebookLog(remote);
         dao.deleteOutbox(OutboxEntry.LOG, remote.id);
+    }
+
+    /**
+     * Slice count of the Ready open sheet, else of the on-disk log after replay.
+     * {@code -1} when neither is available.
+     */
+    private int localReadySliceCountLocked(String sheetId, OpenSheet open) {
+        if (open != null && open.ready && open.paper != null) {
+            return open.paper.sliceCount();
+        }
+        try {
+            byte[] existing = ink.readLog(sheetId);
+            if (existing == null || existing.length == 0) {
+                return -1;
+            }
+            return NotebookPaper.replay(existing).sliceCount();
+        } catch (IOException e) {
+            Log.e(TAG, "local log slice count failed " + sheetId, e);
+            return -1;
+        }
+    }
+
+    private void shelfShorterRemoteLogLocked(NotebookLogEntity remote, byte[] remoteBytes,
+                                            List<Runnable> mirrorOps) throws IOException {
+        NotebookLogEntity copy = remote.copy();
+        copy.id = UUID.randomUUID().toString();
+        copy.conflictOf = remote.id;
+        copy.rev = 0;
+        copy.deletedAt = null;
+        ink.writeLog(copy.id, remoteBytes);
+        String id = copy.id;
+        byte[] bytes = remoteBytes;
+        mirrorOps.add(() -> mirrorLog(id, bytes));
+        dao.upsertNotebookLog(copy);
+        queueLocked(OutboxEntry.LOG, copy.id, OutboxEntry.UPSERT);
+    }
+
+    private void ensureLocalLogQueuedLocked(String sheetId, OpenSheet open) {
+        if (open != null && open.ready && open.paper != null) {
+            ensureNotebookLogMetaLocked(open, open.paper.bytes(), true);
+            return;
+        }
+        NotebookLogEntity row = dao.notebookLog(sheetId);
+        if (row != null && row.conflictOf == null && row.deletedAt == null) {
+            queueLocked(OutboxEntry.LOG, sheetId, OutboxEntry.UPSERT);
+        }
     }
 
     private void applyRemoteLinkLocked(PageLinkEntity remote) {
@@ -2309,11 +2385,20 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    /** Drops one cached sheet so the next open replays its log. Link presses must not be that next open. */
-    public void forgetSheetForTest(String notebookId) {
+    /**
+     * Drops the in-memory Ready sheet so the next {@link #ensureSheet} re-reads
+     * disk. Used when a Ready projection is shorter than a trusted snapshot.
+     */
+    public void invalidateOpenSheet(String notebookId) {
         synchronized (lock) {
             sheets.remove(NotebookPaper.sheetId(notebookId));
         }
+    }
+
+    /** @deprecated Prefer {@link #invalidateOpenSheet}. */
+    @Deprecated
+    public void forgetSheetForTest(String notebookId) {
+        invalidateOpenSheet(notebookId);
     }
 
     /**
@@ -2445,39 +2530,59 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             OpenSheet open = new OpenSheet(sheetId, notebookId, paper, flushed);
             open.ready = true;
             sheets.put(sheetId, open);
-            if (!queue) {
-                return;
-            }
-            long now = clock.getAsLong();
-            NotebookLogEntity row = dao.notebookLog(sheetId);
-            if (row == null) {
-                row = new NotebookLogEntity();
-                row.id = sheetId;
-                row.notebookId = notebookId;
-                row.createdAt = now;
-                row.rev = 0;
-            }
             byte[] bytes;
             try {
                 bytes = ink.readLog(sheetId);
             } catch (IOException e) {
                 return;
             }
-            row.inkHash = bytes == null ? null : InkFileStore.sha256(bytes);
-            row.inkBytes = bytes == null ? 0 : bytes.length;
-            row.sliceHeight = paper.sliceHeight;
-            row.updatedAt = now;
-            row.deletedAt = null;
-            row.conflictOf = null;
-            NotebookLogEntity stored = row;
-            db.runInTransaction(() -> {
-                dao.upsertNotebookLog(stored);
-                queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
-            });
-            if (bytes != null) {
+            if (bytes == null) {
+                bytes = paper.bytes();
+            }
+            // Always register notebook_logs when Ready, even for disk replay
+            // (queue=false). Missing meta let pull skip LWW and overwrite Ready.
+            boolean queueMeta = queue || dao.notebookLog(sheetId) == null;
+            ensureNotebookLogMetaLocked(open, bytes, queueMeta);
+            if (queue && bytes != null) {
                 mirrorLog(sheetId, bytes);
             }
         }
+    }
+
+    /**
+     * Upserts live {@code notebook_logs} metadata for an open sheet. When
+     * {@code queue} is true (or the row is new), schedules an outbox UPSERT so
+     * a longer local log can win on the server.
+     */
+    private NotebookLogEntity ensureNotebookLogMetaLocked(OpenSheet open, byte[] bytes, boolean queue) {
+        if (open == null || open.paper == null) {
+            return null;
+        }
+        long now = clock.getAsLong();
+        NotebookLogEntity row = dao.notebookLog(open.sheetId);
+        boolean created = row == null;
+        if (row == null) {
+            row = new NotebookLogEntity();
+            row.id = open.sheetId;
+            row.notebookId = open.notebookId;
+            row.createdAt = now;
+            row.rev = 0;
+        }
+        row.inkHash = bytes == null ? null : InkFileStore.sha256(bytes);
+        row.inkBytes = bytes == null ? 0 : bytes.length;
+        row.sliceHeight = open.paper.sliceHeight;
+        row.updatedAt = Math.max(row.updatedAt, now);
+        row.deletedAt = null;
+        row.conflictOf = null;
+        NotebookLogEntity stored = row;
+        boolean doQueue = queue || created;
+        db.runInTransaction(() -> {
+            dao.upsertNotebookLog(stored);
+            if (doQueue) {
+                queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
+            }
+        });
+        return stored;
     }
 
     private List<Board> projectLocked(String notebookId, NotebookPaper paper) {
@@ -2718,6 +2823,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     private static final class OpenSheet {
+        final String sheetId;
         final String notebookId;
         NotebookPaper paper;
         int flushed;
@@ -2730,6 +2836,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         boolean holdFlush;
 
         OpenSheet(String sheetId, String notebookId, NotebookPaper paper, int flushed) {
+            this.sheetId = sheetId;
             this.notebookId = notebookId;
             this.paper = paper;
             this.flushed = flushed;

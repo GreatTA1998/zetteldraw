@@ -73,6 +73,11 @@ public class InkFileStore {
         commitTo(stage(sheetId, "zdl", bytes), logFile(sheetId));
     }
 
+    /** True when a notebook ink log file exists (may be empty only if absent). */
+    public boolean hasLog(String sheetId) {
+        return logFile(sheetId).isFile();
+    }
+
     public byte[] readLog(String sheetId) throws IOException {
         File file = logFile(sheetId);
         if (!file.exists()) {

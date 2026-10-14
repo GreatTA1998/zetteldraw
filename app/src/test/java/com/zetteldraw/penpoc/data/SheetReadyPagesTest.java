@@ -79,6 +79,24 @@ public class SheetReadyPagesTest {
     }
 
     @Test
+    public void pagesRefusesLegacyWhenZdlExistsEvenWithoutNotebookLogRow() throws Exception {
+        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        Board blank = repo.scratchpadPages().get(0);
+        for (int i = 0; i < 12; i++) {
+            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+        }
+        repo.saveInk(blank);
+        for (int i = 0; i < 10 && repo.pendingWrites() > 0; i++) {
+            Thread.sleep(20);
+        }
+        String sheetId = NotebookPaper.sheetId(null);
+        repo.invalidateOpenSheet(null);
+        device.db.dao().deleteNotebookLog(sheetId);
+        assertFalse(repo.isSheetReady(null));
+        assertEquals("on-disk .zdl ⇒ refuse BoardEntity pages()", 0, repo.scratchpadPages().size());
+    }
+
+    @Test
     public void switchNotebookDuringReadyDoesNotTruncateScratchpad() throws Exception {
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         Board blank = repo.scratchpadPages().get(0);

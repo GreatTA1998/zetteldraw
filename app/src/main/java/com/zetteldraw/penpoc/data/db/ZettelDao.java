@@ -31,8 +31,14 @@ public interface ZettelDao {
     @Query("SELECT * FROM notebook_logs WHERE deleted_at IS NULL AND conflict_of IS NULL")
     List<NotebookLogEntity> liveNotebookLogs();
 
+    @Query("SELECT * FROM notebook_logs WHERE conflict_of IS NOT NULL AND deleted_at IS NULL")
+    List<NotebookLogEntity> conflictLogCopies();
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void upsertNotebookLog(NotebookLogEntity log);
+
+    @Query("DELETE FROM notebook_logs WHERE id = :id")
+    void deleteNotebookLog(String id);
 
     // Page links. A live pair is unique; a tombstone may share the same pages.
 

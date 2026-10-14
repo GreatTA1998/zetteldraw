@@ -51,6 +51,7 @@ import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.ZettelData;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
+import com.zetteldraw.penpoc.nav.CollectionNav;
 import com.zetteldraw.penpoc.sync.GoogleAuth;
 import com.zetteldraw.penpoc.sync.SyncClient;
 import com.zetteldraw.penpoc.sync.SyncConfig;
@@ -60,7 +61,6 @@ import com.zetteldraw.penpoc.sync.SyncScheduler;
 import java.text.DateFormat;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -80,23 +80,15 @@ public final class CanvasActivity extends Activity {
     /** Pages created before this device first ran v10 may keep the old full-window height. */
     private static final String SHORT_PAGES_SINCE = "short_pages_since";
     /**
-     * Per-collection vertical scroll (prefs key {@code scroll_} + id). Survives
-     * process death. First open (no key) still jumps to last page / last inked.
-     * Fingerprint keys ({@code scrollPages_} / {@code scrollPage_}) must match
-     * the Ready sheet on restore. See notebook-navigation.md: Ready-gate;
-     * remember via {@link #effectiveScrollY()}, never a ScrollView that has not
-     * yet applied {@link #pendingScrollY}.
+     * Scroll intent + trusted page-count snapshots live in {@link CollectionNav}.
+     * Remember via {@link #effectiveScrollY()}, never a ScrollView that has not
+     * yet applied {@link #pendingScrollY}. See notebook-nav-correctness.md.
      */
-    private static final String PREF_SCROLL_PREFIX = "scroll_";
-    private static final String PREF_SCROLL_PAGES_PREFIX = "scrollPages_";
-    private static final String PREF_SCROLL_PAGE_PREFIX = "scrollPage_";
-
     private BoardRepository repository;
+    private CollectionNav collectionNav;
     private String collectionId = SCRATCHPAD;
     /** Last opened notebook; null until one is chosen or when none exist. */
     private String notebookId;
-    /** Scroll Y remembered per Scratchpad / notebook id for this process. */
-    private final HashMap<String, Integer> scrollByCollection = new HashMap<>();
 
     private FrameLayout root;
     private FrameLayout drawingArea;
@@ -198,6 +190,7 @@ public final class CanvasActivity extends Activity {
         InkRenderer.applyBaseWidthMm(getResources().getDisplayMetrics());
         repository = ZettelData.repository(this);
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        collectionNav = new CollectionNav(prefs);
         shortPagesSince = prefs.getLong(SHORT_PAGES_SINCE, 0L);
         if (shortPagesSince == 0L) {
             shortPagesSince = System.currentTimeMillis();
@@ -884,15 +877,29 @@ public final class CanvasActivity extends Activity {
         // Persist the collection we leave using the intended Y (pending apply wins).
         // Only when that collection was Ready and shown — never from a partial load.
         if (pagesLoaded && !loading() && collectionShownReady()) {
-            rememberScroll(collectionId, effectiveScrollY(), fingerprintOf(currentPages, effectiveScrollY()));
+            rememberShownScroll();
         }
         pagesLoaded = true;
         collectionId = id;
         syncNav();
-        // The tab is marked now; its pages load off the main thread, so a tap never waits on
-        // storage. The old pages stay up with the pen held until the new ones replace them.
-        // A non-null keepScroll (a page link / hold-place reload) wins over remembered
-        // scroll and the first-open last-page jump. See notebook-navigation.md.
+        // Snappy path: sheet already Ready in memory — paint on the main thread.
+        // No pen-hold / loader hop (Ready-gate wait tax on every switch).
+        String notebook = SCRATCHPAD.equals(id) ? null : id;
+        if (pageHeight > 0 && repository.isSheetReady(notebook)) {
+            List<Board> pages = repository.pages(notebook);
+            if (!pages.isEmpty() && !collectionNav.rejectsShorter(id, pages.size())) {
+                ++loadGeneration;
+                showReady(id, pages, keepScroll);
+                return;
+            }
+            if (!pages.isEmpty() && collectionNav.rejectsShorter(id, pages.size())) {
+                LaunchLog.mark("page list " + label(id) + " Ready shorter than trusted; re-ensure from disk");
+                if (repository instanceof RoomBoardRepository) {
+                    ((RoomBoardRepository) repository).invalidateOpenSheet(notebook);
+                }
+            }
+        }
+        // Cold / not Ready: load off the main thread; old pages stay up with pen held.
         startLoad(id, keepScroll, true);
     }
 
@@ -901,45 +908,14 @@ public final class CanvasActivity extends Activity {
         if (!pagesLoaded || loading() || collectionId == null || !collectionShownReady()) {
             return;
         }
-        rememberScroll(collectionId, effectiveScrollY(), fingerprintOf(currentPages, effectiveScrollY()));
+        rememberShownScroll();
     }
 
-    private void rememberScroll(String id, int scrollY) {
-        rememberScroll(id, scrollY, fingerprintOf(currentPages, scrollY));
-    }
-
-    private void rememberScroll(String id, int scrollY, ScrollFingerprint fingerprint) {
-        if (id == null) {
-            return;
-        }
-        int y = Math.max(0, scrollY);
-        scrollByCollection.put(id, y);
-        SharedPreferences.Editor edit = getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putInt(PREF_SCROLL_PREFIX + id, y);
-        if (fingerprint != null && fingerprint.pageCount > 0 && fingerprint.pageId != null) {
-            edit.putInt(PREF_SCROLL_PAGES_PREFIX + id, fingerprint.pageCount)
-                    .putString(PREF_SCROLL_PAGE_PREFIX + id, fingerprint.pageId);
-        }
-        edit.apply();
-    }
-
-    /**
-     * Scroll for a collection that was opened before in this install. Null means
-     * never visited: the first open still jumps to last page / last inked.
-     */
-    private Integer rememberedScroll(String id) {
-        Integer memory = scrollByCollection.get(id);
-        if (memory != null) {
-            return memory;
-        }
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        String key = PREF_SCROLL_PREFIX + id;
-        if (!prefs.contains(key)) {
-            return null;
-        }
-        int saved = Math.max(0, prefs.getInt(key, 0));
-        scrollByCollection.put(id, saved);
-        return saved;
+    private void rememberShownScroll() {
+        int y = effectiveScrollY();
+        String anchor = collectionNav.anchorPageId(currentPages, y, pageLayout());
+        int count = currentPages == null ? 0 : currentPages.size();
+        collectionNav.rememberScroll(collectionId, y, count, anchor);
     }
 
     /** True when the on-screen list came from a Ready sheet (or true legacy boards). */
@@ -955,79 +931,23 @@ public final class CanvasActivity extends Activity {
         return currentPages.get(0).paper == null;
     }
 
-    private ScrollFingerprint fingerprintOf(List<Board> pages, int scrollY) {
-        if (pages == null || pages.isEmpty()) {
-            return null;
-        }
-        String pageId = pageIdAtScroll(pages, scrollY);
-        if (pageId == null) {
-            pageId = pages.get(pages.size() - 1).id;
-        }
-        return new ScrollFingerprint(pages.size(), pageId);
-    }
+    private CollectionNav.PageLayout pageLayout() {
+        return new CollectionNav.PageLayout() {
+            @Override
+            public int heightOf(Board page) {
+                return CanvasActivity.this.heightOf(page);
+            }
 
-    private String pageIdAtScroll(List<Board> pages, int scrollY) {
-        if (pages == null || pages.isEmpty()) {
-            return null;
-        }
-        int y = Math.max(0, scrollY);
-        int gap = layoutGap(pages);
-        int cursor = 0;
-        for (int i = 0; i < pages.size(); i++) {
-            int span = heightOf(pages.get(i)) + gap;
-            if (y < cursor + span || i == pages.size() - 1) {
-                return pages.get(i).id;
+            @Override
+            public int gap(List<Board> pages) {
+                return layoutGap(pages);
             }
-            cursor += span;
-        }
-        return pages.get(pages.size() - 1).id;
-    }
 
-    private boolean fingerprintMatches(String id, List<Board> pages) {
-        if (id == null || pages == null || pages.isEmpty()) {
-            return false;
-        }
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (!prefs.contains(PREF_SCROLL_PAGES_PREFIX + id)
-                || !prefs.contains(PREF_SCROLL_PAGE_PREFIX + id)) {
-            // Pre-v78 memory: Y=0 on a multi-page Ready sheet is ambiguous (often the
-            // pending-ScrollView / truncated-list bug). Prefer first-open once; the
-            // next leave writes a real fingerprint. Non-zero Y must still fit.
-            Integer y = rememberedScroll(id);
-            if (y == null) {
-                return false;
+            @Override
+            public int lastInkOffset(List<Board> pages) {
+                return CanvasActivity.this.lastInkOffset(pages);
             }
-            if (y == 0 && pages.size() > 1) {
-                return false;
-            }
-            int max = 0;
-            int gap = layoutGap(pages);
-            for (int i = 0; i < pages.size(); i++) {
-                max += heightOf(pages.get(i)) + gap;
-            }
-            return y <= Math.max(0, max);
-        }
-        int savedCount = prefs.getInt(PREF_SCROLL_PAGES_PREFIX + id, -1);
-        String savedPage = prefs.getString(PREF_SCROLL_PAGE_PREFIX + id, null);
-        if (savedCount != pages.size() || savedPage == null) {
-            return false;
-        }
-        for (Board page : pages) {
-            if (savedPage.equals(page.id)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static final class ScrollFingerprint {
-        final int pageCount;
-        final String pageId;
-
-        ScrollFingerprint(int pageCount, String pageId) {
-            this.pageCount = pageCount;
-            this.pageId = pageId;
-        }
+        };
     }
 
     /**
@@ -1208,36 +1128,32 @@ public final class CanvasActivity extends Activity {
         if (!loaded.ready || loaded.pages.isEmpty()) {
             return;
         }
-        // One intent → one target after the sheet is Ready (notebook-navigation.md).
-        int target;
-        if (loaded.keepScroll != null) {
-            // Jump: page link, Move, or hold-place reload/reflow.
-            target = loaded.keepScroll;
-        } else {
-            Integer remembered = rememberedScroll(loaded.id);
-            if (remembered != null && fingerprintMatches(loaded.id, loaded.pages)) {
-                // Restore: return to where the user left (same page count + page id).
-                target = remembered;
-            } else if (SCRATCHPAD.equals(loaded.id)) {
-                // First open (or fingerprint mismatch): Scratchpad trailing blank.
-                target = 0;
-                for (int i = 0; i < loaded.pages.size() - 1; i++) {
-                    target += heightOf(loaded.pages.get(i)) + layoutGap(loaded.pages);
-                }
-            } else {
-                // First open (or fingerprint mismatch): notebook last inked slice.
-                target = lastInkOffset(loaded.pages);
-            }
+        // Fresh ensureSheet just read disk — disk wins over a stale trust mark
+        // (e.g. after a pre-fix pull already rewrote .zdl). commitTrusted updates.
+        if (collectionNav.rejectsShorter(loaded.id, loaded.pages.size())) {
+            LaunchLog.mark("page list " + label(loaded.id) + " disk shorter than prior trust ("
+                    + loaded.pages.size() + " < " + collectionNav.trustedCount(loaded.id)
+                    + "); accepting disk SoT");
         }
-        // Persist the resolved intent + fingerprint before ScrollView layout applies it.
-        rememberScroll(loaded.id, target, fingerprintOf(loaded.pages, target));
-        showPages(loaded.pages, target);
-        syncNav();
+        showReady(loaded.id, loaded.pages, loaded.keepScroll);
         if (!firstListShown) {
             firstListShown = true;
             LaunchLog.mark("first page list on screen: " + label(loaded.id) + ", " + loaded.pages.size()
                     + " pages (" + inked(loaded.pages) + " inked), " + loaded.notebooks.size() + " notebook tabs");
         }
+    }
+
+    /**
+     * Paint a Ready (or trusted-reconciled) page list. Sole UI commit path for
+     * collection pages — resolves scroll via {@link CollectionNav} and commits trust.
+     */
+    private void showReady(String id, List<Board> pages, Integer keepScroll) {
+        int target = collectionNav.resolveTargetY(
+                id, keepScroll, pages, SCRATCHPAD.equals(id), pageLayout());
+        String anchor = collectionNav.anchorPageId(pages, target, pageLayout());
+        collectionNav.commitTrusted(id, pages.size(), target, anchor);
+        showPages(pages, target);
+        syncNav();
     }
 
     private static BoardRepository.NotebookInfo notebookByIdIn(
@@ -1284,10 +1200,18 @@ public final class CanvasActivity extends Activity {
             startLoad(collectionId, targetScrollY, false);
             return;
         }
+        // Never paint a sudden shrink over a trusted Ready list (BoardEntity / bad cache).
+        if (collectionNav.rejectsShorter(collectionId, pages.size())) {
+            LaunchLog.mark("reload refused shorter than trusted for " + label(collectionId));
+            startLoad(collectionId, targetScrollY, false);
+            return;
+        }
         if (tryAppendTrailingBlank(pages, targetScrollY)) {
             return;
         }
         ++loadGeneration;
+        String anchor = collectionNav.anchorPageId(pages, targetScrollY, pageLayout());
+        collectionNav.commitTrusted(collectionId, pages.size(), targetScrollY, anchor);
         showPages(pages, targetScrollY);
     }
 
@@ -2167,7 +2091,11 @@ public final class CanvasActivity extends Activity {
             target += heightOf(pages.get(i)) + layoutGap(pages);
         }
         ++loadGeneration;
-        showPages(pages, index < 0 ? effectiveScrollY() : target);
+        int scroll = index < 0 ? effectiveScrollY() : target;
+        String anchor = collectionNav.anchorPageId(pages, scroll, pageLayout());
+        // Local delete legitimately shrinks the list — refresh trust mark.
+        collectionNav.commitTrusted(collectionId, pages.size(), scroll, anchor);
+        showPages(pages, scroll);
     }
 
     /** The blank page that ends every list: it has nothing to wipe, move or delete. */
@@ -2517,7 +2445,7 @@ public final class CanvasActivity extends Activity {
         onTap(delete, v -> {
             dismissOverlay();
             repository.deleteNotebook(id);
-            scrollByCollection.remove(id);
+            collectionNav.clearTrusted(id);
             int cut = trail.indexOf(id);
             if (cut >= 0) {
                 trail.subList(cut, trail.size()).clear();
