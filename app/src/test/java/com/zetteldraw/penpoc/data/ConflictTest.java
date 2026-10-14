@@ -28,7 +28,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Last-write-wins with hidden conflict copies, on the device side of sync. */
+/**
+ * Exception-path conflict shelves on the device side of sync (Hand off /
+ * history). Day-to-day sync is single live writer push + pull catch-up.
+ */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
 public class ConflictTest {

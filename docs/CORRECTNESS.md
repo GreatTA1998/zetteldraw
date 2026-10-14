@@ -51,7 +51,7 @@ Not in that list → not claimed. See [Non-guarantees](#non-guarantees).
 2. **Bind once.** At conversion, a stroke is attached to the page under its first point and stored in that page’s coordinates. Scroll never rewrites stored points.
 3. **Write-behind completeness.** One writer; staged file + `fsync` + atomic rename; under the lock the writer re-checks the snapshot is still newest and the page still live. Deleted/emptied pages are not resurrected by a stuck write.
 4. **Sync vs in-flight edit.** Pull skips pages with an unwritten local snapshot. Push sends only ink that is on disk and matches its row.
-5. **Whole-log LWW.** A notebook’s ink log is one object. Conflict shelves the other log whole as a hidden copy — never splits a stroke mid-log.
+5. **Whole-log apply (single live writer).** A notebook’s ink log is one object. Day to day the live Boox pushes; pull is catch-up. On the exception path (Hand off / history), conflict shelves the other log whole as a hidden copy — never splits a stroke mid-log. Not multi-device co-edit.
 
 ### Tests that lock this
 

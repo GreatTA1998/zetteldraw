@@ -3,13 +3,17 @@ package com.zetteldraw.penpoc.data;
 /**
  * Sole policy for applying a remote notebook ink log to local disk/Ready.
  *
- * <p>Callers must not write the live primary {@code .zdl} from sync except by
- * honouring {@link Decision}. There is no {@code OVERWRITE_WITH_SHORTER}: a
- * shorter remote is shelved; a longer remote always adopts (beats LWW clocks and
- * pending short outbox). Equal length keeps holdFlush / unflushed / LWW guards.
+ * <p>Sync mental model: the live Boox uploads; pull / log-heads are
+ * <strong>catch-up from cloud backup</strong>, not peer merge. Callers must
+ * not write the live primary {@code .zdl} from sync except by honouring
+ * {@link Decision}. There is no {@code OVERWRITE_WITH_SHORTER}: a shorter
+ * remote is shelved; a longer remote always adopts (beats equal-length clocks
+ * and pending short outbox). Equal length keeps holdFlush / unflushed /
+ * catch-up guards — same-device flush vs pull, not two-device co-edit.
  *
  * <p>Makes "short remote overwrites long local" locally impossible: the type
- * does not offer that outcome.
+ * does not offer that outcome. Conflict shelves are the Hand-off / history
+ * exception path.
  *
  * @see LogLength
  */
@@ -22,7 +26,7 @@ public final class InkLogApply {
         SHELVE_CONFLICT_COPY,
         /** Remote has fewer slices/bytes — keep local primary; shelf remote. */
         REFUSE_SHORTER,
-        /** Remote has more slices or bytes — install remote; drop pending outbox. */
+        /** Longer cloud backup — catch-up install; drop pending outbox. */
         ADOPT_LONGER,
         /** Equal length: local rev already caught up. */
         SKIP_REV,
@@ -30,9 +34,9 @@ public final class InkLogApply {
         SKIP_HOLD_FLUSH,
         /** Equal length: memory longer than flushed disk. */
         SKIP_UNFLUSHED,
-        /** Equal length: pending local outbox wins on updatedAt. */
+        /** Equal length: pending local outbox still newer than remote. */
         SKIP_PENDING_NEWER,
-        /** Equal length: LWW replace with remote. */
+        /** Equal length: adopt remote body (catch-up / Hand-off seed). */
         LWW_REPLACE,
         /** Tombstone / meta-only remote after guards. */
         UPSERT_META_ONLY,

@@ -5,10 +5,10 @@ import com.zetteldraw.penpoc.data.db.BoardEntity;
 import java.util.Objects;
 
 /**
- * Last-write-wins per row, same rule as {@code server/src/lww.ts}: the newer
- * {@code updated_at} wins and the side that is already on the server wins a
- * tie. A losing board that still carries ink the winner does not have is kept
- * as a hidden conflict copy.
+ * Clock compare shared with {@code server/src/lww.ts}. Product sync is single
+ * live writer (push) + pull catch-up / Hand off — not multi-device co-edit.
+ * Newer {@code updated_at} wins; server wins ties. Used for equal-length
+ * catch-up and the exception shelf path (Hand off / history), not peer merge.
  */
 public final class Lww {
     private Lww() {

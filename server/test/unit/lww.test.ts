@@ -48,7 +48,7 @@ describe("resolveBoard", () => {
     expect(d).toEqual({ status: "applied", write: null, restamp: false, copy: null });
   });
 
-  it("newer stale push wins and keeps the server's ink as a hidden conflict copy", () => {
+  it("exception path: newer stale push wins and shelves server's ink", () => {
     const d = resolveBoard(board({ rev: 9 }), incoming({ ink_hash: HASH_B, updated_at: 200 }, 5), newId);
     expect(d.status).toBe("conflict_won");
     expect(d.write?.ink_hash).toBe(HASH_B);
@@ -56,7 +56,7 @@ describe("resolveBoard", () => {
     expect(d.copy).not.toHaveProperty("rev");
   });
 
-  it("older stale push loses, is kept as a conflict copy, and the winner is re-stamped", () => {
+  it("exception path: older stale push loses, shelves copy, restamps winner", () => {
     const d = resolveBoard(board({ rev: 9 }), incoming({ ink_hash: HASH_B, updated_at: 50 }, 5), newId);
     expect(d.status).toBe("conflict_lost");
     expect(d.write).toBeNull();
@@ -123,7 +123,7 @@ describe("resolveLog", () => {
     };
   }
 
-  it("shelves the other log whole and does not split it", () => {
+  it("exception path: shelves the other log whole and does not split it", () => {
     const { rev: _rev, ...row } = log({ ink_hash: HASH_B, ink_bytes: 80, updated_at: 200 });
     const won = resolveLog(log({ rev: 9 }), { ...row, base_rev: 4 }, newId);
     expect(won.status).toBe("conflict_won");

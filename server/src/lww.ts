@@ -1,9 +1,12 @@
 /**
- * Last-write-wins per row. Same rule as the app's Lww.java:
- * - a push whose base_rev matches the stored rev applies directly;
- * - otherwise the newer updated_at wins and the stored row wins a tie;
- * - a losing board that still carries ink the winner lacks is kept as a
- *   hidden conflict copy (new id, conflict_of = original id).
+ * Row apply for sync push. Product model is **single live writer**
+ * (lease in writer.ts): live Boox uploads; others read-only until Hand off.
+ * This is not CRDT / peer merge.
+ *
+ * Main path: base_rev matches → apply. Idempotent same-body retry → noop.
+ * Exception path (Hand off race, lost-device, buggy history): stale base_rev
+ * uses updated_at; loser ink may be shelved whole (conflict_of). Same rule
+ * as app Lww.java. Refuse-shorter on logs is backup integrity, not co-edit.
  */
 
 export interface NotebookRow {
@@ -171,11 +174,12 @@ function incomingShrinksLog(existing: LogRow, incoming: Omit<LogRow, "rev">): bo
 }
 
 /**
- * Last-write-wins for a whole notebook log. The loser is shelved entire.
- * Nothing here splits a stroke.
+ * Whole notebook log apply. Nothing here splits a stroke.
  *
- * <p>A shorter live incoming log never replaces a longer live primary — the
- * short copy is shelved and the primary is kept (client gets a restamp).
+ * Main: matching base_rev from the live writer. Exception: stale base_rev
+ * shelves the loser log entire (Hand off / history — not day-to-day co-edit).
+ * A shorter live incoming never replaces a longer live primary (restamp +
+ * shelf short) — backup integrity under the lease.
  */
 export function resolveLog(
   existing: LogRow | null,
@@ -220,7 +224,7 @@ function sameLink(a: Omit<LinkRow, "rev">, b: Omit<LinkRow, "rev">): boolean {
   );
 }
 
-/** Last-write-wins for a page link. A link copies no ink, so there is no conflict copy. */
+/** Page-link apply (no ink shelf). Main = matching base_rev; stale rev = exception clocks. */
 export function resolveLink(existing: LinkRow | null, incoming: Incoming<LinkRow>): Decision<LinkRow> {
   const row = stripBase(incoming);
   if (existing === null || incoming.base_rev === existing.rev) {
