@@ -5,7 +5,8 @@ Tip **v85 / 3.64** shipped. Cont branch: `cursor/ink-sot-rewrite-cont-8d38`.
 **Goal:** modular SoT paths you can explain locally. LOC = gauge, not success metric.  
 Hard override: reliability / reasonability over vanity LOC.
 
-Canonical plan: project store `docs/ink-sot-rewrite.md`.
+Canonical plan: project store `docs/ink-sot-rewrite.md`.  
+**Whole-system open decisions (freeze coding until decided):** project store `docs/system-architecture.md`.
 
 ## Sync invariant (Elton)
 
