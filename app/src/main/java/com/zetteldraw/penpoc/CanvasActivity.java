@@ -70,8 +70,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Top bar: Scratchpad | top-level notebooks | +. A selected notebook with
- * children opens another bar of only those children. Each collection is a
- * continuous vertical scroll of its own pages.
+ * children opens another bar of only those children. Tab underline is the
+ * open notebook only (not ancestors). Each collection is a continuous
+ * vertical scroll of its own pages.
  */
 public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
@@ -871,7 +872,9 @@ public final class CanvasActivity extends Activity {
 
     private void openCollection(String id, Integer keepScroll) {
         dismissOverlay();
-        if (!id.equals(collectionId)) {
+        String previous = collectionId;
+        boolean switched = !id.equals(previous);
+        if (switched) {
             inkView.clearHistory();
         }
         // Persist the collection we leave using the intended Y (pending apply wins).
@@ -893,8 +896,28 @@ public final class CanvasActivity extends Activity {
                 return;
             }
         }
-        // Cold / not Ready: load off the main thread; old pages stay up with pen held.
+        // Different collection not Ready yet: never leave the previous notebook's
+        // ink painted under the new tab selection (Dating/Stacey "same sheet" bug).
+        // Same-collection cold reload may keep the old list briefly with pen held.
+        // Keep pages during Link/Reorder — clearing would drop the target ref in the
+        // mode bar until Ready returns.
+        if (switched && linkSourceId == null && reorderSourceId == null) {
+            clearShownPages();
+        }
         startLoad(id, keepScroll, true);
+    }
+
+    /** Drops painted slots so a pending load cannot be mistaken for the open notebook. */
+    private void clearShownPages() {
+        currentPages = null;
+        pageColumn.removeAllViews();
+        slots.clear();
+        slotTops = new int[]{0};
+        slotStride = 0;
+        pendingScrollY = 0;
+        inkView.setPages(java.util.Collections.emptyList(), new int[0], pageGap, 0);
+        refreshModeBar();
+        updateExcludeRects();
     }
 
     /** Saves the open list's scroll so a later return (or process death) can restore it. */
@@ -2962,9 +2985,12 @@ public final class CanvasActivity extends Activity {
     private void styleTabs() {
         boolean scratch = trail.isEmpty() && SCRATCHPAD.equals(collectionId);
         styleTool(scratchpadTab, scratch);
+        // Underline only the open notebook (leaf), not its ancestors. Trail still
+        // opens child bars; ancestry chrome made parent+child look like one sheet
+        // (Dating selected ⇒ Stacey also underlined while pages had not switched).
+        String open = SCRATCHPAD.equals(collectionId) ? null : collectionId;
         for (NotebookTab tab : notebookTabs) {
-            boolean current = tab.depth < trail.size() && trail.get(tab.depth).equals(tab.id);
-            tab.setCurrent(current);
+            tab.setCurrent(open != null && tab.id.equals(open));
         }
     }
 

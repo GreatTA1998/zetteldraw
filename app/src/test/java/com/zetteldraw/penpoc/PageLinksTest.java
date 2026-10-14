@@ -417,7 +417,8 @@ public class PageLinksTest {
 
         openNotebook(root, "frombook");
         click(root, "→ chapter 1/4");
-        assertTrue(((View) find(root, "shelf").getParent()).isSelected());
+        assertFalse("ancestor shelf is not underlined",
+                ((View) find(root, "shelf").getParent()).isSelected());
         assertTrue(((View) find(root, "chapter").getParent()).isSelected());
         scroller = pageScroller(root);
         assertEquals("the link opens page 1, not the last inked page", 0, scroller.getScrollY());

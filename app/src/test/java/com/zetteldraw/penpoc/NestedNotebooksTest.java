@@ -2,6 +2,7 @@ package com.zetteldraw.penpoc;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -77,7 +78,9 @@ public class NestedNotebooksTest {
         click(root, "chapter");
         assertEquals("two levels of bars", 2, byDescription(root, "Child notebooks").size());
         assertNotNull(find(root, "scene"));
-        assertTrue(((View) find(root, "shelf").getParent()).isSelected());
+        // Leaf-only underline: ancestors open child bars but are not selected.
+        assertFalse("parent is not underlined while a child is open",
+                ((View) find(root, "shelf").getParent()).isSelected());
         assertTrue(((View) find(root, "chapter").getParent()).isSelected());
 
         click(root, "notes");
@@ -85,7 +88,8 @@ public class NestedNotebooksTest {
         assertTrue(find(root, "scene") == null);
         assertTrue(((View) find(root, "notes").getParent()).isSelected());
         assertFalse(((View) find(root, "chapter").getParent()).isSelected());
-        assertTrue(((View) find(root, "shelf").getParent()).isSelected());
+        assertFalse("ancestor shelf is not underlined while notes is open",
+                ((View) find(root, "shelf").getParent()).isSelected());
 
         click(root, "shelf");
         assertEquals("the child bar stays when its parent is tapped again", 1,
@@ -96,6 +100,57 @@ public class NestedNotebooksTest {
 
         clickDesc(root, "Scratchpad");
         assertEquals("Scratchpad closes every lower bar", 0, byDescription(root, "Child notebooks").size());
+
+        controller.pause().stop().destroy();
+    }
+
+    /**
+     * Parent and child are distinct sheets: underline is leaf-only, and switching
+     * paints different page lists (Dating/Stacey "same notebook" regression).
+     */
+    @Test
+    public void parentAndChildAreDistinctSheetsWithLeafOnlyUnderline() {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        BoardRepository.NotebookInfo dating = repo.createNotebook("dating");
+        BoardRepository.NotebookInfo stacey = repo.createNotebook("stacey", dating.id);
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        idle();
+        click(root, "dating");
+        idleForPaint();
+        relayout(root);
+        assertNotNull(find(root, "1/" + repo.pages(dating.id).size()));
+        repo.pages(dating.id).get(0).paper.appendStroke(TestStrokes.stroke(11f, 20f));
+        repo.saveInk(repo.pages(dating.id).get(0));
+
+        click(root, "stacey");
+        idleForPaint();
+        relayout(root);
+        assertNotNull("Stacey pages are on screen after switch", find(root, "1/" + repo.pages(stacey.id).size()));
+        assertTrue(((View) find(root, "stacey").getParent()).isSelected());
+        assertFalse("Dating must not stay underlined while Stacey is open",
+                ((View) find(root, "dating").getParent()).isSelected());
+        repo.pages(stacey.id).get(0).paper.appendStroke(TestStrokes.stroke(99f, 20f));
+        repo.saveInk(repo.pages(stacey.id).get(0));
+        assertNotEquals(NotebookPaper.sheetId(dating.id), NotebookPaper.sheetId(stacey.id));
+
+        click(root, "dating");
+        idleForPaint();
+        relayout(root);
+        assertTrue(((View) find(root, "dating").getParent()).isSelected());
+        assertFalse("Stacey must not stay underlined while Dating is open",
+                ((View) find(root, "stacey").getParent()).isSelected());
+        assertNotNull(find(root, "1/" + repo.pages(dating.id).size()));
+
+        click(root, "stacey");
+        idleForPaint();
+        relayout(root);
+        assertTrue(((View) find(root, "stacey").getParent()).isSelected());
+        assertFalse(((View) find(root, "dating").getParent()).isSelected());
+        assertEquals(99f, repo.pages(stacey.id).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
+        assertEquals(11f, repo.pages(dating.id).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
 
         controller.pause().stop().destroy();
     }
