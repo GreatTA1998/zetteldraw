@@ -275,7 +275,7 @@ public final class SyncEngine {
             long localBytes = store.localInkLogBytes(id);
             String localHash = store.localInkLogHash(id);
             boolean sameHash = hash.equals(localHash);
-            // Never shorten via reconcile. Adopt when cloud is longer, or when
+            // Never shorten via length sync. Adopt when cloud is longer, or when
             // byte length matches but the on-disk hash drifted from the primary.
             if (remoteBytes < localBytes) {
                 continue;
@@ -283,7 +283,7 @@ public final class SyncEngine {
             if (remoteBytes == localBytes && sameHash) {
                 continue;
             }
-            LaunchLog.mark("reconcile longer log " + id
+            LaunchLog.mark("length sync longer log " + id
                     + " remoteBytes=" + remoteBytes + " localBytes=" + localBytes
                     + " hashMatch=" + sameHash);
             byte[] bytes = client.getBlob(hash);
@@ -315,7 +315,7 @@ public final class SyncEngine {
         }
         if (adopted > 0) {
             result.pulledNotebooks += adopted;
-            LaunchLog.mark("reconcile adopted " + adopted + " longer log(s)");
+            LaunchLog.mark("length sync adopted " + adopted + " longer log(s)");
         }
     }
 
