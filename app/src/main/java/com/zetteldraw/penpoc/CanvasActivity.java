@@ -3107,11 +3107,11 @@ public final class CanvasActivity extends Activity {
             moreButton.setMinimumWidth(dp(48));
             moreButton.setMinHeight(dp(48));
             moreButton.setMinWidth(dp(48));
-            // Optical (v74): END-align ⋮ in the 48dp hit box. Glyph sits high in the
-            // em box, so padTop 2 nudges ink down to match Link/Reorder text.
-            // rightMargin 8 + padRight 10 → 18dp edge→ink (was 14); Link left stays 14.
-            // Equal visual weight left vs right without hugging the screen edge.
-            moreButton.setPadding(dp(10), dp(2), dp(10), 0);
+            // Optical: END-align for right gutter (rightMargin 8 + padRight 10 → 18dp
+            // edge→ink). Vertical: padTop must be 0 (v74's +2dp pushed ⋮ too low).
+            // Measured glyph centers (PageChromeOpticalTest): with pad 0/0, ⋮ sits
+            // 1dp below Link — padBottom 1dp raises the glyph in the 48dp target.
+            moreButton.setPadding(dp(10), 0, dp(10), dp(1));
             moreButton.setIncludeFontPadding(false);
             moreButton.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
             moreButton.setContentDescription(getString(R.string.page_options));
