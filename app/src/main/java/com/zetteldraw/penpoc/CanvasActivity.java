@@ -2140,14 +2140,19 @@ public final class CanvasActivity extends Activity {
      * as newest in the chosen notebook. Uses the shared hierarchy menu.
      */
     private void showMoveMenu(PageSlot slot) {
-        if (slot.page.isBlank()) {
+        // Reseat by id before enabling the menu — stale sliceIndex can make a
+        // blank/orphaned chrome look inked (or the reverse) after prior Moves.
+        Board live = livePageById(slot.page.id);
+        if (live == null || live.isBlank()) {
+            showHint(getString(R.string.move_failed), true);
+            reloadPages(effectiveScrollY());
             return;
         }
         cancelLinking();
         cancelReorder();
         hideLassoMenu();
         showNotebookHierarchyMenu(slot.moveButton, drawingArea, null, true, slot,
-                notebookId -> movePageToNotebook(slot, notebookId));
+                notebookId -> movePageToNotebook(live.id, notebookId));
     }
 
     /**
@@ -2287,22 +2292,75 @@ public final class CanvasActivity extends Activity {
      * Cross-notebook append Move (menu path). Places before the dest trailing
      * blank via {@code placePageBefore} so page id + holdFlush / dest-id (v63+)
      * stay intact — not the legacy append tear that dropped the slice id.
+     *
+     * <p>Always reseats the source from the current Ready projection by page
+     * id (never trust a stale {@link PageSlot} alone), and {@code ensureSheet}s
+     * the destination before reading its trailing blank. A log-backed dest that
+     * was never opened this session used to make {@code pages(dest)} return
+     * {@code []} and this method returned with no feedback — Elton's
+     * "Move does nothing until I visit other notebooks" class of bug.
      */
     private void movePageToNotebook(PageSlot slot, String targetNotebookId) {
-        if (slot == null || slot.page.isBlank() || targetNotebookId == null) {
+        if (slot == null || slot.page == null) {
             return;
         }
-        repository.saveInk(slot.page);
+        movePageToNotebook(slot.page.id, targetNotebookId);
+    }
+
+    private void movePageToNotebook(String pageId, String targetNotebookId) {
+        if (pageId == null || targetNotebookId == null) {
+            return;
+        }
+        Board live = livePageById(pageId);
+        if (live == null) {
+            LaunchLog.mark("Move menu refused: page id missing from Ready paper " + pageId);
+            showHint(getString(R.string.move_failed), true);
+            reloadPages(effectiveScrollY());
+            return;
+        }
+        if (live.isBlank()) {
+            LaunchLog.mark("Move menu refused: source blank after reseat " + pageId);
+            showHint(getString(R.string.move_failed), true);
+            reloadPages(effectiveScrollY());
+            return;
+        }
+        repository.saveInk(live);
+        if (pageHeight > 0) {
+            repository.ensureSheet(targetNotebookId, pageHeight, legacyPageHeight, shortPagesSince);
+        }
         List<Board> destPages = repository.pages(targetNotebookId);
         if (destPages.isEmpty()) {
+            LaunchLog.mark("Move menu refused: dest pages empty after ensure " + targetNotebookId);
+            showHint(getString(R.string.move_failed), true);
             return;
         }
         Board trailing = destPages.get(destPages.size() - 1);
-        if (!repository.placePageBefore(slot.page.id, trailing.id, targetNotebookId)) {
-            LaunchLog.mark("Move menu place-before refused for " + targetNotebookId);
+        if (!repository.placePageBefore(pageId, trailing.id, targetNotebookId)) {
+            LaunchLog.mark("Move menu place-before refused for " + targetNotebookId
+                    + " page=" + pageId);
+            showHint(getString(R.string.move_failed), true);
+            reloadPages(effectiveScrollY());
             return;
         }
         reloadPages(effectiveScrollY());
+    }
+
+    /**
+     * Current Ready board for {@code pageId} in the open collection, or null
+     * when the id is gone (already moved / orphaned chrome). Re-reads via
+     * {@link #pagesIn} so sliceIndex / paper match the open sheet, not a
+     * stale {@link PageSlot} captured when the hierarchy menu opened.
+     */
+    private Board livePageById(String pageId) {
+        if (pageId == null) {
+            return null;
+        }
+        for (Board page : pagesIn(collectionId)) {
+            if (pageId.equals(page.id)) {
+                return page;
+            }
+        }
+        return null;
     }
 
     private interface NotebookPick {

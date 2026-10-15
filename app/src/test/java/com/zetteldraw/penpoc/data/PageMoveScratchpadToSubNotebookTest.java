@@ -240,6 +240,44 @@ public class PageMoveScratchpadToSubNotebookTest {
         assertFalse(onScratch);
     }
 
+    /**
+     * Elton 2026-10-15: Move Scratchpad → top-level notebook no-ops until the
+     * dest is opened (or stays stuck if never opened). UI called {@code pages(dest)}
+     * without {@code ensureSheet}; log-backed not-Ready sheets return [].
+     * Fixed path: ensure → trailing blank → placePageBefore (dest-first).
+     */
+    @Test
+    public void menuPathEnsureThenPlaceIntoInvalidatedTopLevelKeepsPage() {
+        String top = repo.createNotebook("journal-like").id;
+        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(top, PAGE, PAGE, 0L);
+        // Touch dest so the ink log exists on disk, then drop the Ready sheet
+        // (as after a long Scratchpad-only session that never opened it).
+        Board destSeed = repo.pages(top).get(repo.pages(top).size() - 1);
+        repo.saveInk(destSeed);
+        repo.invalidateOpenSheet(top);
+        assertTrue("log-backed not-Ready must refuse legacy projection",
+                repo.pages(top).isEmpty());
+        assertFalse(repo.isSheetReady(top));
+
+        Board drawing = inkNearBottom(null, "top-level-move");
+        String movedId = drawing.id;
+
+        // Exact fixed Move-menu path (CanvasActivity.movePageToNotebook).
+        assertTrue(repo.ensureSheet(top, PAGE, PAGE, 0L));
+        List<Board> destPages = repo.pages(top);
+        assertFalse(destPages.isEmpty());
+        Board trailing = destPages.get(destPages.size() - 1);
+        assertTrue(repo.placePageBefore(movedId, trailing.id, top));
+
+        assertTrue("must leave Scratchpad",
+                repo.pages(null).stream().noneMatch(b -> movedId.equals(b.id)));
+        List<Board> dest = repo.pages(top);
+        assertEquals(movedId, dest.get(dest.size() - 2).id);
+        assertNotNull(dest.get(dest.size() - 2).paper.stroke("top-level-move"));
+        assertTrue(dest.get(dest.size() - 1).isBlank());
+    }
+
     @Test
     public void fullConfirmMovingQueueLandsLastPageInSubNotebookAfterDrain() throws Exception {
         String actions = repo.createNotebook("actions.life").id;

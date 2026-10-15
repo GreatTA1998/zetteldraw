@@ -32,12 +32,21 @@ public final class Board {
         return new Board(UUID.randomUUID().toString(), System.currentTimeMillis());
     }
 
+    /**
+     * Blank when this id has no ink on the live paper. Resolve by
+     * {@linkplain NotebookPaper#indexOfSliceId(String) page id}, not a cached
+     * {@link #sliceIndex}: after a session of Moves that field can still point
+     * at a neighbor, which made Move chrome look enabled on a dead/blank slice
+     * (or greyed on an inked one) until the collection was reopened.
+     */
     public boolean isBlank() {
-        if (paper != null && sliceIndex >= 0) {
-            if (sliceIndex >= paper.sliceCount()) {
+        if (paper != null) {
+            int index = paper.indexOfSliceId(id);
+            if (index < 0) {
+                // Trailing blank (id not on paper yet) or orphaned chrome.
                 return true;
             }
-            return !paper.containsInk(sliceIndex);
+            return !paper.containsInk(index);
         }
         return strokes.isEmpty();
     }

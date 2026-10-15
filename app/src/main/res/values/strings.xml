@@ -25,6 +25,7 @@
     <string name="undo_nothing">Nothing left to undo</string>
     <string name="redo_nothing">Nothing left to redo</string>
     <string name="move">Move</string>
+    <string name="move_failed">Couldn’t move that page. It is still here.</string>
     <string name="reorder">Reorder</string>
     <string name="link">Link</string>
     <string name="linking_from">Linking %1$s</string>

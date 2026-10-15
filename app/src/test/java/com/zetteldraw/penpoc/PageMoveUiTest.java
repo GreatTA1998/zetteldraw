@@ -162,6 +162,41 @@ public class PageMoveUiTest {
         controller.pause().stop().destroy();
     }
 
+    /**
+     * Dest notebook never opened this session → pages(dest) was [] and Move
+     * menu Confirm no-op'd. Menu path must ensureSheet then place.
+     */
+    @Test
+    public void moveMenuIntoNeverOpenedTopLevelNotebook() {
+        Application app = ApplicationProvider.getApplicationContext();
+        BoardRepository repo = ZettelData.repository(app);
+        BoardRepository.NotebookInfo book = repo.createNotebook("book");
+        BoardRepository.NotebookInfo top = repo.createNotebook("top-level");
+        // Install once so the dest is log-backed, then drop Ready (Scratchpad-only session).
+        repo.ensureSheet(top.id, 800, 800, 0L);
+        ((com.zetteldraw.penpoc.data.RoomBoardRepository) repo).invalidateOpenSheet(top.id);
+        assertTrue(repo.pages(top.id).isEmpty());
+
+        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
+        View root = controller.get().getWindow().getDecorView();
+        openNotebook(root, "book");
+        ink(repo, book.id, 10f);
+        openNotebook(root, "book");
+        String source = repo.pages(book.id).get(0).id;
+
+        clickOnPage(root, "1/2", "Move");
+        assertTrue(last(root, "top-level").performClick());
+        idleForPaint();
+
+        assertTrue("source must leave book",
+                repo.pages(book.id).stream().noneMatch(b -> source.equals(b.id)));
+        List<Board> dest = repo.pages(top.id);
+        assertEquals(source, dest.get(0).id);
+        assertTrue(dest.get(dest.size() - 1).isBlank());
+
+        controller.pause().stop().destroy();
+    }
+
     @Test
     public void reorderSnackbarIsNotParentedIntoTopTabStrip() {
         Application app = ApplicationProvider.getApplicationContext();

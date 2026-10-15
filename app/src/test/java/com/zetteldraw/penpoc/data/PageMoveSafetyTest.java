@@ -165,6 +165,24 @@ public class PageMoveSafetyTest {
     }
 
     @Test
+    public void isBlankResolvesByPageIdNotStaleSliceIndex() {
+        Board s1 = inkNearBottom(null, "a");
+        Board s2 = inkNearBottom(null, "b");
+        Board s3 = inkNearBottom(null, "c");
+        repo.deletePage(s1.id);
+        // paper is now [s2, s3]; cache still says s2.sliceIndex == 1 (s3's ink).
+        assertEquals(1, s2.sliceIndex);
+        assertEquals(s3.id, s2.paper.sliceId(1));
+        assertFalse("s2 still has its own ink at paper[0]", s2.isBlank());
+        assertTrue(s2.paper.containsInk(0));
+        // Orphaned chrome id (already deleted) must read blank even if sliceIndex
+        // still points at a neighbor with ink.
+        s1.sliceIndex = 0;
+        s1.paper = s2.paper;
+        assertTrue("orphaned id must not look inked via neighbor sliceIndex", s1.isBlank());
+    }
+
+    @Test
     public void staleSliceIndexStillMovesTheRequestedPageNotItsNeighbor() {
         String other = repo.createNotebook("stale-dest").id;
         repo.ensureSheet(other, PAGE, PAGE, 0L);

@@ -668,6 +668,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 return false;
             }
             syncSliceIndex(dest.paper, boardId);
+            // Remaining source boards keep stale sliceIndex until the next
+            // projectLocked; reseat them now so Move chrome / isBlank agree
+            // with paper even if the UI briefly reads the cache mid-reload.
+            syncAllSliceIndices(moving.paper);
             sheetStore.holdSheetFlush(sourceSheetId);
             sheetStore.holdSheetFlush(destSheetId);
             final String movedId = boardId;
@@ -729,6 +733,16 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         if (index >= 0) {
             board.paperOrigin = paper.origin(index);
             board.slicePx = paper.heightAt(index);
+        }
+    }
+
+    /** Reseat every cached board that still lives on this paper (by slice id). */
+    private void syncAllSliceIndices(NotebookPaper paper) {
+        if (paper == null) {
+            return;
+        }
+        for (int i = 0; i < paper.sliceCount(); i++) {
+            syncSliceIndex(paper, paper.sliceId(i));
         }
     }
 
