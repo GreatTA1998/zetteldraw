@@ -45,9 +45,9 @@ import java.util.function.LongSupplier;
  * held for short metadata work: no ink encoding, no fsync'd data write, no
  * mirror I/O and no network happens while it is held.
  *
- * <p>Ink-log <em>open / remote apply / length</em> live in {@link InkSheetStore}
- * (+ {@link InkLogApply}). This class keeps board projection, Move/tear, and
- * meta sync.
+ * <p>Ink-log <em>open / remote apply / length / disk write</em> live in
+ * {@link InkSheetStore} (+ {@link InkLogApply}). This class keeps board
+ * projection, Move/tear orchestration, and meta sync.
  *
  * <p>Ink saves are write-behind. {@link #saveInk} takes an immutable snapshot
  * of the page's strokes and returns; one serialized writer thread encodes it,
@@ -105,8 +105,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private boolean mirrorDraining;
 
     /**
-     * Ink-log sheet SoT (Ready + remote apply + length). Move/tear still use
-     * {@link InkSheetStore.OpenSheet} under {@link #lock}.
+     * Ink-log sheet SoT (Ready + remote apply + length + disk write). Move/tear
+     * orchestration still calls into it under {@link #lock}.
      */
     private final InkSheetStore sheetStore;
     private int knownPageHeight;
@@ -169,6 +169,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         @Override public void mirrorLog(String sheetId, byte[] bytes) {
             RoomBoardRepository.this.mirrorLog(sheetId, bytes);
+        }
+        @Override public void noteLocalSheetEdit(String sheetId) {
+            localEdits.merge(sheetId, 1L, Long::sum);
         }
         @Override public boolean allowRemoteInkAdopt() {
             return RoomBoardRepository.this.allowRemoteInkAdopt();
@@ -332,7 +335,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return;
         }
         if (page.paper != null) {
-            writer.execute(() -> flushSheet(page.sheetId));
+            writer.execute(() -> sheetStore.flushSheet(page.sheetId));
             return;
         }
         List<InkRenderer.InkStroke> snapshot = Collections.unmodifiableList(new ArrayList<>(page.strokes));
@@ -543,7 +546,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             syncSliceIndex(moving.paper, boardId);
             syncSliceIndex(after.paper, afterBoardId);
-            writer.execute(() -> rewriteSheet(sheetId));
+            writer.execute(() -> sheetStore.rewriteSheet(sheetId));
         }
     }
 
@@ -615,12 +618,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     return false;
                 }
                 syncSliceIndex(dest.paper, boardId);
-                holdSheetFlush(destSheetId);
+                sheetStore.holdSheetFlush(destSheetId);
                 writer.execute(() -> {
                     try {
-                        rewriteSheet(destSheetId);
+                        sheetStore.rewriteSheet(destSheetId);
                     } finally {
-                        releaseSheetFlush(destSheetId);
+                        sheetStore.releaseSheetFlush(destSheetId);
                     }
                 });
                 return true;
@@ -654,19 +657,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         + " sourceStillHas=" + (moving.paper.indexOfSliceId(boardId) >= 0));
                 Log.e(TAG, "place page postflight failed; not persisting");
                 // Memory may be torn; hold flushes and reload from disk.
-                holdSheetFlush(sourceSheetId);
-                holdSheetFlush(destSheetId);
+                sheetStore.holdSheetFlush(sourceSheetId);
+                sheetStore.holdSheetFlush(destSheetId);
                 writer.execute(() -> {
-                    reloadSheetFromDisk(sourceSheetId);
-                    reloadSheetFromDisk(destSheetId);
-                    releaseSheetFlush(destSheetId);
-                    releaseSheetFlush(sourceSheetId);
+                    sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
+                    sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
+                    sheetStore.releaseSheetFlush(destSheetId);
+                    sheetStore.releaseSheetFlush(sourceSheetId);
                 });
                 return false;
             }
             syncSliceIndex(dest.paper, boardId);
-            holdSheetFlush(sourceSheetId);
-            holdSheetFlush(destSheetId);
+            sheetStore.holdSheetFlush(sourceSheetId);
+            sheetStore.holdSheetFlush(destSheetId);
             final String movedId = boardId;
             final String destNb = destNotebookId;
             final String sourceNb = notebookIdOfSheet(sourceSheetId);
@@ -734,64 +737,26 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * If dest rewrite fails, the source tear stays in memory but not on disk so a
      * restart still has the page on the origin notebook.
      *
-     * <p>{@link #holdSheetFlush} must already be set on both sheets so a
+     * <p>{@link InkSheetStore#holdSheetFlush} must already be set on both sheets so a
      * previously queued {@link #saveInk} flush cannot append the source tear
      * (or a corrupt dest suffix) before this runs. On dest failure the holds
      * stay so a later incidental flush cannot tear the source alone.
      */
     private void persistCrossNotebookPlace(String destSheetId, String sourceSheetId) {
-        if (!rewriteSheetOrFalse(destSheetId)) {
+        if (!sheetStore.rewriteSheetOrFalse(destSheetId)) {
             LaunchLog.mark("place-before dest rewrite failed; source not torn on disk");
             Log.e(TAG, "place-before dest rewrite failed; source not torn on disk");
             // Memory was torn; disk still has the pre-move logs. Reload both so
             // UI/cache match disk, then release holds so pen-up can flush again.
-            reloadSheetFromDisk(sourceSheetId);
-            reloadSheetFromDisk(destSheetId);
-            releaseSheetFlush(destSheetId);
-            releaseSheetFlush(sourceSheetId);
+            sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
+            sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
+            sheetStore.releaseSheetFlush(destSheetId);
+            sheetStore.releaseSheetFlush(sourceSheetId);
             return;
         }
-        releaseSheetFlush(destSheetId);
-        releaseSheetFlush(sourceSheetId);
-        flushSheet(sourceSheetId);
-    }
-
-    /**
-     * Replace an open sheet's in-memory paper with the on-disk log. Used when a
-     * cross-notebook dest write fails after an in-memory tear: disk still has
-     * the page on the source, so prefer that over a stuck holdFlush.
-     */
-    private void reloadSheetFromDisk(String sheetId) {
-        if (sheetId == null) {
-            return;
-        }
-        byte[] existing;
-        try {
-            existing = ink.readLog(sheetId);
-        } catch (IOException e) {
-            Log.e(TAG, "reload sheet failed " + sheetId, e);
-            return;
-        }
-        synchronized (lock) {
-            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
-            if (open == null) {
-                return;
-            }
-            try {
-                if (existing == null || existing.length == 0) {
-                    open.paper = NotebookPaper.empty(
-                            open.paper != null && open.paper.sliceHeight > 0
-                                    ? open.paper.sliceHeight
-                                    : Math.max(1, knownPageHeight));
-                    open.flushed = open.paper.bytes().length;
-                } else {
-                    open.paper = NotebookPaper.replay(existing);
-                    open.flushed = existing.length;
-                }
-            } catch (IOException e) {
-                Log.e(TAG, "reload sheet replay failed " + sheetId, e);
-            }
-        }
+        sheetStore.releaseSheetFlush(destSheetId);
+        sheetStore.releaseSheetFlush(sourceSheetId);
+        sheetStore.flushSheet(sourceSheetId);
     }
 
     /** Notebook id for a sheet id ({@code null} = Scratchpad). */
@@ -837,8 +802,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     // Destination first: only flush source after dest write succeeds.
                     String destSheetId = NotebookPaper.sheetId(notebookId);
                     String sourceSheetId = moving.sheetId;
-                    holdSheetFlush(sourceSheetId);
-                    holdSheetFlush(destSheetId);
+                    sheetStore.holdSheetFlush(sourceSheetId);
+                    sheetStore.holdSheetFlush(destSheetId);
                     writer.execute(() -> persistCrossNotebookAppend(destSheetId, sourceSheetId));
                 }
             }
@@ -888,7 +853,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 if (board.sliceIndex >= 0 && board.sliceIndex < board.paper.sliceCount()) {
                     board.paper.tearWipe(board.sliceIndex);
                     String sheetId = board.sheetId;
-                    writer.execute(() -> flushSheet(sheetId));
+                    writer.execute(() -> sheetStore.flushSheet(sheetId));
                 }
                 return;
             }
@@ -1325,19 +1290,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public String localInkLogHash(String sheetId) {
-        if (sheetId == null) {
-            return "";
-        }
-        try {
-            byte[] existing = ink.readLog(sheetId);
-            if (existing == null || existing.length == 0) {
-                return "";
-            }
-            return InkFileStore.sha256(existing);
-        } catch (IOException e) {
-            Log.e(TAG, "local ink log hash failed " + sheetId, e);
-            return "";
-        }
+        return sheetStore.localInkLogHash(sheetId);
     }
 
     /**
@@ -2003,7 +1956,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 paper.tearDelete(i);
                 tombstoneLinksTouchingLocked(boardId);
                 String sheetId = entry.getKey();
-                writer.execute(() -> flushSheet(sheetId));
+                writer.execute(() -> sheetStore.flushSheet(sheetId));
                 return true;
             }
         }
@@ -2437,199 +2390,20 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return pages;
     }
 
-    /**
-     * Writer thread. Replaces the whole on-disk log (reorder rewrites the
-     * prefix). Resets {@code flushed} so a later append starts from the new end.
-     */
-    private void rewriteSheet(String sheetId) {
-        rewriteSheetOrFalse(sheetId);
-    }
-
-    /** @return false when the sheet could not be written; caller must not tear the source on disk. */
-    private boolean rewriteSheetOrFalse(String sheetId) {
-        if (sheetId == null) {
-            return false;
-        }
-        byte[] all;
-        int generation;
-        synchronized (lock) {
-            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
-            if (open == null || !open.ready) {
-                return false;
-            }
-            all = open.paper.bytes();
-            generation = open.generation;
-        }
-        try {
-            ink.writeLog(sheetId, all);
-        } catch (IOException e) {
-            Log.e(TAG, "ink log rewrite failed " + sheetId, e);
-            LaunchLog.mark("ink log rewrite failed " + sheetId + ": " + e.getMessage());
-            return false;
-        }
-        String hash = InkFileStore.sha256(all);
-        synchronized (lock) {
-            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
-            if (open == null) {
-                return false;
-            }
-            // A pull/reconcile replaced paper while we held a stale snapshot —
-            // do not stamp short meta or leave the long disk overwritten without repair.
-            if (open.generation != generation) {
-                LaunchLog.mark("rewrite aborted; sheet generation advanced " + sheetId);
-                try {
-                    ink.writeLog(sheetId, open.paper.bytes());
-                    open.flushed = open.paper.bytes().length;
-                } catch (IOException e) {
-                    Log.e(TAG, "rewrite repair failed " + sheetId, e);
-                    return false;
-                }
-                return true;
-            }
-            open.flushed = all.length;
-            NotebookLogEntity row = dao.notebookLog(sheetId);
-            if (row == null) {
-                row = new NotebookLogEntity();
-                row.id = sheetId;
-                row.notebookId = open.notebookId;
-                row.createdAt = clock.getAsLong();
-            }
-            row.inkHash = hash;
-            row.inkBytes = all.length;
-            row.sliceHeight = open.paper.sliceHeight;
-            row.updatedAt = Math.max(row.updatedAt, clock.getAsLong());
-            row.deletedAt = null;
-            row.conflictOf = null;
-            NotebookLogEntity stored = row;
-            db.runInTransaction(() -> {
-                dao.upsertNotebookLog(stored);
-                queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
-            });
-            mirrorLog(sheetId, all);
-            localEdits.merge(sheetId, 1L, Long::sum);
-        }
-        return true;
-    }
-
     /** Append-style cross-notebook move: dest flush, then source tear flush. */
     private void persistCrossNotebookAppend(String destSheetId, String sourceSheetId) {
         // Holds blocked incidental flushes; release dest first so this flush can run.
-        releaseSheetFlush(destSheetId);
-        if (!flushSheetOrFalse(destSheetId)) {
+        sheetStore.releaseSheetFlush(destSheetId);
+        if (!sheetStore.flushSheetOrFalse(destSheetId)) {
             LaunchLog.mark("tearMove dest flush failed; source not torn on disk");
             Log.e(TAG, "tearMove dest flush failed; source not torn on disk");
-            reloadSheetFromDisk(sourceSheetId);
-            reloadSheetFromDisk(destSheetId);
-            releaseSheetFlush(sourceSheetId);
+            sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
+            sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
+            sheetStore.releaseSheetFlush(sourceSheetId);
             return;
         }
-        releaseSheetFlush(sourceSheetId);
-        flushSheet(sourceSheetId);
-    }
-
-    /** Writer thread. Appends the new tail of the log; it does not rewrite the prefix. */
-    private void flushSheet(String sheetId) {
-        flushSheetOrFalse(sheetId);
-    }
-
-    /** Prevent {@link #flushSheet} from writing until a cross-notebook persist releases it. */
-    private void holdSheetFlush(String sheetId) {
-        if (sheetId == null) {
-            return;
-        }
-        synchronized (lock) {
-            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
-            if (open != null) {
-                open.holdFlush = true;
-            }
-        }
-    }
-
-    private void releaseSheetFlush(String sheetId) {
-        if (sheetId == null) {
-            return;
-        }
-        synchronized (lock) {
-            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
-            if (open != null) {
-                open.holdFlush = false;
-            }
-        }
-    }
-
-    /** @return false when an append was needed and failed. */
-    private boolean flushSheetOrFalse(String sheetId) {
-        if (sheetId == null) {
-            return false;
-        }
-        byte[] suffix;
-        int flushed;
-        synchronized (lock) {
-            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
-            if (open == null || !open.ready) {
-                return false;
-            }
-            if (open.holdFlush) {
-                // Cross-notebook place/move is in flight: do not append a torn
-                // source (or a rewritten dest suffix) ahead of dest-first persist.
-                return true;
-            }
-            byte[] all = open.paper.bytes();
-            if (all.length <= open.flushed) {
-                return true;
-            }
-            suffix = java.util.Arrays.copyOfRange(all, open.flushed, all.length);
-            flushed = all.length;
-        }
-        try {
-            ink.appendLog(sheetId, suffix);
-        } catch (IOException e) {
-            Log.e(TAG, "ink log append failed " + sheetId, e);
-            LaunchLog.mark("ink log append failed " + sheetId + ": " + e.getMessage());
-            return false;
-        }
-        byte[] all;
-        try {
-            all = ink.readLog(sheetId);
-        } catch (IOException e) {
-            Log.e(TAG, "ink log read failed " + sheetId, e);
-            return false;
-        }
-        if (all == null) {
-            return false;
-        }
-        String hash = InkFileStore.sha256(all);
-        synchronized (lock) {
-            InkSheetStore.OpenSheet open = sheetStore.get(sheetId);
-            if (open == null) {
-                return false;
-            }
-            open.flushed = Math.max(open.flushed, flushed);
-            NotebookLogEntity row = dao.notebookLog(sheetId);
-            if (row == null || java.util.Objects.equals(row.inkHash, hash)) {
-                if (row != null) {
-                    return true;
-                }
-                row = new NotebookLogEntity();
-                row.id = sheetId;
-                row.notebookId = open.notebookId;
-                row.createdAt = clock.getAsLong();
-            }
-            row.inkHash = hash;
-            row.inkBytes = all.length;
-            row.sliceHeight = open.paper.sliceHeight;
-            row.updatedAt = Math.max(row.updatedAt, clock.getAsLong());
-            row.deletedAt = null;
-            row.conflictOf = null;
-            NotebookLogEntity stored = row;
-            db.runInTransaction(() -> {
-                dao.upsertNotebookLog(stored);
-                queueLocked(OutboxEntry.LOG, stored.id, OutboxEntry.UPSERT);
-            });
-            mirrorLog(sheetId, all);
-            localEdits.merge(sheetId, 1L, Long::sum);
-        }
-        return true;
+        sheetStore.releaseSheetFlush(sourceSheetId);
+        sheetStore.flushSheet(sourceSheetId);
     }
 
     private void mirrorLog(String sheetId, byte[] bytes) {

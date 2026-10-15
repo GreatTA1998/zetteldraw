@@ -12,3 +12,13 @@ Soft ambition via true simplification: Android main ~6k; server sync ~500–1k. 
 | v84 tip | 13 223 Java (13 511 w/ XML) | Baseline |
 | v85 + extracts | 13 544 Java | Intentional rise |
 | Delete dual wrappers (cont) | *(see commit)* | Call `InkSheetStore` / `InkLogSync` directly |
+| **v87 sheet disk I/O → store** | `RoomBoardRepository` **2437** (−226); `InkSheetStore` **711** (+239) | Rewrite/flush/hold/reload/hash live in sheet module; Move orchestration stays in repo |
+
+### Still fat (why)
+
+| File | ~lines | Why |
+| --- | ---: | --- |
+| `CanvasActivity` | ~3500 | Move/Link/chrome + open |
+| `RoomBoardRepository` | ~2437 | Move/tear + outbox + meta pull |
+| `PageInkView` | ~2065 | Pen path — leave alone |
+| `InkSheetStore` | ~711 | Open / apply / length / **disk write** |

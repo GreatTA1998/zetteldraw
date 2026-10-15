@@ -18,12 +18,14 @@ import java.util.function.LongSupplier;
 
 /**
  * Device authority for one notebook ink log: on-disk {@code .zdl} + Ready
- * {@link OpenSheet}. Open, remote apply, and length policy live here so those
- * paths can be reasoned about without walking {@link RoomBoardRepository}.
+ * {@link OpenSheet}. Open, remote apply, length policy, and sheet disk write
+ * (rewrite / flush / holdFlush / reload) live here so those paths can be
+ * reasoned about without walking {@link RoomBoardRepository}.
  *
- * <p>{@link RoomBoardRepository} still owns UI board projection, Move/tear, and
- * meta sync — it holds the shared lock and implements {@link Deps}. Temporary
- * LOC rise is fine; the win is a single SoT module for sheet length.
+ * <p>{@link RoomBoardRepository} still owns UI board projection, Move/tear
+ * orchestration, and meta sync — it holds the shared lock and implements
+ * {@link Deps}. Temporary LOC rise is fine; the win is a single SoT module
+ * for sheet length and disk I/O.
  *
  * @see InkLogApply
  * @see docs/ink-sot-rewrite.md
@@ -49,6 +51,9 @@ public final class InkSheetStore {
 
         void mirrorLog(String sheetId, byte[] bytes);
 
+        /** Bump pull-refresh skip counter after a local sheet disk write. */
+        void noteLocalSheetEdit(String sheetId);
+
         /**
          * Legacy page-file sources when no {@code .zdl} exists yet. Empty list is
          * fine (blank notebook). Null means migration must abort.
@@ -65,7 +70,7 @@ public final class InkSheetStore {
 
     /**
      * In-memory Ready (or loading) sheet. Package-visible so Move/tear in the
-     * repository can holdFlush / rewrite under the same lock.
+     * repository can call holdFlush / rewrite under the same lock.
      */
     static final class OpenSheet {
         final String sheetId;
@@ -404,6 +409,240 @@ public final class InkSheetStore {
         } catch (IOException e) {
             Log.e(TAG, "local ink log size failed " + sheetId, e);
             return 0L;
+        }
+    }
+
+    /** Disk hash of the primary {@code .zdl}, or empty when missing/unreadable. */
+    public String localInkLogHash(String sheetId) {
+        if (sheetId == null) {
+            return "";
+        }
+        try {
+            byte[] existing = deps.ink().readLog(sheetId);
+            if (existing == null || existing.length == 0) {
+                return "";
+            }
+            return InkFileStore.sha256(existing);
+        } catch (IOException e) {
+            Log.e(TAG, "local ink log hash failed " + sheetId, e);
+            return "";
+        }
+    }
+
+    /**
+     * Writer thread. Replaces the whole on-disk log (reorder rewrites the
+     * prefix). Resets {@code flushed} so a later append starts from the new end.
+     */
+    void rewriteSheet(String sheetId) {
+        rewriteSheetOrFalse(sheetId);
+    }
+
+    /** @return false when the sheet could not be written; caller must not tear the source on disk. */
+    boolean rewriteSheetOrFalse(String sheetId) {
+        if (sheetId == null) {
+            return false;
+        }
+        byte[] all;
+        int generation;
+        synchronized (deps.lock()) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null || !open.ready) {
+                return false;
+            }
+            all = open.paper.bytes();
+            generation = open.generation;
+        }
+        try {
+            deps.ink().writeLog(sheetId, all);
+        } catch (IOException e) {
+            Log.e(TAG, "ink log rewrite failed " + sheetId, e);
+            LaunchLog.mark("ink log rewrite failed " + sheetId + ": " + e.getMessage());
+            return false;
+        }
+        String hash = InkFileStore.sha256(all);
+        synchronized (deps.lock()) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null) {
+                return false;
+            }
+            // A pull/reconcile replaced paper while we held a stale snapshot —
+            // do not stamp short meta or leave the long disk overwritten without repair.
+            if (open.generation != generation) {
+                LaunchLog.mark("rewrite aborted; sheet generation advanced " + sheetId);
+                try {
+                    deps.ink().writeLog(sheetId, open.paper.bytes());
+                    open.flushed = open.paper.bytes().length;
+                } catch (IOException e) {
+                    Log.e(TAG, "rewrite repair failed " + sheetId, e);
+                    return false;
+                }
+                return true;
+            }
+            open.flushed = all.length;
+            NotebookLogEntity row = deps.dao().notebookLog(sheetId);
+            if (row == null) {
+                row = new NotebookLogEntity();
+                row.id = sheetId;
+                row.notebookId = open.notebookId;
+                row.createdAt = deps.clock().getAsLong();
+            }
+            row.inkHash = hash;
+            row.inkBytes = all.length;
+            row.sliceHeight = open.paper.sliceHeight;
+            row.updatedAt = Math.max(row.updatedAt, deps.clock().getAsLong());
+            row.deletedAt = null;
+            row.conflictOf = null;
+            NotebookLogEntity stored = row;
+            deps.db().runInTransaction(() -> {
+                deps.dao().upsertNotebookLog(stored);
+                deps.queueLogUpsert(stored.id);
+            });
+            deps.mirrorLog(sheetId, all);
+            deps.noteLocalSheetEdit(sheetId);
+        }
+        return true;
+    }
+
+    /** Writer thread. Appends the new tail of the log; it does not rewrite the prefix. */
+    void flushSheet(String sheetId) {
+        flushSheetOrFalse(sheetId);
+    }
+
+    /** Prevent {@link #flushSheet} from writing until a cross-notebook persist releases it. */
+    void holdSheetFlush(String sheetId) {
+        if (sheetId == null) {
+            return;
+        }
+        synchronized (deps.lock()) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open != null) {
+                open.holdFlush = true;
+            }
+        }
+    }
+
+    void releaseSheetFlush(String sheetId) {
+        if (sheetId == null) {
+            return;
+        }
+        synchronized (deps.lock()) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open != null) {
+                open.holdFlush = false;
+            }
+        }
+    }
+
+    /** @return false when an append was needed and failed. */
+    boolean flushSheetOrFalse(String sheetId) {
+        if (sheetId == null) {
+            return false;
+        }
+        byte[] suffix;
+        int flushed;
+        synchronized (deps.lock()) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null || !open.ready) {
+                return false;
+            }
+            if (open.holdFlush) {
+                // Cross-notebook place/move is in flight: do not append a torn
+                // source (or a rewritten dest suffix) ahead of dest-first persist.
+                return true;
+            }
+            byte[] all = open.paper.bytes();
+            if (all.length <= open.flushed) {
+                return true;
+            }
+            suffix = java.util.Arrays.copyOfRange(all, open.flushed, all.length);
+            flushed = all.length;
+        }
+        try {
+            deps.ink().appendLog(sheetId, suffix);
+        } catch (IOException e) {
+            Log.e(TAG, "ink log append failed " + sheetId, e);
+            LaunchLog.mark("ink log append failed " + sheetId + ": " + e.getMessage());
+            return false;
+        }
+        byte[] all;
+        try {
+            all = deps.ink().readLog(sheetId);
+        } catch (IOException e) {
+            Log.e(TAG, "ink log read failed " + sheetId, e);
+            return false;
+        }
+        if (all == null) {
+            return false;
+        }
+        String hash = InkFileStore.sha256(all);
+        synchronized (deps.lock()) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null) {
+                return false;
+            }
+            open.flushed = Math.max(open.flushed, flushed);
+            NotebookLogEntity row = deps.dao().notebookLog(sheetId);
+            if (row == null || java.util.Objects.equals(row.inkHash, hash)) {
+                if (row != null) {
+                    return true;
+                }
+                row = new NotebookLogEntity();
+                row.id = sheetId;
+                row.notebookId = open.notebookId;
+                row.createdAt = deps.clock().getAsLong();
+            }
+            row.inkHash = hash;
+            row.inkBytes = all.length;
+            row.sliceHeight = open.paper.sliceHeight;
+            row.updatedAt = Math.max(row.updatedAt, deps.clock().getAsLong());
+            row.deletedAt = null;
+            row.conflictOf = null;
+            NotebookLogEntity stored = row;
+            deps.db().runInTransaction(() -> {
+                deps.dao().upsertNotebookLog(stored);
+                deps.queueLogUpsert(stored.id);
+            });
+            deps.mirrorLog(sheetId, all);
+            deps.noteLocalSheetEdit(sheetId);
+        }
+        return true;
+    }
+
+    /**
+     * Replace an open sheet's in-memory paper with the on-disk log. Used when a
+     * cross-notebook dest write fails after an in-memory tear: disk still has
+     * the page on the source, so prefer that over a stuck holdFlush.
+     */
+    void reloadSheetFromDisk(String sheetId, int fallbackSliceHeight) {
+        if (sheetId == null) {
+            return;
+        }
+        byte[] existing;
+        try {
+            existing = deps.ink().readLog(sheetId);
+        } catch (IOException e) {
+            Log.e(TAG, "reload sheet failed " + sheetId, e);
+            return;
+        }
+        synchronized (deps.lock()) {
+            OpenSheet open = sheets.get(sheetId);
+            if (open == null) {
+                return;
+            }
+            try {
+                if (existing == null || existing.length == 0) {
+                    open.paper = NotebookPaper.empty(
+                            open.paper != null && open.paper.sliceHeight > 0
+                                    ? open.paper.sliceHeight
+                                    : Math.max(1, fallbackSliceHeight));
+                    open.flushed = open.paper.bytes().length;
+                } else {
+                    open.paper = NotebookPaper.replay(existing);
+                    open.flushed = existing.length;
+                }
+            } catch (IOException e) {
+                Log.e(TAG, "reload sheet replay failed " + sheetId, e);
+            }
         }
     }
 
