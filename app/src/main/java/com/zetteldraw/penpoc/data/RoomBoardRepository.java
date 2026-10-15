@@ -46,8 +46,9 @@ import java.util.function.LongSupplier;
  * mirror I/O and no network happens while it is held.
  *
  * <p>Ink-log <em>open / remote apply / length / disk write</em> live in
- * {@link InkSheetStore} (+ {@link InkLogApply}). This class keeps board
- * projection, Move/tear orchestration, and meta sync.
+ * {@link InkSheetStore} (+ {@link InkLogApply}). Notebook / link / legacy
+ * board pull LWW lives in {@link MetaPullApply}. This class keeps board
+ * projection, Move/tear orchestration, and pull orchestration.
  *
  * <p>Ink saves are write-behind. {@link #saveInk} takes an immutable snapshot
  * of the page's strokes and returns; one serialized writer thread encodes it,
@@ -109,6 +110,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * orchestration still calls into it under {@link #lock}.
      */
     private final InkSheetStore sheetStore;
+    /** Notebook / link / legacy board meta LWW during pull (exception shelf). */
+    private final MetaPullApply metaPull;
     private int knownPageHeight;
     private int knownLegacyHeight;
     private long knownShortPagesSince;
@@ -152,6 +155,28 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     + (state == null ? "none" : state.cursor));
         }
         this.sheetStore = new InkSheetStore(new SheetDeps());
+        this.metaPull = new MetaPullApply(new MetaDeps());
+    }
+
+    /** Bridge for {@link MetaPullApply} — Room/outbox/mirror/cache stay here. */
+    private final class MetaDeps implements MetaPullApply.Deps {
+        @Override public ZettelDao dao() { return RoomBoardRepository.this.dao; }
+        @Override public InkFileStore ink() { return RoomBoardRepository.this.ink; }
+        @Override public boolean pendingOutbox(String entity, String id) {
+            return pendingLocked(entity, id);
+        }
+        @Override public boolean hasPendingInk(String boardId) {
+            return pendingInk.containsKey(boardId);
+        }
+        @Override public void queueBoardUpsert(String boardId) {
+            queueLocked(OutboxEntry.BOARD, boardId, OutboxEntry.UPSERT);
+        }
+        @Override public void mirrorInk(String boardId, byte[] bytes) {
+            RoomBoardRepository.this.mirrorInk(boardId, bytes);
+        }
+        @Override public void removeCachedBoard(String boardId) {
+            cache.remove(boardId);
+        }
     }
 
     /** Bridge for {@link InkSheetStore} — keeps Room/outbox/mirror in this class. */
@@ -1316,7 +1341,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         HashMap<String, List<InkRenderer.InkStroke>> refreshed = new HashMap<>();
         HashMap<String, Long> editsSeen = new HashMap<>();
         HashMap<String, Board> boardsSeen = new HashMap<>();
-        HashMap<String, Staged> staged = new HashMap<>();
+        HashMap<String, MetaPullApply.Staged> staged = new HashMap<>();
         HashMap<String, byte[]> logBytes = new HashMap<>();
         try {
             for (NotebookLogEntity remote : page.logs) {
@@ -1353,11 +1378,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     Log.w(TAG, "undecodable ink for " + remote.id, e);
                     strokes = new ArrayList<>();
                 }
-                staged.put(remote.id, new Staged(ink.stage(remote.id, "pull", bytes), bytes, strokes));
+                staged.put(remote.id, new MetaPullApply.Staged(
+                        ink.stage(remote.id, "pull", bytes), bytes, strokes));
             }
             applyPullLocked(page, staged, logBytes, refreshed, editsSeen, boardsSeen);
         } finally {
-            for (Staged s : staged.values()) {
+            for (MetaPullApply.Staged s : staged.values()) {
                 ink.discard(s.file);
             }
         }
@@ -1467,7 +1493,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    private void applyPullLocked(PullPage page, Map<String, Staged> staged, Map<String, byte[]> logBytes,
+    private void applyPullLocked(PullPage page, Map<String, MetaPullApply.Staged> staged,
+                                 Map<String, byte[]> logBytes,
                                  Map<String, List<InkRenderer.InkStroke>> refreshed,
                                  Map<String, Long> editsSeen, Map<String, Board> boardsSeen) throws IOException {
         synchronized (lock) {
@@ -1494,16 +1521,16 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 db.runInTransaction(() -> {
                     try {
                         for (NotebookEntity remote : page.notebooks) {
-                            applyRemoteNotebookLocked(remote);
+                            metaPull.applyRemoteNotebook(remote);
                         }
                         for (BoardEntity remote : page.boards) {
-                            applyRemoteBoardLocked(remote, staged, refreshed, mirrorOps);
+                            metaPull.applyRemoteBoard(remote, staged, refreshed, mirrorOps);
                         }
                         for (NotebookLogEntity remote : page.logs) {
                             sheetStore.applyRemoteLogLocked(remote, logBytes, mirrorOps);
                         }
                         for (PageLinkEntity remote : page.links) {
-                            applyRemoteLinkLocked(remote);
+                            metaPull.applyRemoteLink(remote);
                         }
                         for (NotebookEntity remote : page.notebooks) {
                             NotebookEntity now = dao.notebook(remote.id);
@@ -1542,18 +1569,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty() || !page.links.isEmpty()) {
                 scheduleIndex();
             }
-        }
-    }
-
-    private static final class Staged {
-        final File file;
-        final byte[] bytes;
-        final List<InkRenderer.InkStroke> strokes;
-
-        Staged(File file, byte[] bytes, List<InkRenderer.InkStroke> strokes) {
-            this.file = file;
-            this.bytes = bytes;
-            this.strokes = strokes;
         }
     }
 
@@ -2034,96 +2049,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     private boolean pendingLocked(String entity, String id) {
         return dao.outbox(entity, id) != null;
-    }
-
-    private void applyRemoteNotebookLocked(NotebookEntity remote) {
-        NotebookEntity local = dao.notebook(remote.id);
-        if (local != null) {
-            if (remote.rev <= local.rev) {
-                return;
-            }
-            if (pendingLocked(OutboxEntry.NOTEBOOK, remote.id)
-                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
-                return;
-            }
-        }
-        dao.upsertNotebook(remote);
-        dao.deleteOutbox(OutboxEntry.NOTEBOOK, remote.id);
-    }
-
-    private void applyRemoteLinkLocked(PageLinkEntity remote) {
-        PageLinkEntity local = dao.pageLink(remote.id);
-        if (local != null) {
-            if (remote.rev <= local.rev) {
-                return;
-            }
-            if (pendingLocked(OutboxEntry.LINK, remote.id)
-                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
-                return;
-            }
-        }
-        dao.upsertPageLink(remote);
-        dao.deleteOutbox(OutboxEntry.LINK, remote.id);
-    }
-
-    private void applyRemoteBoardLocked(BoardEntity remote, Map<String, Staged> staged,
-                                        Map<String, List<InkRenderer.InkStroke>> refreshed,
-                                        List<Runnable> mirrorOps) throws IOException {
-        BoardEntity local = dao.board(remote.id);
-        if (local != null) {
-            if (remote.rev <= local.rev) {
-                return;
-            }
-            if (pendingInk.containsKey(remote.id)) {
-                // Drawn on this device and not yet written: that edit is the newest and pushes after.
-                return;
-            }
-            if (pendingLocked(OutboxEntry.BOARD, remote.id)) {
-                if (!Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
-                    // Local edit is newer; it stays queued with its old base rev and the
-                    // server keeps its current row as a conflict copy on the next push.
-                    return;
-                }
-                if (Lww.needsConflictCopy(local, remote)) {
-                    conflictCopyLocked(local, mirrorOps);
-                }
-            }
-        }
-        if (remote.deletedAt != null || remote.inkHash == null) {
-            ink.delete(remote.id);
-            String id = remote.id;
-            mirrorOps.add(() -> mirrorInk(id, null));
-            refreshed.put(remote.id, new ArrayList<>());
-        } else if (local == null || !remote.inkHash.equals(local.inkHash)) {
-            Staged blob = staged.remove(remote.id);
-            if (blob == null) {
-                throw new IOException("bad ink blob for " + remote.id);
-            }
-            ink.commit(blob.file, remote.id);
-            String id = remote.id;
-            mirrorOps.add(() -> mirrorInk(id, blob.bytes));
-            refreshed.put(remote.id, blob.strokes);
-        }
-        dao.upsertBoard(remote);
-        dao.deleteOutbox(OutboxEntry.BOARD, remote.id);
-        if (remote.deletedAt != null) {
-            cache.remove(remote.id);
-        }
-    }
-
-    private void conflictCopyLocked(BoardEntity loser, List<Runnable> mirrorOps) throws IOException {
-        BoardEntity copy = loser.copy();
-        copy.id = UUID.randomUUID().toString();
-        copy.conflictOf = loser.id;
-        copy.rev = 0;
-        byte[] bytes = ink.read(loser.id);
-        if (bytes != null) {
-            ink.write(copy.id, bytes);
-            String id = copy.id;
-            mirrorOps.add(() -> mirrorInk(id, bytes));
-        }
-        dao.upsertBoard(copy);
-        queueLocked(OutboxEntry.BOARD, copy.id, OutboxEntry.UPSERT);
     }
 
     private void writeInkLocked(String boardId, byte[] bytes) throws IOException {
