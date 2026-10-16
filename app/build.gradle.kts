@@ -44,10 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Play rejected versionCode 92 for targetSdk 35; keep tip APK at last released
-        // tag until a tip ship is intentional. This bump is for Play AAB readiness.
-        versionCode = 93
-        versionName = "3.72"
+        // Tip v94 ships hourly debt h3–h7 + Play targetSdk36/icon past tip v91 / Play v93.
+        versionCode = 94
+        versionName = "3.73"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
