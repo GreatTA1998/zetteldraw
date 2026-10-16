@@ -36,6 +36,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
@@ -172,6 +173,12 @@ public final class CanvasActivity extends Activity {
     private List<Board> currentPages;
     /** A loaded list waiting for the drawing area to have a size. */
     private Loaded awaitingLayout;
+    /**
+     * Target 36 is always edge-to-edge. Page height must wait until the first
+     * inset pass, or a sheet can be migrated at the full-display height.
+     * Below API 35 the window already excludes the system bars.
+     */
+    private boolean edgeToEdgeInsetsApplied = Build.VERSION.SDK_INT < 35;
     private Integer pendingKeepScroll;
     private List<BoardRepository.NotebookInfo> shownNotebooks;
     /** Selected notebook and its ancestors, root first. Empty on the Scratchpad. */
@@ -352,18 +359,14 @@ public final class CanvasActivity extends Activity {
 
         drawingArea.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> onDrawingAreaLaidOut());
 
-        // API 35 enforces edge-to-edge. The theme opts out so the fullscreen window stays
-        // the pre-35 size. If that opt-out is ignored, pad the root by the system bars so
-        // the notebook chrome is not covered and page height still matches the visible area.
-        if (Build.VERSION.SDK_INT >= 35) {
-            root.setOnApplyWindowInsetsListener((v, insets) -> {
-                Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-                return WindowInsets.CONSUMED;
-            });
-        }
+        // Target 36 ignores the edge-to-edge opt-out. Pad the root so the notebook
+        // chrome sits in the visible area and page height matches that area.
+        installEdgeToEdgePadding();
 
         setContentView(root);
+        if (Build.VERSION.SDK_INT >= 35) {
+            root.requestApplyInsets();
+        }
         repository.addRemoteChangeListener(remoteChanged);
         tools.bind(penButton, eraserButton, lassoButton, toolbar);
         tools.setTool(PageInkView.Tool.PEN);
@@ -375,12 +378,55 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
+     * Android 16 draws the activity behind the system bars. Keep the notebook
+     * in the visible box by padding the root, and leave IME insets alone so
+     * {@code adjustPan} can move a focused field without changing page height.
+     * Dark system-bar icons sit on the white window background.
+     */
+    private void installEdgeToEdgePadding() {
+        if (Build.VERSION.SDK_INT < 35) {
+            return;
+        }
+        WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller != null) {
+            controller.setSystemBarsAppearance(
+                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                            | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                            | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+        }
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            Insets bars = insets.getInsets(
+                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            boolean first = !edgeToEdgeInsetsApplied;
+            edgeToEdgeInsetsApplied = true;
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            if (first) {
+                // Zero insets do not request layout. Still measure page height
+                // against this pass so a sheet is not written before it.
+                v.post(this::onDrawingAreaLaidOut);
+            }
+            return new WindowInsets.Builder(insets)
+                    .setInsets(WindowInsets.Type.systemBars(), Insets.NONE)
+                    .setInsets(WindowInsets.Type.displayCutout(), Insets.NONE)
+                    .build();
+        });
+    }
+
+    /**
      * Page height follows the drawing area: recomputed on every size change,
      * not fixed by the first layout. Sizes too small to hold a page are ignored.
+     * On API 35+ the first layout can precede insets; that pass is ignored so
+     * a new sheet is not written at the full-display height.
      */
     private void onDrawingAreaLaidOut() {
+        if (!edgeToEdgeInsetsApplied) {
+            return;
+        }
         int area = drawingArea.getHeight();
-        int window = root.getHeight();
+        // Padding is the system bars. The visible window is the content box,
+        // which is what pre-edge-to-edge page height was measured against.
+        int window = root.getHeight() - root.getPaddingTop() - root.getPaddingBottom();
         if (area <= pageGap * 2 || window <= 0) {
             return;
         }
@@ -1547,21 +1593,23 @@ public final class CanvasActivity extends Activity {
         if (box == null) {
             return;
         }
-        int rootW = root.getWidth();
-        int rootH = root.getHeight();
-        if (rootW <= 0 || rootH <= 0) {
+        // FrameLayout margins are inside padding. Use the content box, or a
+        // non-zero system-bar pad shifts the pill by that inset a second time.
+        int contentW = root.getWidth() - root.getPaddingLeft() - root.getPaddingRight();
+        int contentH = root.getHeight() - root.getPaddingTop() - root.getPaddingBottom();
+        if (contentW <= 0 || contentH <= 0) {
             return;
         }
         int[] inkLoc = new int[2];
         int[] rootLoc = new int[2];
         inkView.getLocationOnScreen(inkLoc);
         root.getLocationOnScreen(rootLoc);
-        int originX = inkLoc[0] - rootLoc[0];
-        int originY = inkLoc[1] - rootLoc[1];
+        int originX = inkLoc[0] - rootLoc[0] - root.getPaddingLeft();
+        int originY = inkLoc[1] - rootLoc[1] - root.getPaddingTop();
 
         lassoMenu.measure(
-                View.MeasureSpec.makeMeasureSpec(rootW, View.MeasureSpec.AT_MOST),
-                View.MeasureSpec.makeMeasureSpec(rootH, View.MeasureSpec.AT_MOST));
+                View.MeasureSpec.makeMeasureSpec(contentW, View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(contentH, View.MeasureSpec.AT_MOST));
         int w = Math.max(lassoMenu.getMeasuredWidth(), lassoMenu.getWidth());
         int h = Math.max(lassoMenu.getMeasuredHeight(), lassoMenu.getHeight());
         if (w <= 0 || h <= 0) {
@@ -1576,7 +1624,7 @@ public final class CanvasActivity extends Activity {
         if (top < minTop) {
             top = originY + Math.round(box.bottom + gap);
         }
-        left = Math.max(dp(4), Math.min(left, rootW - w - dp(4)));
+        left = Math.max(dp(4), Math.min(left, contentW - w - dp(4)));
         // Clamp to the ink band so the pill never parks as a fake bottom snackbar
         // under the drawing area (the v50 failure mode when Y was out of range).
         int maxTop = originY + Math.max(dp(4), drawingArea.getHeight() - h - dp(4));
@@ -2925,20 +2973,23 @@ public final class CanvasActivity extends Activity {
 
     /** Places {@code content} (in {@link #root}) hanging from the top bar, left-aligned with {@code anchor}. */
     private FrameLayout.LayoutParams anchoredLp(View anchor, View content) {
+        int contentW = root.getWidth() - root.getPaddingLeft() - root.getPaddingRight();
+        int contentH = root.getHeight() - root.getPaddingTop() - root.getPaddingBottom();
         content.measure(
-                View.MeasureSpec.makeMeasureSpec(root.getWidth() - dp(16), View.MeasureSpec.AT_MOST),
-                View.MeasureSpec.makeMeasureSpec(root.getHeight(), View.MeasureSpec.AT_MOST));
+                View.MeasureSpec.makeMeasureSpec(Math.max(0, contentW - dp(16)), View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(Math.max(0, contentH), View.MeasureSpec.AT_MOST));
         int[] rootAt = new int[2];
         int[] anchorAt = new int[2];
         root.getLocationInWindow(rootAt);
         anchor.getLocationInWindow(anchorAt);
-        int left = anchorAt[0] - rootAt[0];
-        left = Math.max(dp(8), Math.min(left, root.getWidth() - content.getMeasuredWidth() - dp(8)));
+        // Same content-box coordinates as {@link #positionLassoMenu}.
+        int left = anchorAt[0] - rootAt[0] - root.getPaddingLeft();
+        left = Math.max(dp(8), Math.min(left, contentW - content.getMeasuredWidth() - dp(8)));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         lp.gravity = Gravity.TOP | Gravity.START;
         lp.leftMargin = left;
-        lp.topMargin = anchorAt[1] - rootAt[1] + anchor.getHeight() - dp(4);
+        lp.topMargin = anchorAt[1] - rootAt[1] - root.getPaddingTop() + anchor.getHeight() - dp(4);
         return lp;
     }
 
@@ -2957,7 +3008,7 @@ public final class CanvasActivity extends Activity {
             int[] areaLoc = new int[2];
             root.getLocationOnScreen(rootLoc);
             drawingArea.getLocationOnScreen(areaLoc);
-            int inset = Math.max(0, areaLoc[1] - rootLoc[1]);
+            int inset = Math.max(0, areaLoc[1] - rootLoc[1] - root.getPaddingTop());
             scrimLp.topMargin = inset;
             // Content was measured in full-root coordinates; shift into the inset scrim.
             contentLp.topMargin = Math.max(0, contentLp.topMargin - inset);

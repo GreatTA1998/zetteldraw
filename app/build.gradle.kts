@@ -38,14 +38,15 @@ if (uploadSigningValues.count { it != null } in 1..3) {
 
 android {
     namespace = "com.zetteldraw.penpoc"
-    compileSdk = 35
+    compileSdk = 36
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 92
-        versionName = "3.71"
+        targetSdk = 36
+        versionCode = 93
+        versionName = "3.72"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

@@ -26,16 +26,25 @@
             android:screenOrientation="sensorPortrait"
             android:windowSoftInputMode="adjustPan"
             android:theme="@style/Theme.PenPoc">
+            <!--
+                API 36 ignores sensorPortrait on sw>=600dp. Page height is the
+                portrait drawing area; a rotation would resize every sheet.
+                This opt-out keeps the lock on Boox tablets. It ends at target 37.
+            -->
+            <property
+                android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
+                android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
         <!--
-            WorkManager 2.9.1 declares this service with no type. Target 35 rejects a
-            foreground start that has none. Sync uses a normal Worker (not expedited,
-            and it never calls setForeground); shortService only makes the library
-            service legal if WorkManager starts it.
+            WorkManager 2.9.1 declares this service with no type. A foreground start
+            with no type is rejected from target 34 on. Sync uses a normal Worker
+            (not expedited, and it never calls setForeground), so Android 16's
+            quota for jobs that run beside a foreground service does not apply.
+            shortService only makes the library service legal if WorkManager starts it.
         -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
