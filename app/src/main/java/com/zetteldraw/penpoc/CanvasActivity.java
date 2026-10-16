@@ -1581,23 +1581,27 @@ public final class CanvasActivity extends Activity {
     }
 
     private void startLinking(PageSlot slot) {
-        if (slot.page.isBlank()) {
-            return;
-        }
-        clearModeSources();
-        linkSourceId = slot.page.id;
-        linkSourceRef = refOnScreen(slot);
-        beginModeChrome();
+        startMode(slot, false);
     }
 
     private void startReorder(PageSlot slot) {
+        startMode(slot, true);
+    }
+
+    /** Link or Reorder: one clear + source capture + chrome. */
+    private void startMode(PageSlot slot, boolean reorder) {
         if (slot.page.isBlank()) {
             return;
         }
         clearModeSources();
-        reorderSourceId = slot.page.id;
-        reorderSourceRef = refOnScreen(slot);
-        reorderSourceNotebookId = notebookKey(collectionId);
+        if (reorder) {
+            reorderSourceId = slot.page.id;
+            reorderSourceRef = refOnScreen(slot);
+            reorderSourceNotebookId = notebookKey(collectionId);
+        } else {
+            linkSourceId = slot.page.id;
+            linkSourceRef = refOnScreen(slot);
+        }
         beginModeChrome();
     }
 
@@ -1727,37 +1731,12 @@ public final class CanvasActivity extends Activity {
         return -1;
     }
 
-    /** True when source already sits immediately before {@code target} in this list. */
-    private boolean isAlreadyBeforeTarget(PageSlot target) {
-        int targetIndex = slots.indexOf(target);
-        return targetIndex > 0 && reorderSourceIndex() == targetIndex - 1;
-    }
-
-    /** True when source is the last inked page of the open list (already at the end). */
-    private boolean isSourceLastInked() {
-        int sourceIndex = reorderSourceIndex();
-        if (sourceIndex < 0) {
-            return false;
-        }
-        int lastInked = -1;
-        for (int i = 0; i < slots.size(); i++) {
-            if (!slots.get(i).page.isBlank()) {
-                lastInked = i;
-            }
-        }
-        return sourceIndex == lastInked;
-    }
-
     /**
      * The page at the top of the viewport. Scroll offset divided by the page
      * height: the slots above it are not visited. Used by Link.
      */
     private PageSlot frontSlot() {
-        int index = indexAt(scroller.getScrollY());
-        if (index < 0) {
-            return null;
-        }
-        return slots.get(index);
+        return slotAtContentY(scroller.getScrollY());
     }
 
     /**
@@ -1769,12 +1748,13 @@ public final class CanvasActivity extends Activity {
         if (viewport <= 0 && drawingArea != null) {
             viewport = drawingArea.getHeight();
         }
-        int mid = scroller.getScrollY() + Math.max(viewport, 1) / 2;
-        int index = indexAt(mid);
-        if (index < 0) {
-            return null;
-        }
-        return slots.get(index);
+        return slotAtContentY(scroller.getScrollY() + Math.max(viewport, 1) / 2);
+    }
+
+    /** Slot owning content offset {@code y}, or null when the list is empty. */
+    private PageSlot slotAtContentY(int y) {
+        int index = indexAt(y);
+        return index < 0 ? null : slots.get(index);
     }
 
     /** Slot that contains content offset {@code y}, from the tops recorded when the list was shown. */
@@ -1835,13 +1815,32 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    /** Same gate for mode-bar Confirm and {@link #confirmReorder}. */
+    /**
+     * Same gate for mode-bar Confirm and {@link #confirmReorder}: loading, no
+     * target, self, or same-notebook noop (already before / already last inked).
+     */
     private boolean reorderConfirmBlocked(PageSlot target) {
-        return loading()
-                || target == null
-                || target.page.id.equals(reorderSourceId)
-                || (!target.page.isBlank() && sameNotebookForReorder(target) && isAlreadyBeforeTarget(target))
-                || (target.page.isBlank() && sameNotebookForReorder(target) && isSourceLastInked());
+        if (loading() || target == null || target.page.id.equals(reorderSourceId)) {
+            return true;
+        }
+        if (!sameNotebookForReorder(target)) {
+            return false;
+        }
+        int sourceIndex = reorderSourceIndex();
+        if (sourceIndex < 0) {
+            return false;
+        }
+        if (!target.page.isBlank()) {
+            int targetIndex = slots.indexOf(target);
+            return targetIndex > 0 && sourceIndex == targetIndex - 1;
+        }
+        int lastInked = -1;
+        for (int i = 0; i < slots.size(); i++) {
+            if (!slots.get(i).page.isBlank()) {
+                lastInked = i;
+            }
+        }
+        return sourceIndex == lastInked;
     }
 
     /**
@@ -2401,12 +2400,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private void confirmDelete(String id, View anchor) {
-        int pages = 0;
-        for (Board page : repository.pages(id)) {
-            if (!page.isBlank()) {
-                pages++;
-            }
-        }
+        int pages = inked(repository.pages(id));
         LinearLayout box = panel();
         box.addView(panelText(getString(R.string.delete_notebook_title, titleOf(id)), 15));
         box.addView(panelText(pages == 0

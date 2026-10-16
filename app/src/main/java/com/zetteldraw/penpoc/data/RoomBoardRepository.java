@@ -621,8 +621,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         + " sourceStillHas=" + (moving.paper.indexOfSliceId(boardId) >= 0));
                 if (!sameNotebook) {
                     // Memory may be torn; hold flushes and reload from disk.
-                    sheetStore.holdSheetFlush(sourceSheetId);
-                    sheetStore.holdSheetFlush(destSheetId);
+                    sheetStore.setPairFlushHeld(sourceSheetId, destSheetId, true);
                     writer.execute(() -> reloadPairFromDiskAndRelease(sourceSheetId, destSheetId));
                 }
                 return false;
@@ -633,8 +632,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 syncAllSliceIndices(moving.paper);
             }
             // One persist spine: hold → dest-first rewrite → release → (cross) flush.
-            sheetStore.holdSheetFlush(sourceSheetId);
-            sheetStore.holdSheetFlush(destSheetId);
+            sheetStore.setPairFlushHeld(sourceSheetId, destSheetId, true);
             final String movedId = boardId;
             final String destNb = destNotebookId;
             final String sourceNb = notebookIdOfSheet(sourceSheetId);
@@ -722,8 +720,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             reloadPairFromDiskAndRelease(sourceSheetId, destSheetId);
             return;
         }
-        sheetStore.releaseSheetFlush(destSheetId);
-        sheetStore.releaseSheetFlush(sourceSheetId);
+        sheetStore.setPairFlushHeld(sourceSheetId, destSheetId, false);
         if (!Objects.equals(sourceSheetId, destSheetId)) {
             sheetStore.flushSheet(sourceSheetId);
         }
@@ -733,8 +730,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private void reloadPairFromDiskAndRelease(String sourceSheetId, String destSheetId) {
         sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
         sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
-        sheetStore.releaseSheetFlush(destSheetId);
-        sheetStore.releaseSheetFlush(sourceSheetId);
+        sheetStore.setPairFlushHeld(sourceSheetId, destSheetId, false);
     }
 
     /** Notebook id for a sheet id ({@code null} = Scratchpad). */

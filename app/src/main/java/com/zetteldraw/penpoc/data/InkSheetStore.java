@@ -501,29 +501,26 @@ public final class InkSheetStore {
         flushSheetOrFalse(sheetId);
     }
 
-    /** Prevent {@link #flushSheet} from writing until a cross-notebook persist releases it. */
-    void holdSheetFlush(String sheetId) {
+    /**
+     * Hold or release flush for one sheet. Place/Move holds both sheets until
+     * dest-first persist finishes (or reloads from disk on failure).
+     */
+    void setSheetFlushHeld(String sheetId, boolean held) {
         if (sheetId == null) {
             return;
         }
         synchronized (deps.lock()) {
             OpenSheet open = sheets.get(sheetId);
             if (open != null) {
-                open.holdFlush = true;
+                open.holdFlush = held;
             }
         }
     }
 
-    void releaseSheetFlush(String sheetId) {
-        if (sheetId == null) {
-            return;
-        }
-        synchronized (deps.lock()) {
-            OpenSheet open = sheets.get(sheetId);
-            if (open != null) {
-                open.holdFlush = false;
-            }
-        }
+    /** Same hold bit for source + dest (place/Move pair). */
+    void setPairFlushHeld(String sourceSheetId, String destSheetId, boolean held) {
+        setSheetFlushHeld(sourceSheetId, held);
+        setSheetFlushHeld(destSheetId, held);
     }
 
     /** @return false when an append was needed and failed. */

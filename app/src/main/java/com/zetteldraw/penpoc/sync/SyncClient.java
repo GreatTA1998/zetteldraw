@@ -104,28 +104,7 @@ public final class SyncClient {
             }
             int code = conn.getResponseCode();
             String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
-            if (code == 401 || code == 403) {
-                String err = "";
-                String message = "";
-                try {
-                    JSONObject errBody = new JSONObject(text);
-                    err = errBody.optString("error", "");
-                    message = errBody.optString("message", "");
-                } catch (JSONException ignored) {
-                }
-                if ("not_live_writer".equals(err)) {
-                    throw new NotLiveWriter(message);
-                }
-                throw new Unauthorized();
-            }
-            if (code == 409) {
-                int server = -1;
-                try {
-                    server = new JSONObject(text).optInt("server_schema", -1);
-                } catch (JSONException ignored) {
-                }
-                throw new SchemaMismatch(server);
-            }
+            throwIfAuthOrSchema(code, text);
             if (code == 404) {
                 // Prod briefly lacked these routes when v69 shipped ahead of Render deploy.
                 throw new IOException("Sync server updating — retry Prepare transfer in a minute.");
@@ -204,14 +183,7 @@ public final class SyncClient {
 
     /** Claim (or refresh) live-writer status before pushing. */
     JSONObject claimWriter(String deviceId, String deviceLabel) throws IOException {
-        try {
-            JSONObject body = new JSONObject()
-                    .put("device_id", deviceId)
-                    .put("device_label", deviceLabel == null ? "" : deviceLabel);
-            return request("POST", "/sync/claim-writer", body.toString().getBytes(StandardCharsets.UTF_8));
-        } catch (JSONException e) {
-            throw new IOException("claim-writer body", e);
-        }
+        return postDevice("/sync/claim-writer", deviceId, deviceLabel);
     }
 
     /**
@@ -219,13 +191,18 @@ public final class SyncClient {
      * Server also requires cloud backup-status ready.
      */
     JSONObject prepareTransfer(String deviceId, String deviceLabel) throws IOException {
+        return postDevice("/sync/prepare-transfer", deviceId, deviceLabel);
+    }
+
+    /** POST JSON with device_id + device_label (claim-writer / prepare-transfer). */
+    private JSONObject postDevice(String path, String deviceId, String deviceLabel) throws IOException {
         try {
             JSONObject body = new JSONObject()
                     .put("device_id", deviceId)
                     .put("device_label", deviceLabel == null ? "" : deviceLabel);
-            return request("POST", "/sync/prepare-transfer", body.toString().getBytes(StandardCharsets.UTF_8));
+            return request("POST", path, body.toString().getBytes(StandardCharsets.UTF_8));
         } catch (JSONException e) {
-            throw new IOException("prepare-transfer body", e);
+            throw new IOException(path + " body", e);
         }
     }
 
@@ -262,28 +239,7 @@ public final class SyncClient {
             }
             int code = conn.getResponseCode();
             String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
-            if (code == 401 || code == 403) {
-                String err = "";
-                String message = "";
-                try {
-                    JSONObject errBody = new JSONObject(text);
-                    err = errBody.optString("error", "");
-                    message = errBody.optString("message", "");
-                } catch (JSONException ignored) {
-                }
-                if ("not_live_writer".equals(err)) {
-                    throw new NotLiveWriter(message);
-                }
-                throw new Unauthorized();
-            }
-            if (code == 409) {
-                int server = -1;
-                try {
-                    server = new JSONObject(text).optInt("server_schema", -1);
-                } catch (JSONException ignored) {
-                }
-                throw new SchemaMismatch(server);
-            }
+            throwIfAuthOrSchema(code, text);
             if (code < 200 || code >= 300) {
                 String message = "";
                 try {
@@ -302,6 +258,32 @@ public final class SyncClient {
             }
         } finally {
             conn.disconnect();
+        }
+    }
+
+    /** Shared 401/403/409 spine for JSON request and raw putBlob. */
+    private static void throwIfAuthOrSchema(int code, String text) throws IOException {
+        if (code == 401 || code == 403) {
+            String err = "";
+            String message = "";
+            try {
+                JSONObject errBody = new JSONObject(text);
+                err = errBody.optString("error", "");
+                message = errBody.optString("message", "");
+            } catch (JSONException ignored) {
+            }
+            if ("not_live_writer".equals(err)) {
+                throw new NotLiveWriter(message);
+            }
+            throw new Unauthorized();
+        }
+        if (code == 409) {
+            int server = -1;
+            try {
+                server = new JSONObject(text).optInt("server_schema", -1);
+            } catch (JSONException ignored) {
+            }
+            throw new SchemaMismatch(server);
         }
     }
 
