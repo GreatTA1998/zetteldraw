@@ -19,14 +19,7 @@ public final class CollectionOpen {
     }
 
     /** Ready pages + scroll target for paint. */
-    public static final class Bind {
-        public final List<Board> pages;
-        public final int scrollY;
-
-        public Bind(List<Board> pages, int scrollY) {
-            this.pages = pages;
-            this.scrollY = scrollY;
-        }
+    public record Bind(List<Board> pages, int scrollY) {
     }
 
     /**

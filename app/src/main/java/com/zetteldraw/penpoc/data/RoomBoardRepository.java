@@ -804,14 +804,37 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void wipePage(String boardId) {
+        mutateLegacyOrPaperPage(boardId, false);
+    }
+
+    @Override
+    public void deletePage(String boardId) {
+        mutateLegacyOrPaperPage(boardId, true);
+    }
+
+    /**
+     * One wipe/delete spine: paper slice by id (Move-safe), else legacy board row.
+     * Paper-backed non-slices (trailing blank) are no-ops.
+     */
+    private void mutateLegacyOrPaperPage(String boardId, boolean delete) {
         synchronized (lock) {
+            if (paperSliceActionLocked(boardId, delete)) {
+                return;
+            }
             Board board = cache.get(boardId);
             if (board != null && board.paper != null) {
-                if (board.sliceIndex >= 0 && board.sliceIndex < board.paper.sliceCount()) {
-                    board.paper.tearWipe(board.sliceIndex);
-                    String sheetId = board.sheetId;
-                    writer.execute(() -> sheetStore.flushSheetOrFalse(sheetId));
+                return;
+            }
+            if (delete) {
+                BoardEntity row = dao.board(boardId);
+                if (row == null || row.deletedAt != null || row.conflictOf != null
+                        || isTrailingBlankLocked(row)) {
+                    return;
                 }
+                tombstoneLocked(row);
+                tombstoneLinksTouchingLocked(row.id);
+                trimTrailingBlanksLocked(row.notebookId);
+                ensureTrailingBlankLocked(row.notebookId);
                 return;
             }
             BoardEntity row = dao.board(boardId);
@@ -823,28 +846,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             board.strokes.clear();
             saveInk(board);
-            trimTrailingBlanksLocked(row.notebookId);
-            ensureTrailingBlankLocked(row.notebookId);
-        }
-    }
-
-    @Override
-    public void deletePage(String boardId) {
-        synchronized (lock) {
-            if (deletePaperSliceLocked(boardId)) {
-                return;
-            }
-            Board board = cache.get(boardId);
-            if (board != null && board.paper != null) {
-                // The trailing blank is not a slice yet, and it cannot be deleted.
-                return;
-            }
-            BoardEntity row = dao.board(boardId);
-            if (row == null || row.deletedAt != null || row.conflictOf != null || isTrailingBlankLocked(row)) {
-                return;
-            }
-            tombstoneLocked(row);
-            tombstoneLinksTouchingLocked(row.id);
             trimTrailingBlanksLocked(row.notebookId);
             ensureTrailingBlankLocked(row.notebookId);
         }
@@ -1268,7 +1269,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             applyPullLocked(page, staged, stagedLogs, refreshed, editsSeen, boardsSeen);
         } finally {
             for (MetaPullApply.Staged s : staged.values()) {
-                ink.discard(s.file);
+                ink.discard(s.file());
             }
         }
         if (!page.isEmpty()) {
@@ -1340,9 +1341,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         int swapped = 0;
         for (Refresh r : batch) {
             // A page drawn on since the pull decided keeps the local strokes; that save wins on push.
-            if (Objects.equals(localEdits.get(r.board.id), r.editsSeen)) {
-                r.board.strokes.clear();
-                r.board.strokes.addAll(r.strokes);
+            if (Objects.equals(localEdits.get(r.board().id), r.editsSeen())) {
+                r.board().strokes.clear();
+                r.board().strokes.addAll(r.strokes());
                 swapped++;
             }
         }
@@ -1365,16 +1366,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         remoteListeners.remove(listener);
     }
 
-    private static final class Refresh {
-        final Board board;
-        final List<InkRenderer.InkStroke> strokes;
-        final Long editsSeen;
-
-        Refresh(Board board, List<InkRenderer.InkStroke> strokes, Long editsSeen) {
-            this.board = board;
-            this.strokes = strokes;
-            this.editsSeen = editsSeen;
-        }
+    private record Refresh(Board board, List<InkRenderer.InkStroke> strokes, Long editsSeen) {
     }
 
     private void applyPullLocked(PullPage page, Map<String, MetaPullApply.Staged> staged,
@@ -1830,8 +1822,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         scheduleIndex();
     }
 
-    /** Finds the slice by id on an open sheet, so a stale cache cannot delete the wrong page. */
-    private boolean deletePaperSliceLocked(String boardId) {
+    /** Paper wipe/delete by page id on a Ready sheet — never trusts cached sliceIndex. */
+    private boolean paperSliceActionLocked(String boardId, boolean delete) {
         if (boardId == null) {
             return false;
         }
@@ -1840,17 +1832,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (!sheet.ready || sheet.paper == null) {
                 continue;
             }
-            NotebookPaper paper = sheet.paper;
-            for (int i = 0; i < paper.sliceCount(); i++) {
-                if (!boardId.equals(paper.sliceId(i))) {
-                    continue;
-                }
-                paper.tearDelete(i);
-                tombstoneLinksTouchingLocked(boardId);
-                String sheetId = entry.getKey();
-                writer.execute(() -> sheetStore.flushSheetOrFalse(sheetId));
-                return true;
+            int index = sheet.paper.indexOfSliceId(boardId);
+            if (index < 0) {
+                continue;
             }
+            if (delete) {
+                sheet.paper.tearDelete(index);
+                tombstoneLinksTouchingLocked(boardId);
+            } else {
+                sheet.paper.tearWipe(index);
+            }
+            String sheetId = entry.getKey();
+            writer.execute(() -> sheetStore.flushSheetOrFalse(sheetId));
+            return true;
         }
         return false;
     }

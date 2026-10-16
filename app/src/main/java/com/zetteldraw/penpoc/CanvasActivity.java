@@ -368,7 +368,7 @@ public final class CanvasActivity extends Activity {
         tools.bind(penButton, eraserButton, lassoButton, toolbar);
         tools.setTool(PageInkView.Tool.PEN);
         syncHistory();
-        syncNav();
+        styleTabs();
         inkView.setLive(true);
         // Unconditionally, before any layout: the list is shown as soon as the drawing area has a size.
         openCollection(collectionId, null);
@@ -401,7 +401,7 @@ public final class CanvasActivity extends Activity {
                 awaitingLayout = null;
                 pageReflows.incrementAndGet();
                 // Same open intent (jump / restore / first-open); do not substitute scroller Y.
-                startLoad(loaded.id, loaded.keepScroll, false);
+                startLoad(loaded.id(), loaded.keepScroll(), false);
             } else if (!first && currentPages != null && !loading()) {
                 pageReflows.incrementAndGet();
                 // Hold place across a size change; pending target wins over ScrollView lag.
@@ -445,7 +445,7 @@ public final class CanvasActivity extends Activity {
             return true;
         });
         bar.addView(scratchpadTab, iconLp(0));
-        bar.addView(barDivider(), barDividerLp());
+        bar.addView(rule(), barDividerLp());
 
         notebookScroll = new HorizontalScrollView(this);
         notebookScroll.setHorizontalScrollBarEnabled(false);
@@ -463,10 +463,6 @@ public final class CanvasActivity extends Activity {
         onTap(addButton, v -> showNameForm(null, addButton, null, null));
         rebuildNotebookTabs(null);
         return bar;
-    }
-
-    private View barDivider() {
-        return rule();
     }
 
     private LinearLayout.LayoutParams barDividerLp() {
@@ -864,7 +860,7 @@ public final class CanvasActivity extends Activity {
         rememberOpenScroll();
         pagesLoaded = true;
         collectionId = id;
-        syncNav();
+        styleTabs();
         // Snappy path: Ready sheet → same showReady spine as async load.
         String notebook = notebookKey(id);
         if (pageHeight > 0 && repository.isSheetReady(notebook)) {
@@ -1086,29 +1082,29 @@ public final class CanvasActivity extends Activity {
     }
 
     private void onPagesLoaded(Loaded loaded) {
-        if (loaded.generation != loadGeneration || shownGeneration == loaded.generation || isDestroyed()) {
+        if (loaded.generation() != loadGeneration || shownGeneration == loaded.generation() || isDestroyed()) {
             return;
         }
-        rebuildNotebookTabs(loaded.notebooks);
-        if (!SCRATCHPAD.equals(loaded.id) && notebookById(loaded.id) == null) {
+        rebuildNotebookTabs(loaded.notebooks());
+        if (!SCRATCHPAD.equals(loaded.id()) && notebookById(loaded.id()) == null) {
             // The notebook went away (deleted elsewhere).
-            reopenAfterNotebookGone(loaded.notebooks);
+            reopenAfterNotebookGone(loaded.notebooks());
             return;
         }
         // Not Ready (height unknown or ensure pending): wait / retry — never show.
-        if (!loaded.ready || pageHeight == 0) {
+        if (!loaded.ready() || pageHeight == 0) {
             awaitingLayout = loaded;
             return;
         }
-        if (loaded.pages.isEmpty()) {
+        if (loaded.pages().isEmpty()) {
             return;
         }
         // Same Ready paint spine as snappy open / reload / delete.
-        showReady(loaded.id, loaded.pages, loaded.keepScroll);
+        showReady(loaded.id(), loaded.pages(), loaded.keepScroll());
         if (!firstListShown) {
             firstListShown = true;
-            LaunchLog.mark("first page list on screen: " + label(loaded.id) + ", " + loaded.pages.size()
-                    + " pages (" + inked(loaded.pages) + " inked), " + loaded.notebooks.size() + " notebook tabs");
+            LaunchLog.mark("first page list on screen: " + label(loaded.id()) + ", " + loaded.pages().size()
+                    + " pages (" + inked(loaded.pages()) + " inked), " + loaded.notebooks().size() + " notebook tabs");
         }
     }
 
@@ -1122,8 +1118,8 @@ public final class CanvasActivity extends Activity {
         if (bind == null) {
             return;
         }
-        showPages(bind.pages, bind.scrollY);
-        syncNav();
+        showPages(bind.pages(), bind.scrollY());
+        styleTabs();
     }
 
     private static BoardRepository.NotebookInfo notebookByIdIn(
@@ -1140,23 +1136,13 @@ public final class CanvasActivity extends Activity {
     }
 
     /** One finished background load. {@code ready} means ensureSheet installed the sheet. */
-    private static final class Loaded {
-        final int generation;
-        final String id;
-        final Integer keepScroll;
-        final List<BoardRepository.NotebookInfo> notebooks;
-        final List<Board> pages;
-        final boolean ready;
-
-        Loaded(int generation, String id, Integer keepScroll, List<BoardRepository.NotebookInfo> notebooks,
-               List<Board> pages, boolean ready) {
-            this.generation = generation;
-            this.id = id;
-            this.keepScroll = keepScroll;
-            this.notebooks = notebooks;
-            this.pages = pages;
-            this.ready = ready;
-        }
+    private record Loaded(
+            int generation,
+            String id,
+            Integer keepScroll,
+            List<BoardRepository.NotebookInfo> notebooks,
+            List<Board> pages,
+            boolean ready) {
     }
 
     private boolean loading() {
@@ -2257,13 +2243,13 @@ public final class CanvasActivity extends Activity {
             if (id != null) {
                 repository.renameNotebook(id, text);
                 rebuildNotebookTabs(repository.notebooks());
-                syncNav();
+                styleTabs();
                 return;
             }
             BoardRepository.NotebookInfo created = repository.createNotebook(text, parentId);
             rebuildNotebookTabs(repository.notebooks());
             if (created == null) {
-                syncNav();
+                styleTabs();
             } else if (moveAfter != null && moveAfter.page != null) {
                 movePageToNotebook(moveAfter.page.id, created.id);
             } else {
@@ -2856,10 +2842,6 @@ public final class CanvasActivity extends Activity {
             showHint("", false);
             hideLassoMenu();
         }
-    }
-
-    private void syncNav() {
-        styleTabs();
     }
 
     private void styleTabs() {

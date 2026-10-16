@@ -28,16 +28,7 @@ import java.util.UUID;
  */
 public final class MetaPullApply {
     /** Staged legacy board ink from {@code applyPull} (hash-checked, decoded). */
-    public static final class Staged {
-        public final File file;
-        public final byte[] bytes;
-        public final List<InkRenderer.InkStroke> strokes;
-
-        public Staged(File file, byte[] bytes, List<InkRenderer.InkStroke> strokes) {
-            this.file = file;
-            this.bytes = bytes;
-            this.strokes = strokes;
-        }
+    public record Staged(File file, byte[] bytes, List<InkRenderer.InkStroke> strokes) {
     }
 
     /** Bridge into Room / outbox / mirror / board cache owned by the repository. */
@@ -119,10 +110,10 @@ public final class MetaPullApply {
             if (blob == null) {
                 throw new IOException("bad ink blob for " + remote.id);
             }
-            deps.ink().commit(blob.file, remote.id);
+            deps.ink().commit(blob.file(), remote.id);
             String id = remote.id;
-            mirrorOps.add(() -> deps.mirrorInk(id, blob.bytes));
-            refreshed.put(remote.id, blob.strokes);
+            mirrorOps.add(() -> deps.mirrorInk(id, blob.bytes()));
+            refreshed.put(remote.id, blob.strokes());
         }
         dao.upsertBoard(remote);
         dao.deleteOutbox(OutboxEntry.BOARD, remote.id);

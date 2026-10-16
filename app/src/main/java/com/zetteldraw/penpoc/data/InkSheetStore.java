@@ -74,14 +74,7 @@ public final class InkSheetStore {
      * Same idea as {@link MetaPullApply.Staged} for legacy board ink — apply
      * under lock must not replay again.
      */
-    static final class StagedLog {
-        final byte[] bytes;
-        final NotebookPaper paper;
-
-        StagedLog(byte[] bytes, NotebookPaper paper) {
-            this.bytes = bytes;
-            this.paper = paper;
-        }
+    record StagedLog(byte[] bytes, NotebookPaper paper) {
     }
 
     /**
@@ -294,12 +287,12 @@ public final class InkSheetStore {
         long diskBytes = 0L;
         if (conflictCopy) {
             StagedLog staged = stagedLogs.remove(remote.id);
-            bytes = staged == null ? null : staged.bytes;
+            bytes = staged == null ? null : staged.bytes();
         } else if (hasBody) {
             StagedLog staged = stagedLogs.remove(remote.id);
-            if (staged != null && staged.bytes != null && staged.paper != null) {
-                bytes = staged.bytes;
-                paper = staged.paper;
+            if (staged != null && staged.bytes() != null && staged.paper() != null) {
+                bytes = staged.bytes();
+                paper = staged.paper();
                 localSlices = localReadySliceCountLocked(remote.id, open);
                 diskBytes = localInkLogBytes(remote.id);
                 remoteSlices = paper.sliceCount();

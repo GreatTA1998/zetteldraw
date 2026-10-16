@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v109: pendingPush takeQueued; saveNotebookQueued; name-form cancel/ok spine.
-        versionCode = 109
-        versionName = "3.88"
+        // Tip v110: wipe/delete paperSlice spine; load/sync carriers as records.
+        versionCode = 110
+        versionName = "3.89"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
