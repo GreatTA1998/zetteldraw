@@ -5,7 +5,6 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import android.app.Application;
 
@@ -124,7 +123,7 @@ public class MovePageTearTest {
 
         NotebookPaper dest = NotebookPaper.empty(PAGE);
         dest.appendStroke(TestInk.stroke(4f, 20f, 4), "d0");
-        source.tearMove(0, dest);
+        source.tearMoveAfter(0, dest, dest.sliceCount() - 1);
 
         assertNull(source.stroke("gone"));
         assertNotNull(dest.stroke("gone"));
@@ -170,55 +169,6 @@ public class MovePageTearTest {
         NotebookPaper replayed = NotebookPaper.replay(pages.get(0).paper.bytes());
         assertEquals(DENSE_STROKES, replayed.strokes().size());
         assertTrue(replayed.containsInk(0));
-    }
-
-    /**
-     * Destination append that throws mid-batch must leave that paper unchanged,
-     * and tearMove must put the taken strokes back on the source.
-     */
-    @Test
-    public void appendMovedFailureRollsBackDestinationAndTearMoveRestoresSource() throws Exception {
-        NotebookPaper dest = NotebookPaper.empty(PAGE);
-        dest.appendStroke(denseStroke("keep", 2f, 15f), "slice0");
-        int destCount = dest.strokes().size();
-        byte[] destBytes = dest.bytes();
-        int destSlices = dest.sliceCount();
-
-        ArrayList<InkRenderer.InkStroke> hostile = new ArrayList<>();
-        hostile.add(denseStroke("ok", 1f, 1f));
-        hostile.add(null);
-        try {
-            dest.appendMoved(hostile, 0f);
-            fail("expected failure on null stroke");
-        } catch (RuntimeException expected) {
-            assertEquals("destination strokes unchanged", destCount, dest.strokes().size());
-            assertEquals(destSlices, dest.sliceCount());
-            assertEquals(destBytes.length, dest.bytes().length);
-            assertNotNull(dest.stroke("keep"));
-        }
-
-        NotebookPaper source = NotebookPaper.empty(PAGE);
-        for (int i = 0; i < 30; i++) {
-            source.appendStroke(denseStroke("s" + i, 12f, 50f + i), i == 0 ? "src" : null);
-        }
-        int sourceCount = source.strokes().size();
-        NotebookPaper dest2 = NotebookPaper.replay(destBytes);
-        NotebookPaper.Tear cut = invokeCut(source, 0);
-        assertEquals("cut already removed the slice from the source", 0, source.strokes().size());
-        try {
-            ArrayList<InkRenderer.InkStroke> bad = new ArrayList<>(cut.taken);
-            bad.add(null);
-            dest2.appendMoved(bad, 0f);
-            fail("expected failure");
-        } catch (RuntimeException e) {
-            source.strokes().addAll(cut.taken);
-        }
-        assertEquals("source ink restored after a failed dest append", sourceCount, source.strokes().size());
-        assertEquals(destCount, dest2.strokes().size());
-        assertNotNull(dest2.stroke("keep"));
-        for (int i = 0; i < sourceCount; i++) {
-            assertNotNull(source.stroke("s" + i));
-        }
     }
 
     /** Stroke whose drawing pad crosses the next slice mark — the old lastInked trap. */
@@ -267,12 +217,5 @@ public class MovePageTearTest {
             index--;
         }
         return index;
-    }
-
-    /** Package cut via tearWipe on a throwaway clone is messy; use reflection. */
-    private static NotebookPaper.Tear invokeCut(NotebookPaper paper, int slice) throws Exception {
-        java.lang.reflect.Method cut = NotebookPaper.class.getDeclaredMethod("cut", int.class, boolean.class);
-        cut.setAccessible(true);
-        return (NotebookPaper.Tear) cut.invoke(paper, slice, false);
     }
 }

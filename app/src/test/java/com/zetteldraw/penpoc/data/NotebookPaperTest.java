@@ -167,7 +167,8 @@ public class NotebookPaperTest {
         NotebookPaper dest = NotebookPaper.empty(1420);
         dest.appendStroke(line("already", 1f, 10f, 20f));
 
-        NotebookPaper.Tear moved = source.tearMove(0, dest);
+        // Id-preserving Move spine (same as placePageBefore → tearMove*).
+        NotebookPaper.Tear moved = source.tearMoveAfter(0, dest, dest.sliceCount() - 1);
         assertEquals(1, moved.newIds.size());
         assertNotEquals("cross", moved.newIds.get(0));
         assertEquals("cross", source.stroke("cross").id);

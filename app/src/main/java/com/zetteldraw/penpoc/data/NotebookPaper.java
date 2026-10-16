@@ -541,42 +541,6 @@ public final class NotebookPaper {
     }
 
     /**
-     * Append-style tear: shifts ink to the bottom of {@code destination}, then
-     * closes the source gap. Does <em>not</em> keep the source slice id.
-     * Repository Move uses {@link #tearMoveBefore}/{@link #tearMoveAfter}
-     * via {@code placePageBefore} instead (id-preserving). Kept for paper
-     * unit tests of dense append rollback.
-     *
-     * <p>Atomic for dense pages: the destination receives every taken stroke
-     * in one log append before the source gap closes. If that append throws
-     * (OOM on a huge drawing), the taken strokes are put back on the source
-     * and neither notebook changes.
-     */
-    public Tear tearMove(int slice, NotebookPaper destination) {
-        if (destination == null) {
-            throw new IllegalArgumentException("destination");
-        }
-        Tear cut = cut(slice, false);
-        float shift = destination.origin(destination.sliceCount()) - origin(slice);
-        try {
-            destination.appendMoved(cut.taken, shift);
-        } catch (Throwable failed) {
-            // Prefer both notebooks intact over dropping a dense page mid-move.
-            strokes.addAll(cut.taken);
-            refreshLastInked();
-            if (failed instanceof RuntimeException) {
-                throw (RuntimeException) failed;
-            }
-            throw new IllegalStateException(failed);
-        }
-        closeGap(slice);
-        rememberTear(slice, TEAR_DELETE, cut);
-        trimTail();
-        refreshLastInked();
-        return cut;
-    }
-
-    /**
      * Tear {@code slice} out of this paper and insert it on
      * {@code destination} immediately after {@code afterSlice}.
      * {@code afterSlice == -1} inserts at the top (empty destination).
@@ -584,7 +548,8 @@ public final class NotebookPaper {
      * Same {@code destination} as {@code this} reorders in place (no undo tear).
      *
      * <p>Atomic for dense pages: destination is rewritten in one pass; on
-     * failure both papers are left unchanged.
+     * failure both papers are left unchanged. This is the only cross-paper
+     * Move primitive ({@link #tearMoveBefore} shares {@link #tearMoveInsert}).
      */
     public Tear tearMoveAfter(int slice, NotebookPaper destination, int afterSlice) {
         return tearMoveInsert(slice, destination, afterSlice + 1);
@@ -742,66 +707,6 @@ public final class NotebookPaper {
             sliceIds.addAll(idsBefore);
             strokes.clear();
             strokes.addAll(strokesBefore);
-            lastInked = lastInkedBefore;
-            if (failed instanceof RuntimeException) {
-                throw (RuntimeException) failed;
-            }
-            throw new IllegalStateException(failed);
-        }
-    }
-
-    /**
-     * One batch for a Move: shift every piece onto this paper and grow the log
-     * once. Per-stroke {@link #appendStroke} copies the whole log each time and
-     * OOMs or stalls on a dense page after the source was already torn.
-     * On failure this paper is rolled back to the way it was before the call.
-     */
-    void appendMoved(List<InkRenderer.InkStroke> pieces, float shiftY) {
-        if (pieces == null || pieces.isEmpty()) {
-            return;
-        }
-        int heightBefore = heights.size();
-        int logBefore = log.length;
-        int strokeBefore = strokes.size();
-        int lastInkedBefore = lastInked;
-        try {
-            ArrayList<InkRenderer.InkStroke> shifted = new ArrayList<>(pieces.size());
-            float bottom = 0f;
-            for (InkRenderer.InkStroke piece : pieces) {
-                InkRenderer.InkStroke moved = shiftY(piece, shiftY);
-                shifted.add(moved);
-                bottom = Math.max(bottom, maxY(moved));
-            }
-            while (bottom >= origin(heights.size())) {
-                extend(UUID.randomUUID().toString(), sliceHeight);
-            }
-            int bytes = 0;
-            ArrayList<byte[]> records = new ArrayList<>(shifted.size());
-            for (InkRenderer.InkStroke stroke : shifted) {
-                byte[] one = record(OP_APPEND, strokePayload(stroke));
-                records.add(one);
-                bytes += one.length;
-            }
-            byte[] suffix = new byte[bytes];
-            int at = 0;
-            for (byte[] one : records) {
-                System.arraycopy(one, 0, suffix, at, one.length);
-                at += one.length;
-            }
-            append(suffix);
-            for (InkRenderer.InkStroke stroke : shifted) {
-                strokes.add(stroke);
-                noteStroke(stroke);
-            }
-        } catch (Throwable failed) {
-            while (heights.size() > heightBefore) {
-                heights.remove(heights.size() - 1);
-                sliceIds.remove(sliceIds.size() - 1);
-            }
-            log = Arrays.copyOf(log, logBefore);
-            while (strokes.size() > strokeBefore) {
-                strokes.remove(strokes.size() - 1);
-            }
             lastInked = lastInkedBefore;
             if (failed instanceof RuntimeException) {
                 throw (RuntimeException) failed;
