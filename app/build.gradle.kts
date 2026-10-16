@@ -44,7 +44,7 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v95: one pendingPush blob stage/attach spine for log + board ink.
+        // Tip v97: one server pushEntityGroup + shared ink LWW shelf.
         versionCode = 97
         versionName = "3.76"
         ndk {
