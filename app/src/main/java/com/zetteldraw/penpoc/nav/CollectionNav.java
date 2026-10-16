@@ -106,12 +106,7 @@ public final class CollectionNav {
             if (y == 0 && pages.size() > 1) {
                 return false;
             }
-            int max = 0;
-            int gap = layout.gap(pages);
-            for (Board page : pages) {
-                max += layout.heightOf(page) + gap;
-            }
-            return y <= Math.max(0, max);
+            return y <= Math.max(0, scrollYBefore(pages, pages.size(), layout));
         }
         int savedCount = prefs.getInt(PREF_SCROLL_PAGES_PREFIX + collectionId, -1);
         String savedPage = prefs.getString(PREF_SCROLL_PAGE_PREFIX + collectionId, null);
@@ -140,14 +135,26 @@ public final class CollectionNav {
             return remembered;
         }
         if (scratchpad) {
-            int target = 0;
-            int gap = layout.gap(pages);
-            for (int i = 0; i < pages.size() - 1; i++) {
-                target += layout.heightOf(pages.get(i)) + gap;
-            }
-            return target;
+            return scrollYBefore(pages, pages.size() - 1, layout);
         }
         return layout.lastInkOffset(pages);
+    }
+
+    /**
+     * Content Y of the top of page {@code index}: sum of heights+gaps for pages
+     * {@code [0, index)}. Used by open-linked / after-Reorder / delete / first-open.
+     */
+    public static int scrollYBefore(List<Board> pages, int index, PageLayout layout) {
+        if (pages == null || layout == null || index <= 0 || pages.isEmpty()) {
+            return 0;
+        }
+        int gap = layout.gap(pages);
+        int scroll = 0;
+        int n = Math.min(index, pages.size());
+        for (int i = 0; i < n; i++) {
+            scroll += layout.heightOf(pages.get(i)) + gap;
+        }
+        return scroll;
     }
 
     public String anchorPageId(List<Board> pages, int scrollY, PageLayout layout) {

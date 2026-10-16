@@ -760,6 +760,20 @@ public final class CanvasActivity extends Activity {
         }
     }
 
+    /**
+     * After the open notebook vanishes (delete / pull): trail parent, else first
+     * remaining / Scratchpad. {@code notebooks} null → refresh from repository.
+     */
+    private void reopenAfterNotebookGone(List<BoardRepository.NotebookInfo> notebooks) {
+        if (!trail.isEmpty()) {
+            openNotebook(trail.get(trail.size() - 1));
+        } else if (notebooks != null) {
+            openNotebooks(notebooks);
+        } else {
+            openNotebooks();
+        }
+    }
+
     private void openScratchpad() {
         openScratchpad(null);
     }
@@ -1109,11 +1123,7 @@ public final class CanvasActivity extends Activity {
         rebuildNotebookTabs(loaded.notebooks);
         if (!SCRATCHPAD.equals(loaded.id) && notebookById(loaded.id) == null) {
             // The notebook went away (deleted elsewhere).
-            if (!trail.isEmpty()) {
-                openNotebook(trail.get(trail.size() - 1));
-            } else {
-                openNotebooks(loaded.notebooks);
-            }
+            reopenAfterNotebookGone(loaded.notebooks);
             return;
         }
         // Not Ready (height unknown or ensure pending): wait / retry — never show.
@@ -1327,12 +1337,7 @@ public final class CanvasActivity extends Activity {
         while (index > 0 && pages.get(index).isBlank()) {
             index--;
         }
-        int scroll = 0;
-        int gap = layoutGap(pages);
-        for (int i = 0; i < index; i++) {
-            scroll += heightOf(pages.get(i)) + gap;
-        }
-        return scroll;
+        return CollectionNav.scrollYBefore(pages, index, pageLayout());
     }
 
     /**
@@ -1666,14 +1671,10 @@ public final class CanvasActivity extends Activity {
         // sheet flushes so these writer tasks cannot persist a source tear
         // before the destination rewrite (see RoomBoardRepository holdFlush).
         repository.saveInk(target.page);
-        Board source = pageOnScreen(sourceId);
+        PageSlot onScreen = slotFor(sourceId);
+        Board source = onScreen == null ? null : onScreen.page;
         if (source == null) {
-            for (Board page : repository.pages(reorderSourceNotebookId)) {
-                if (page.id.equals(sourceId)) {
-                    source = page;
-                    break;
-                }
-            }
+            source = livePageIn(reorderSourceNotebookId, sourceId);
         }
         if (source != null) {
             repository.saveInk(source);
@@ -1687,25 +1688,13 @@ public final class CanvasActivity extends Activity {
         openAfterReorder(sourceId, destNotebookId);
     }
 
-    private Board pageOnScreen(String pageId) {
-        for (PageSlot slot : slots) {
-            if (slot.page.id.equals(pageId)) {
-                return slot.page;
-            }
-        }
-        return null;
-    }
-
     private void openAfterReorder(String pageId, String notebookId) {
         List<Board> pages = repository.pages(notebookId);
-        int gap = layoutGap(pages);
-        int scroll = 0;
         for (int i = 0; i < pages.size(); i++) {
             if (pages.get(i).id.equals(pageId)) {
-                openNotebookOrScratch(notebookId, scroll);
+                openNotebookOrScratch(notebookId, CollectionNav.scrollYBefore(pages, i, pageLayout()));
                 return;
             }
-            scroll += heightOf(pages.get(i)) + gap;
         }
         openNotebookOrScratch(notebookId, effectiveScrollY());
     }
@@ -1929,12 +1918,8 @@ public final class CanvasActivity extends Activity {
             return;
         }
         List<Board> pages = repository.pages(place.notebookId);
-        int gap = layoutGap(pages);
-        int scroll = 0;
-        for (int i = 0; i < place.index && i < pages.size(); i++) {
-            scroll += heightOf(pages.get(i)) + gap;
-        }
-        openNotebookOrScratch(place.notebookId, scroll);
+        openNotebookOrScratch(place.notebookId,
+                CollectionNav.scrollYBefore(pages, place.index, pageLayout()));
     }
 
     private List<Board> pagesIn(String id) {
@@ -2047,12 +2032,11 @@ public final class CanvasActivity extends Activity {
         repository.deletePage(slot.page.id);
         inkView.invalidatePage(slot.page.id);
         List<Board> pages = pagesIn(collectionId);
-        int target = 0;
-        for (int i = 0; i < Math.min(index, pages.size() - 1); i++) {
-            target += heightOf(pages.get(i)) + layoutGap(pages);
-        }
         ++loadGeneration;
-        showReady(collectionId, pages, index < 0 ? effectiveScrollY() : target);
+        int target = index < 0
+                ? effectiveScrollY()
+                : CollectionNav.scrollYBefore(pages, Math.min(index, pages.size() - 1), pageLayout());
+        showReady(collectionId, pages, target);
     }
 
     /** The blank page that ends every list: it has nothing to wipe, move or delete. */
@@ -2276,10 +2260,15 @@ public final class CanvasActivity extends Activity {
      * stale {@link PageSlot} captured when the hierarchy menu opened.
      */
     private Board livePageById(String pageId) {
+        return livePageIn(notebookKey(collectionId), pageId);
+    }
+
+    /** Board with {@code pageId} in notebook {@code notebookKey} ({@code null} = Scratchpad). */
+    private Board livePageIn(String notebookKey, String pageId) {
         if (pageId == null) {
             return null;
         }
-        for (Board page : pagesIn(collectionId)) {
+        for (Board page : repository.pages(notebookKey)) {
             if (pageId.equals(page.id)) {
                 return page;
             }
@@ -2443,11 +2432,7 @@ public final class CanvasActivity extends Activity {
             boolean opened = id.equals(collectionId);
             rebuildNotebookTabs();
             if (opened) {
-                if (!trail.isEmpty()) {
-                    openNotebook(trail.get(trail.size() - 1));
-                } else {
-                    openNotebooks();
-                }
+                reopenAfterNotebookGone(null);
             }
         });
         actions.addView(cancel, wrap());
