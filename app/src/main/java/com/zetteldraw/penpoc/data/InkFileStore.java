@@ -79,22 +79,7 @@ public class InkFileStore {
     }
 
     public byte[] readLog(String sheetId) throws IOException {
-        File file = logFile(sheetId);
-        if (!file.exists()) {
-            return null;
-        }
-        byte[] buf = new byte[(int) file.length()];
-        try (FileInputStream in = new FileInputStream(file)) {
-            int read = 0;
-            while (read < buf.length) {
-                int n = in.read(buf, read, buf.length - read);
-                if (n < 0) {
-                    throw new IOException("short read " + file);
-                }
-                read += n;
-            }
-        }
-        return buf;
+        return readFile(logFile(sheetId));
     }
 
     public void discard(File staged) {
@@ -106,7 +91,11 @@ public class InkFileStore {
 
     /** Null when the board has no ink file. */
     public byte[] read(String boardId) throws IOException {
-        File file = fileFor(boardId);
+        return readFile(fileFor(boardId));
+    }
+
+    /** Null when missing; one read spine for {@code .zdi} and {@code .zdl}. */
+    private static byte[] readFile(File file) throws IOException {
         if (!file.exists()) {
             return null;
         }

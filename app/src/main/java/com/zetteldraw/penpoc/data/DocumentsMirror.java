@@ -40,14 +40,7 @@ public final class DocumentsMirror implements InkMirror {
 
     @Override
     public void deleteInk(String boardId) {
-        try {
-            Uri uri = find(INK, boardId + ".zdi");
-            if (uri != null) {
-                resolver.delete(uri, null, null);
-            }
-        } catch (RuntimeException e) {
-            Log.w(TAG, "mirror delete failed " + boardId, e);
-        }
+        delete(INK, boardId + ".zdi");
     }
 
     @Override
@@ -62,13 +55,17 @@ public final class DocumentsMirror implements InkMirror {
 
     @Override
     public void deleteLog(String sheetId) {
+        delete(INK, sheetId + ".zdl");
+    }
+
+    private void delete(String relativePath, String name) {
         try {
-            Uri uri = find(INK, sheetId + ".zdl");
+            Uri uri = find(relativePath, name);
             if (uri != null) {
                 resolver.delete(uri, null, null);
             }
         } catch (RuntimeException e) {
-            Log.w(TAG, "mirror log delete failed " + sheetId, e);
+            Log.w(TAG, "mirror delete failed " + relativePath + name, e);
         }
     }
 

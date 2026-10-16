@@ -1064,11 +1064,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 }
             }
         }
-        // Large notebook logs (Scratchpad 14MB+) must not be loaded as byte[] + Base64 into
-        // the push JSON — that OOM'd Boox Prepare transfer (~75MB alloc on 256MB heap).
-        // At most one large on-disk blob per batch so sync stays one-at-a-time.
-        // One stage/attach spine for log + legacy board ink (same size/hash rules).
-        // One small/large stage map for log + board (ids are distinct entity UUIDs).
+        // At most one large on-disk blob per batch (Boox heap). Log + board share stage/attach.
         boolean[] haveLarge = {false};
         HashMap<String, byte[]> smallBlobs = new HashMap<>();
         HashMap<String, File> largeBlobs = new HashMap<>();
@@ -1122,6 +1118,22 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
         }
         return batch;
+    }
+
+    /** Hash-checked pull blob for board or log; null = no body / not in page. */
+    private static byte[] verifiedPullBytes(PullPage page, String inkHash, Long deletedAt,
+                                            String id, String kind) throws IOException {
+        if (inkHash == null || deletedAt != null) {
+            return null;
+        }
+        byte[] bytes = page.blobs.get(inkHash);
+        if (bytes == null) {
+            return null;
+        }
+        if (!InkFileStore.sha256(bytes).equals(inkHash)) {
+            throw new IOException("bad " + kind + " for " + id);
+        }
+        return bytes;
     }
 
     /** False = defer: another large blob already claimed this batch's single large slot. */
@@ -1243,29 +1255,17 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         HashMap<String, InkSheetStore.StagedLog> stagedLogs = new HashMap<>();
         try {
             for (NotebookLogEntity remote : page.logs) {
-                if (remote.inkHash == null || remote.deletedAt != null) {
-                    continue;
-                }
-                byte[] bytes = page.blobs.get(remote.inkHash);
+                byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink log");
                 if (bytes == null) {
                     continue;
-                }
-                if (!InkFileStore.sha256(bytes).equals(remote.inkHash)) {
-                    throw new IOException("bad ink log for " + remote.id);
                 }
                 // Replay once before the lock so a torn log never becomes the notebook.
                 stagedLogs.put(remote.id, new InkSheetStore.StagedLog(bytes, NotebookPaper.replay(bytes)));
             }
             for (BoardEntity remote : page.boards) {
-                if (remote.inkHash == null || remote.deletedAt != null) {
-                    continue;
-                }
-                byte[] bytes = page.blobs.get(remote.inkHash);
+                byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink blob");
                 if (bytes == null) {
                     continue;
-                }
-                if (!InkFileStore.sha256(bytes).equals(remote.inkHash)) {
-                    throw new IOException("bad ink blob for " + remote.id);
                 }
                 List<InkRenderer.InkStroke> strokes;
                 try {
@@ -1284,7 +1284,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 ink.discard(s.file);
             }
         }
-        if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty() || !page.links.isEmpty()) {
+        if (!page.isEmpty()) {
             boolean post;
             synchronized (refreshLock) {
                 for (Map.Entry<String, List<InkRenderer.InkStroke>> e : refreshed.entrySet()) {
@@ -1396,18 +1396,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                                  Map<String, Long> editsSeen, Map<String, Board> boardsSeen) throws IOException {
         synchronized (lock) {
             for (BoardEntity remote : page.boards) {
-                if (remote.inkHash == null || remote.deletedAt != null || page.blobs.containsKey(remote.inkHash)) {
-                    continue;
-                }
+                if (remote.inkHash == null || remote.deletedAt != null || page.blobs.containsKey(remote.inkHash)) continue;
                 BoardEntity local = dao.board(remote.id);
                 if (local == null || !remote.inkHash.equals(local.inkHash)) {
                     throw new IOException("pull page is missing ink " + remote.inkHash);
                 }
             }
             for (NotebookLogEntity remote : page.logs) {
-                if (remote.inkHash == null || remote.deletedAt != null || page.blobs.containsKey(remote.inkHash)) {
-                    continue;
-                }
+                if (remote.inkHash == null || remote.deletedAt != null || page.blobs.containsKey(remote.inkHash)) continue;
                 NotebookLogEntity local = dao.notebookLog(remote.id);
                 if (local == null || !remote.inkHash.equals(local.inkHash)) {
                     throw new IOException("pull page is missing ink log " + remote.inkHash);
@@ -1463,7 +1459,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     boardsSeen.put(id, board);
                 }
             }
-            if (!page.boards.isEmpty() || !page.notebooks.isEmpty() || !page.logs.isEmpty() || !page.links.isEmpty()) {
+            if (!page.isEmpty()) {
                 scheduleIndex();
             }
         }

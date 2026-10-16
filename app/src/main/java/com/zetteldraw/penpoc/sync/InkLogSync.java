@@ -46,9 +46,7 @@ public final class InkLogSync {
         JSONObject body;
         try {
             body = client.logHeads();
-        } catch (SyncClient.Unauthorized e) {
-            throw e;
-        } catch (SyncClient.SchemaMismatch e) {
+        } catch (SyncClient.Unauthorized | SyncClient.SchemaMismatch e) {
             throw e;
         } catch (IOException e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();

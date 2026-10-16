@@ -709,15 +709,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private BoardRepository.NotebookInfo notebookById(String id) {
-        if (shownNotebooks == null || id == null) {
-            return null;
-        }
-        for (BoardRepository.NotebookInfo each : shownNotebooks) {
-            if (each.id.equals(id)) {
-                return each;
-            }
-        }
-        return null;
+        return notebookByIdIn(shownNotebooks, id);
     }
 
     /** Parents that currently show a child bar, in trail order. */
@@ -881,9 +873,7 @@ public final class CanvasActivity extends Activity {
         }
         // Persist the collection we leave using the intended Y (pending apply wins).
         // Only when that collection was Ready and shown — never from a partial load.
-        if (pagesLoaded && !loading() && collectionShownReady()) {
-            rememberShownScroll();
-        }
+        rememberOpenScroll();
         pagesLoaded = true;
         collectionId = id;
         syncNav();
@@ -921,15 +911,11 @@ public final class CanvasActivity extends Activity {
         updateExcludeRects();
     }
 
-    /** Saves the open list's scroll so a later return (or process death) can restore it. */
+    /** Ready-list scroll gate for leave-collection and process pause. */
     private void rememberOpenScroll() {
         if (!pagesLoaded || loading() || collectionId == null || !collectionShownReady()) {
             return;
         }
-        rememberShownScroll();
-    }
-
-    private void rememberShownScroll() {
         int y = effectiveScrollY();
         String anchor = collectionNav.anchorPageId(currentPages, y, pageLayout());
         int count = currentPages == null ? 0 : currentPages.size();

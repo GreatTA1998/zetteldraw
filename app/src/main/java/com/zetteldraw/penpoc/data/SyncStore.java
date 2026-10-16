@@ -165,5 +165,9 @@ public interface SyncStore {
         public final Map<String, byte[]> blobs = new HashMap<>();
         public long cursor;
         public boolean hasMore;
+
+        public boolean isEmpty() {
+            return notebooks.isEmpty() && boards.isEmpty() && logs.isEmpty() && links.isEmpty();
+        }
     }
 }
