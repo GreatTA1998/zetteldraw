@@ -332,8 +332,7 @@ public final class InkSheetStore {
                     byte[] copy = bytes;
                     mirrorOps.add(() -> deps.mirrorLog(remote.id, copy));
                 }
-                dao.upsertNotebookLog(remote);
-                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
+                upsertLogClearOutbox(remote);
                 return;
             case REFUSE_SHORTER:
                 LaunchLog.mark("pull refused shorter log for " + remote.id
@@ -356,27 +355,27 @@ public final class InkSheetStore {
                         + " localSlices=" + localSlices
                         + " remoteBytes=" + bytes.length
                         + " diskBytes=" + diskBytes);
+                // fall through — same primary-body install as LWW_REPLACE
+            case LWW_REPLACE:
                 installRemotePaperLocked(remote, paper, bytes, open, mirrorOps);
-                dao.upsertNotebookLog(remote);
-                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
+                upsertLogClearOutbox(remote);
                 return;
             case SKIP_REV:
             case SKIP_HOLD_FLUSH:
             case SKIP_UNFLUSHED:
             case SKIP_PENDING_NEWER:
                 return;
-            case LWW_REPLACE:
-                installRemotePaperLocked(remote, paper, bytes, open, mirrorOps);
-                dao.upsertNotebookLog(remote);
-                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
-                return;
             case UPSERT_META_ONLY:
-                dao.upsertNotebookLog(remote);
-                dao.deleteOutbox(OutboxEntry.LOG, remote.id);
+                upsertLogClearOutbox(remote);
                 return;
             default:
                 throw new IllegalStateException("unhandled InkLogApply decision " + decision);
         }
+    }
+
+    private void upsertLogClearOutbox(NotebookLogEntity remote) {
+        deps.dao().upsertNotebookLog(remote);
+        deps.dao().deleteOutbox(OutboxEntry.LOG, remote.id);
     }
 
     private void installRemotePaperLocked(NotebookLogEntity remote, NotebookPaper paper, byte[] bytes,

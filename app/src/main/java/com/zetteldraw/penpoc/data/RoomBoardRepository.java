@@ -1505,9 +1505,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     if (row == null || !isUntouchedSeed(row)) {
                         continue;
                     }
-                    if (dao.outbox(OutboxEntry.NOTEBOOK, row.id) == null) {
-                        queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
-                    }
+                    queueIfAbsent(OutboxEntry.NOTEBOOK, row.id);
                 }
             });
         }
@@ -1523,8 +1521,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     if (isUntouchedSeed(row)) {
                         continue;
                     }
-                    if (row.rev == 0 && dao.outbox(OutboxEntry.NOTEBOOK, row.id) == null) {
-                        queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+                    if (row.rev == 0 && queueIfAbsent(OutboxEntry.NOTEBOOK, row.id)) {
                         added[0]++;
                     }
                 }
@@ -1535,21 +1532,18 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     if (isTrailingBlankLocked(row)) {
                         continue;
                     }
-                    if (dao.outbox(OutboxEntry.BOARD, row.id) == null) {
-                        queueLocked(OutboxEntry.BOARD, row.id, OutboxEntry.UPSERT);
+                    if (queueIfAbsent(OutboxEntry.BOARD, row.id)) {
                         added[0]++;
                     }
                 }
                 for (NotebookLogEntity row : dao.liveNotebookLogs()) {
                     if (row.rev == 0 && row.inkHash != null
-                            && dao.outbox(OutboxEntry.LOG, row.id) == null) {
-                        queueLocked(OutboxEntry.LOG, row.id, OutboxEntry.UPSERT);
+                            && queueIfAbsent(OutboxEntry.LOG, row.id)) {
                         added[0]++;
                     }
                 }
                 for (PageLinkEntity row : dao.livePageLinks()) {
-                    if (row.rev == 0 && dao.outbox(OutboxEntry.LINK, row.id) == null) {
-                        queueLocked(OutboxEntry.LINK, row.id, OutboxEntry.UPSERT);
+                    if (row.rev == 0 && queueIfAbsent(OutboxEntry.LINK, row.id)) {
                         added[0]++;
                     }
                 }
@@ -1570,8 +1564,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     if (row.parentId == null || row.deletedAt != null) {
                         continue;
                     }
-                    if (dao.outbox(OutboxEntry.NOTEBOOK, row.id) == null) {
-                        queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+                    if (queueIfAbsent(OutboxEntry.NOTEBOOK, row.id)) {
                         added[0]++;
                     }
                 }
@@ -1581,6 +1574,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             return added[0];
         }
+    }
+
+    /** Queue upsert when no outbox row yet — one gate for seed / unsynced / nested backfill. */
+    private boolean queueIfAbsent(String entity, String id) {
+        if (dao.outbox(entity, id) != null) {
+            return false;
+        }
+        queueLocked(entity, id, OutboxEntry.UPSERT);
+        return true;
     }
 
     // endregion

@@ -178,17 +178,11 @@ public final class SyncEngine {
             if (batch.isEmpty()) {
                 return;
             }
+            List<SyncStore.PushResult> results;
             try {
                 for (Map.Entry<String, File> e : batch.blobFiles.entrySet()) {
                     client.putBlob(e.getKey(), e.getValue(), config.deviceId);
                 }
-            } catch (SyncClient.NotLiveWriter e) {
-                result.blockedAsNonWriter = true;
-                result.writerBlockMessage = e.serverMessage;
-                return;
-            }
-            List<SyncStore.PushResult> results;
-            try {
                 results = SyncProtocol.pushResults(
                         client.push(SyncProtocol.pushBody(batch, schemaVersion, config.deviceId)));
             } catch (JSONException e) {
@@ -224,7 +218,7 @@ public final class SyncEngine {
         }
     }
 
-    /** Pull JSON omits large Base64 blobs; fetch them raw before applyPull. */
+    /** Pull JSON omits large Base64 blobs; fetch board + log hashes raw before applyPull. */
     private void fetchMissingBlobs(SyncStore.PullPage page) throws IOException {
         for (NotebookLogEntity log : page.logs) {
             ensureBlob(page.blobs, log.inkHash, log.deletedAt);

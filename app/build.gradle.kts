@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v97: one server pushEntityGroup + shared ink LWW shelf.
-        versionCode = 97
-        versionName = "3.76"
+        // Tip v98: one pull row-load + log apply upsert; shared outbox queue gate.
+        versionCode = 98
+        versionName = "3.77"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

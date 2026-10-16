@@ -64,35 +64,25 @@ public final class MetaPullApply {
     }
 
     public void applyRemoteNotebook(NotebookEntity remote) {
-        ZettelDao dao = deps.dao();
-        NotebookEntity local = dao.notebook(remote.id);
-        if (local != null) {
-            if (remote.rev <= local.rev) {
-                return;
-            }
-            if (deps.pendingOutbox(OutboxEntry.NOTEBOOK, remote.id)
-                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
-                return;
-            }
+        NotebookEntity local = deps.dao().notebook(remote.id);
+        if (local != null && (remote.rev <= local.rev
+                || (deps.pendingOutbox(OutboxEntry.NOTEBOOK, remote.id)
+                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)))) {
+            return;
         }
-        dao.upsertNotebook(remote);
-        dao.deleteOutbox(OutboxEntry.NOTEBOOK, remote.id);
+        deps.dao().upsertNotebook(remote);
+        deps.dao().deleteOutbox(OutboxEntry.NOTEBOOK, remote.id);
     }
 
     public void applyRemoteLink(PageLinkEntity remote) {
-        ZettelDao dao = deps.dao();
-        PageLinkEntity local = dao.pageLink(remote.id);
-        if (local != null) {
-            if (remote.rev <= local.rev) {
-                return;
-            }
-            if (deps.pendingOutbox(OutboxEntry.LINK, remote.id)
-                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
-                return;
-            }
+        PageLinkEntity local = deps.dao().pageLink(remote.id);
+        if (local != null && (remote.rev <= local.rev
+                || (deps.pendingOutbox(OutboxEntry.LINK, remote.id)
+                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)))) {
+            return;
         }
-        dao.upsertPageLink(remote);
-        dao.deleteOutbox(OutboxEntry.LINK, remote.id);
+        deps.dao().upsertPageLink(remote);
+        deps.dao().deleteOutbox(OutboxEntry.LINK, remote.id);
     }
 
     public void applyRemoteBoard(BoardEntity remote, Map<String, Staged> staged,

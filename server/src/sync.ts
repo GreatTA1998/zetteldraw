@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type pg from "pg";
+import type { QueryResultRow } from "pg";
 import { isUnowned, ownedByUser, rowOwner, stampOwnership, type OwnerTable } from "./accounts.js";
 import {
   resolveBoard,
@@ -204,6 +205,24 @@ function visibilitySql(table: OwnerTable, alias: string, scope: SyncScope, userP
   return isUnowned(table, alias);
 }
 
+/** One pull row-load for notebooks / boards / logs / links (rev-bounded page). */
+async function loadPullRows<T extends QueryResultRow>(
+  pool: pg.Pool,
+  table: "notebooks" | "boards" | "notebook_logs" | "page_links",
+  ids: string[],
+  maxRev: number,
+): Promise<T[]> {
+  if (!ids.length) {
+    return [];
+  }
+  return (
+    await pool.query<T>(`SELECT * FROM ${table} WHERE id = ANY($1::uuid[]) AND rev <= $2 ORDER BY rev`, [
+      ids,
+      maxRev,
+    ])
+  ).rows;
+}
+
 export async function push(
   pool: pg.Pool,
   storage: InkStorage,
@@ -338,40 +357,10 @@ export async function pull(
   const linkIds = page.filter((c) => c.kind === "link").map((c) => c.id);
 
   // Rows can be re-stamped by a concurrent push after the change scan; the rev bound keeps the page consistent.
-  const notebooks = notebookIds.length
-    ? (
-        await pool.query<NotebookRow>(
-          "SELECT * FROM notebooks WHERE id = ANY($1::uuid[]) AND rev <= $2 ORDER BY rev",
-          [notebookIds, maxRev],
-        )
-      ).rows
-    : [];
-  const boards = boardIds.length
-    ? (
-        await pool.query<BoardRow>("SELECT * FROM boards WHERE id = ANY($1::uuid[]) AND rev <= $2 ORDER BY rev", [
-          boardIds,
-          maxRev,
-        ])
-      ).rows
-    : [];
-
-  const logs = logIds.length
-    ? (
-        await pool.query<LogRow>(
-          "SELECT * FROM notebook_logs WHERE id = ANY($1::uuid[]) AND rev <= $2 ORDER BY rev",
-          [logIds, maxRev],
-        )
-      ).rows
-    : [];
-
-  const links = linkIds.length
-    ? (
-        await pool.query<LinkRow>(
-          "SELECT * FROM page_links WHERE id = ANY($1::uuid[]) AND rev <= $2 ORDER BY rev",
-          [linkIds, maxRev],
-        )
-      ).rows
-    : [];
+  const notebooks = await loadPullRows<NotebookRow>(pool, "notebooks", notebookIds, maxRev);
+  const boards = await loadPullRows<BoardRow>(pool, "boards", boardIds, maxRev);
+  const logs = await loadPullRows<LogRow>(pool, "notebook_logs", logIds, maxRev);
+  const links = await loadPullRows<LinkRow>(pool, "page_links", linkIds, maxRev);
 
   const blobs: Record<string, string> = {};
   const loadBlob = async (hash: string, kind: string, id: string) => {
