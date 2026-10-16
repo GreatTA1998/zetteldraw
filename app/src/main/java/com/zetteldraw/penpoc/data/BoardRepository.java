@@ -79,11 +79,12 @@ public interface BoardRepository {
     /**
      * Place {@code boardId} immediately before {@code beforeBoardId} in
      * {@code destNotebookId} ({@code null} = Scratchpad).
-     * Same notebook reorders; other notebook tears the page across and inserts
-     * it before the target. When the target is a trailing blank <em>or</em>
-     * belongs to a different sheet than {@code destNotebookId}, the page is
-     * appended at the end of the destination (so a stale midline page from the
-     * notebook you just left cannot steal the move). Dense pages stay atomic.
+     * Same notebook and cross-notebook both use paper {@code tearMove*} (same
+     * paper reorders in place; other notebook tears across). When the target is
+     * a trailing blank <em>or</em> belongs to a different sheet than
+     * {@code destNotebookId}, the page is appended at the end of the destination
+     * (so a stale midline page from the notebook you just left cannot steal the
+     * move). Dense pages stay atomic.
      *
      * @return false when nothing changed (missing source/dest, blank source, etc.)
      */

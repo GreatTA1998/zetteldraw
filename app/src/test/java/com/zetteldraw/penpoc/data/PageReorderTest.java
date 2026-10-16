@@ -187,13 +187,14 @@ public class PageReorderTest {
     }
 
     @Test
-    public void reorderSameIndexIsNoOp() {
+    public void tearMoveAfterSameIndexIsNoOp() {
         NotebookPaper paper = NotebookPaper.empty(PAGE);
         paper.appendStroke(nearBottom("a", 0f), "s0");
         paper.appendStroke(nearBottom("b", PAGE), "s1");
         paper.appendStroke(nearBottom("c", 2f * PAGE), "s2");
         byte[] logBefore = paper.bytes();
-        paper.reorderAfter(1, 1);
+        // Same-paper tearMoveAfter is the Reorder primitive (no-op when already there).
+        paper.tearMoveAfter(1, paper, 1);
         assertEquals(logBefore.length, paper.bytes().length);
         assertEquals("s0", paper.sliceId(0));
         assertEquals("s1", paper.sliceId(1));

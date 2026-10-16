@@ -581,33 +581,57 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             // Same notebook only when the source already lives on the *destination*
             // sheet — never when a stale on-screen target shares the source paper.
-            if (moving.paper == dest.paper
-                    && java.util.Objects.equals(moving.sheetId, destSheetId)) {
-                boolean beforeIsTrailing = isTrailingBlankBoard(before, dest.paper);
-                int beforeIndex = beforeIsTrailing ? -1 : dest.paper.indexOfSliceId(beforeBoardId);
-                if (!beforeIsTrailing && beforeIndex < 0) {
+            boolean sameNotebook = moving.paper == dest.paper
+                    && java.util.Objects.equals(moving.sheetId, destSheetId);
+            // Stale cross-notebook target (wrong paper) → treat as trailing append.
+            boolean beforeIsTrailing = (!sameNotebook && before.paper != dest.paper)
+                    || isTrailingBlankBoard(before, dest.paper);
+            int beforeIndex = beforeIsTrailing ? -1 : dest.paper.indexOfSliceId(beforeBoardId);
+            if (!beforeIsTrailing && beforeIndex < 0) {
+                return false;
+            }
+            if (beforeIsTrailing && sameNotebook) {
+                int last = dest.paper.sliceCount() - 1;
+                if (last < 0 || sourceIndex == last) {
                     return false;
                 }
-                try {
-                    if (beforeIsTrailing) {
-                        int last = dest.paper.sliceCount() - 1;
-                        if (last < 0 || sourceIndex == last) {
-                            return false;
-                        }
-                        dest.paper.reorderAfter(sourceIndex, last);
-                    } else {
-                        dest.paper.reorderBefore(sourceIndex, beforeIndex);
-                    }
-                } catch (RuntimeException e) {
-                    Log.e(TAG, "place page reorder failed; left notebook unchanged", e);
-                    LaunchLog.mark("place-before reorder failed; left unchanged: " + e.getMessage());
-                    return false;
+            }
+            String sourceSheetId = moving.sheetId;
+            int destStrokes = dest.paper.strokes().size();
+            try {
+                // One paper spine: same-paper tearMove* reorders; cross tears.
+                if (beforeIsTrailing) {
+                    moving.paper.tearMoveAfter(sourceIndex, dest.paper, dest.paper.sliceCount() - 1);
+                } else {
+                    moving.paper.tearMoveBefore(sourceIndex, dest.paper, beforeIndex);
                 }
-                if (dest.paper.indexOfSliceId(boardId) < 0) {
-                    LaunchLog.mark("place-before reorder postflight: lost page " + boardId);
-                    return false;
+            } catch (RuntimeException e) {
+                Log.e(TAG, "place page failed; left sheets unchanged", e);
+                LaunchLog.mark("place-before failed; left unchanged: " + e.getMessage());
+                return false;
+            }
+            boolean lost = dest.paper.indexOfSliceId(boardId) < 0;
+            boolean crossBroken = !sameNotebook && (dest.paper.strokes().size() < destStrokes
+                    || moving.paper.indexOfSliceId(boardId) >= 0);
+            if (lost || crossBroken) {
+                LaunchLog.mark("place-before postflight failed"
+                        + " lost=" + lost
+                        + " sourceStillHas=" + (moving.paper.indexOfSliceId(boardId) >= 0));
+                if (!sameNotebook) {
+                    // Memory may be torn; hold flushes and reload from disk.
+                    sheetStore.holdSheetFlush(sourceSheetId);
+                    sheetStore.holdSheetFlush(destSheetId);
+                    writer.execute(() -> {
+                        sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
+                        sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
+                        sheetStore.releaseSheetFlush(destSheetId);
+                        sheetStore.releaseSheetFlush(sourceSheetId);
+                    });
                 }
-                syncSliceIndex(dest.paper, boardId);
+                return false;
+            }
+            syncSliceIndex(dest.paper, boardId);
+            if (sameNotebook) {
                 sheetStore.holdSheetFlush(destSheetId);
                 writer.execute(() -> {
                     try {
@@ -618,46 +642,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 });
                 return true;
             }
-            String sourceSheetId = moving.sheetId;
-            // Target from another notebook (stale slots after nav) → append on dest.
-            boolean beforeIsTrailing = before.paper != dest.paper
-                    || isTrailingBlankBoard(before, dest.paper);
-            int beforeIndex = beforeIsTrailing ? -1 : dest.paper.indexOfSliceId(beforeBoardId);
-            if (!beforeIsTrailing && beforeIndex < 0) {
-                return false;
-            }
-            int destStrokes = dest.paper.strokes().size();
-            try {
-                if (beforeIsTrailing) {
-                    int afterSlice = dest.paper.sliceCount() - 1;
-                    moving.paper.tearMoveAfter(sourceIndex, dest.paper, afterSlice);
-                } else {
-                    moving.paper.tearMoveBefore(sourceIndex, dest.paper, beforeIndex);
-                }
-            } catch (RuntimeException e) {
-                Log.e(TAG, "place page move failed; left both notebooks unchanged", e);
-                LaunchLog.mark("place-before move failed; both notebooks unchanged: " + e.getMessage());
-                return false;
-            }
-            if (dest.paper.indexOfSliceId(boardId) < 0
-                    || dest.paper.strokes().size() < destStrokes
-                    || moving.paper.indexOfSliceId(boardId) >= 0) {
-                LaunchLog.mark("place-before postflight failed; refusing disk commit"
-                        + " destHas=" + (dest.paper.indexOfSliceId(boardId) >= 0)
-                        + " sourceStillHas=" + (moving.paper.indexOfSliceId(boardId) >= 0));
-                Log.e(TAG, "place page postflight failed; not persisting");
-                // Memory may be torn; hold flushes and reload from disk.
-                sheetStore.holdSheetFlush(sourceSheetId);
-                sheetStore.holdSheetFlush(destSheetId);
-                writer.execute(() -> {
-                    sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
-                    sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
-                    sheetStore.releaseSheetFlush(destSheetId);
-                    sheetStore.releaseSheetFlush(sourceSheetId);
-                });
-                return false;
-            }
-            syncSliceIndex(dest.paper, boardId);
             // Remaining source boards keep stale sliceIndex until the next
             // projectLocked; reseat them now so Move chrome / isBlank agree
             // with paper even if the UI briefly reads the cache mid-reload.

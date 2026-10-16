@@ -482,90 +482,12 @@ public final class NotebookPaper {
     }
 
     /**
-     * Place {@code source} immediately after {@code after} on this paper.
-     * One log rewrite (header + current strokes); rolls the paper back if
-     * that rewrite throws. No-op when the indices are the same or out of
-     * range. Crossing strokes are torn the same way as Move.
-     *
-     * <p>v31 does not put this on the undo stack: the history model is
-     * stroke edits, not slice order.
-     */
-    public void reorderAfter(int source, int after) {
-        if (source < 0 || after < 0 || source >= heights.size() || after >= heights.size()
-                || source == after) {
-            return;
-        }
-        int afterAdj = source < after ? after - 1 : after;
-        reorderTo(source, afterAdj + 1);
-    }
-
-    /**
-     * Place {@code source} immediately before {@code before} on this paper.
-     * {@code before == 0} makes the page the new first slice. No-op when the
-     * indices are the same or out of range.
-     */
-    public void reorderBefore(int source, int before) {
-        if (source < 0 || before < 0 || source >= heights.size() || before >= heights.size()
-                || source == before) {
-            return;
-        }
-        int beforeAdj = source < before ? before - 1 : before;
-        reorderTo(source, beforeAdj);
-    }
-
-    /** Cut {@code source} and insert it at {@code insertAt} on this paper. */
-    private void reorderTo(int source, int insertAt) {
-        byte[] logBefore = Arrays.copyOf(log, log.length);
-        ArrayList<Integer> heightsBefore = new ArrayList<>(heights);
-        ArrayList<String> idsBefore = new ArrayList<>(sliceIds);
-        ArrayList<InkRenderer.InkStroke> strokesBefore = new ArrayList<>(strokes);
-        int lastInkedBefore = lastInked;
-        int slicesBefore = heights.size();
-        Set<String> strokeIdsBefore = strokeIdSet();
-        String movedId = sliceIds.get(source);
-        try {
-            float oldOrigin = origin(source);
-            int height = heights.get(source);
-            String id = sliceIds.get(source);
-            Tear cut = cut(source, false);
-            closeGap(source);
-            if (insertAt < 0) {
-                insertAt = 0;
-            }
-            if (insertAt > heights.size()) {
-                insertAt = heights.size();
-            }
-            openGap(insertAt, height, id);
-            float shift = origin(insertAt) - oldOrigin;
-            for (InkRenderer.InkStroke piece : cut.taken) {
-                InkRenderer.InkStroke moved = shiftY(piece, shift);
-                strokes.add(moved);
-                noteStroke(moved);
-            }
-            rewriteLogFromStrokes();
-            trimTail();
-            refreshLastInked();
-            assertReorderPreserved(slicesBefore, strokeIdsBefore, movedId);
-        } catch (Throwable failed) {
-            log = logBefore;
-            heights.clear();
-            heights.addAll(heightsBefore);
-            sliceIds.clear();
-            sliceIds.addAll(idsBefore);
-            strokes.clear();
-            strokes.addAll(strokesBefore);
-            lastInked = lastInkedBefore;
-            if (failed instanceof RuntimeException) {
-                throw (RuntimeException) failed;
-            }
-            throw new IllegalStateException(failed);
-        }
-    }
-
-    /**
      * Same-notebook reorder must not drop a page or a stroke id. trimTail may
      * only remove empty trailing slices that were empty before the reorder too;
      * an inked slice id that was present before must still be present.
+     *
+     * <p>Used by same-paper {@link #tearMoveInsert} (Reorder / place-before spine).
+     * Not on the undo stack — history is stroke edits, not slice order.
      */
     private void assertReorderPreserved(int slicesBefore, Set<String> strokeIdsBefore,
                                         String movedId) {
@@ -659,6 +581,7 @@ public final class NotebookPaper {
      * {@code destination} immediately after {@code afterSlice}.
      * {@code afterSlice == -1} inserts at the top (empty destination).
      * Keeps the source slice id so the page identity survives the move.
+     * Same {@code destination} as {@code this} reorders in place (no undo tear).
      *
      * <p>Atomic for dense pages: destination is rewritten in one pass; on
      * failure both papers are left unchanged.
@@ -672,6 +595,7 @@ public final class NotebookPaper {
      * {@code destination} immediately before {@code beforeSlice}.
      * {@code beforeSlice == 0} makes it the new first page.
      * Keeps the source slice id so the page identity survives the move.
+     * Same {@code destination} as {@code this} reorders in place (no undo tear).
      */
     public Tear tearMoveBefore(int slice, NotebookPaper destination, int beforeSlice) {
         if (destination == null) {
@@ -686,18 +610,27 @@ public final class NotebookPaper {
     /**
      * Tear {@code slice} and insert it at {@code insertAt} on {@code destination}.
      * {@code insertAt == destination.sliceCount()} appends as newest.
+     *
+     * <p>Same paper = in-place reorder (no undo tear). Cross paper = id-preserving
+     * Move. One spine for Reorder and Move place-before.
      */
     private Tear tearMoveInsert(int slice, NotebookPaper destination, int insertAt) {
         if (destination == null) {
             throw new IllegalArgumentException("destination");
         }
-        if (destination == this) {
-            throw new IllegalArgumentException("same paper");
-        }
         if (slice < 0 || slice >= heights.size()) {
             return new Tear();
         }
         if (insertAt < 0 || insertAt > destination.heights.size()) {
+            return new Tear();
+        }
+        if (destination == this) {
+            // insertAt is pre-cut. Already there → no-op (no undo entry).
+            if (insertAt == slice || insertAt == slice + 1) {
+                return new Tear();
+            }
+            int destInsert = slice < insertAt ? insertAt - 1 : insertAt;
+            reorderInPlace(slice, destInsert);
             return new Tear();
         }
         byte[] destLogBefore = Arrays.copyOf(destination.log, destination.log.length);
@@ -763,6 +696,58 @@ public final class NotebookPaper {
         trimTail();
         refreshLastInked();
         return cut;
+    }
+
+    /**
+     * Cut {@code source} and insert it at {@code insertAt} on this paper.
+     * {@code insertAt} is post-{@link #closeGap} index. Rolls back on failure.
+     */
+    private void reorderInPlace(int source, int insertAt) {
+        byte[] logBefore = Arrays.copyOf(log, log.length);
+        ArrayList<Integer> heightsBefore = new ArrayList<>(heights);
+        ArrayList<String> idsBefore = new ArrayList<>(sliceIds);
+        ArrayList<InkRenderer.InkStroke> strokesBefore = new ArrayList<>(strokes);
+        int lastInkedBefore = lastInked;
+        int slicesBefore = heights.size();
+        Set<String> strokeIdsBefore = strokeIdSet();
+        String movedId = sliceIds.get(source);
+        try {
+            float oldOrigin = origin(source);
+            int height = heights.get(source);
+            String id = sliceIds.get(source);
+            Tear cut = cut(source, false);
+            closeGap(source);
+            if (insertAt < 0) {
+                insertAt = 0;
+            }
+            if (insertAt > heights.size()) {
+                insertAt = heights.size();
+            }
+            openGap(insertAt, height, id);
+            float shift = origin(insertAt) - oldOrigin;
+            for (InkRenderer.InkStroke piece : cut.taken) {
+                InkRenderer.InkStroke moved = shiftY(piece, shift);
+                strokes.add(moved);
+                noteStroke(moved);
+            }
+            rewriteLogFromStrokes();
+            trimTail();
+            refreshLastInked();
+            assertReorderPreserved(slicesBefore, strokeIdsBefore, movedId);
+        } catch (Throwable failed) {
+            log = logBefore;
+            heights.clear();
+            heights.addAll(heightsBefore);
+            sliceIds.clear();
+            sliceIds.addAll(idsBefore);
+            strokes.clear();
+            strokes.addAll(strokesBefore);
+            lastInked = lastInkedBefore;
+            if (failed instanceof RuntimeException) {
+                throw (RuntimeException) failed;
+            }
+            throw new IllegalStateException(failed);
+        }
     }
 
     /**
