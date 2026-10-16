@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v102: one Reorder confirm gate; notebook pull delete fold; log omit-fetch.
-        versionCode = 102
-        versionName = "3.81"
+        // Tip v103: one mode clear/cancel; notebookKey + openNotebookOrScratch; reorder source index.
+        versionCode = 103
+        versionName = "3.82"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

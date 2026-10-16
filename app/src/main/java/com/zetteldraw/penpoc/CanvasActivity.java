@@ -878,7 +878,7 @@ public final class CanvasActivity extends Activity {
         collectionId = id;
         syncNav();
         // Snappy path: Ready sheet → same showReady spine as async load.
-        String notebook = SCRATCHPAD.equals(id) ? null : id;
+        String notebook = notebookKey(id);
         if (pageHeight > 0 && repository.isSheetReady(notebook)) {
             List<Board> ready = repository.pages(notebook);
             if (ready != null && !ready.isEmpty()) {
@@ -927,8 +927,7 @@ public final class CanvasActivity extends Activity {
         if (currentPages == null || currentPages.isEmpty()) {
             return false;
         }
-        String notebook = SCRATCHPAD.equals(collectionId) ? null : collectionId;
-        if (repository.isSheetReady(notebook)) {
+        if (repository.isSheetReady(notebookKey(collectionId))) {
             return true;
         }
         // Pre-migration lists have no paper on boards.
@@ -983,7 +982,7 @@ public final class CanvasActivity extends Activity {
         // 0 = not started, > 0 = reading since that uptime, -1 = finished (shown or failed).
         AtomicLong reading = new AtomicLong();
         armDeadline(generation, id, keepScroll, attempt, reading, attempt);
-        String notebook = SCRATCHPAD.equals(id) ? null : id;
+        String notebook = notebookKey(id);
         String name = label(id);
         Executor executor = attempt == 0 ? UiExecutors.loader : UiExecutors.retryLoader;
         boolean first = !firstListShown;
@@ -1580,7 +1579,7 @@ public final class CanvasActivity extends Activity {
         if (slot.page.isBlank()) {
             return;
         }
-        cancelReorder();
+        clearModeSources();
         linkSourceId = slot.page.id;
         linkSourceRef = refOnScreen(slot);
         beginModeChrome();
@@ -1590,10 +1589,10 @@ public final class CanvasActivity extends Activity {
         if (slot.page.isBlank()) {
             return;
         }
-        cancelLinking();
+        clearModeSources();
         reorderSourceId = slot.page.id;
         reorderSourceRef = refOnScreen(slot);
-        reorderSourceNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
+        reorderSourceNotebookId = notebookKey(collectionId);
         beginModeChrome();
     }
 
@@ -1604,12 +1603,18 @@ public final class CanvasActivity extends Activity {
         updateExcludeRects();
     }
 
+    /** Drop Link/Reorder source state — one clear before start or cancel. */
+    private void clearModeSources() {
+        linkSourceId = null;
+        linkSourceRef = null;
+        reorderSourceId = null;
+        reorderSourceRef = null;
+        reorderSourceNotebookId = null;
+    }
+
     private void cancelMode() {
-        if (linkSourceId != null) {
-            cancelLinking();
-        } else {
-            cancelReorder();
-        }
+        clearModeSources();
+        endModeChrome();
     }
 
     private void confirmMode() {
@@ -1622,19 +1627,6 @@ public final class CanvasActivity extends Activity {
 
     private boolean modeActive() {
         return linkSourceId != null || reorderSourceId != null;
-    }
-
-    private void cancelLinking() {
-        linkSourceId = null;
-        linkSourceRef = null;
-        endModeChrome();
-    }
-
-    private void cancelReorder() {
-        reorderSourceId = null;
-        reorderSourceRef = null;
-        reorderSourceNotebookId = null;
-        endModeChrome();
     }
 
     private void endModeChrome() {
@@ -1655,7 +1647,7 @@ public final class CanvasActivity extends Activity {
         }
         repository.createLink(linkSourceId, front.page.id);
         int scroll = effectiveScrollY();
-        cancelLinking();
+        cancelMode();
         reloadPages(scroll);
     }
 
@@ -1669,7 +1661,7 @@ public final class CanvasActivity extends Activity {
         String sourceId = reorderSourceId;
         // Destination is the open collection (snackbar name), not the target
         // page's sheet — that page can be a stale slot from the parent notebook.
-        String destNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
+        String destNotebookId = notebookKey(collectionId);
         // Flush any pending pen-up before the tear. Cross-notebook place holds
         // sheet flushes so these writer tasks cannot persist a source tear
         // before the destination rewrite (see RoomBoardRepository holdFlush).
@@ -1691,7 +1683,7 @@ public final class CanvasActivity extends Activity {
             refreshModeBar();
             return;
         }
-        cancelReorder();
+        cancelMode();
         openAfterReorder(sourceId, destNotebookId);
     }
 
@@ -1710,57 +1702,61 @@ public final class CanvasActivity extends Activity {
         int scroll = 0;
         for (int i = 0; i < pages.size(); i++) {
             if (pages.get(i).id.equals(pageId)) {
-                if (notebookId == null) {
-                    openScratchpad(scroll);
-                } else {
-                    openNotebook(notebookId, scroll);
-                }
+                openNotebookOrScratch(notebookId, scroll);
                 return;
             }
             scroll += heightOf(pages.get(i)) + gap;
         }
+        openNotebookOrScratch(notebookId, effectiveScrollY());
+    }
+
+    /** Scratchpad when {@code notebookId == null}; else that notebook. */
+    private void openNotebookOrScratch(String notebookId, Integer keepScroll) {
         if (notebookId == null) {
-            openScratchpad(effectiveScrollY());
+            openScratchpad(keepScroll);
         } else {
-            openNotebook(notebookId, effectiveScrollY());
+            openNotebook(notebookId, keepScroll);
         }
     }
 
+    /** UI collection id → Room notebook id ({@code null} = Scratchpad). */
+    private static String notebookKey(String collectionOrId) {
+        return SCRATCHPAD.equals(collectionOrId) ? null : collectionOrId;
+    }
+
     private boolean sameNotebookForReorder(PageSlot target) {
-        String targetNotebook = SCRATCHPAD.equals(collectionId) ? null : collectionId;
-        return java.util.Objects.equals(targetNotebook, reorderSourceNotebookId);
+        return java.util.Objects.equals(notebookKey(collectionId), reorderSourceNotebookId);
+    }
+
+    /** Slot index of the Reorder source, or −1. */
+    private int reorderSourceIndex() {
+        for (int i = 0; i < slots.size(); i++) {
+            if (slots.get(i).page.id.equals(reorderSourceId)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /** True when source already sits immediately before {@code target} in this list. */
     private boolean isAlreadyBeforeTarget(PageSlot target) {
         int targetIndex = slots.indexOf(target);
-        if (targetIndex < 0) {
-            return false;
-        }
-        int sourceIndex = -1;
-        for (int i = 0; i < slots.size(); i++) {
-            if (slots.get(i).page.id.equals(reorderSourceId)) {
-                sourceIndex = i;
-                break;
-            }
-        }
-        return sourceIndex == targetIndex - 1;
+        return targetIndex > 0 && reorderSourceIndex() == targetIndex - 1;
     }
 
     /** True when source is the last inked page of the open list (already at the end). */
     private boolean isSourceLastInked() {
+        int sourceIndex = reorderSourceIndex();
+        if (sourceIndex < 0) {
+            return false;
+        }
         int lastInked = -1;
-        int sourceIndex = -1;
         for (int i = 0; i < slots.size(); i++) {
-            PageSlot slot = slots.get(i);
-            if (slot.page.id.equals(reorderSourceId)) {
-                sourceIndex = i;
-            }
-            if (!slot.page.isBlank()) {
+            if (!slots.get(i).page.isBlank()) {
                 lastInked = i;
             }
         }
-        return sourceIndex >= 0 && sourceIndex == lastInked;
+        return sourceIndex == lastInked;
     }
 
     /**
@@ -1938,15 +1934,11 @@ public final class CanvasActivity extends Activity {
         for (int i = 0; i < place.index && i < pages.size(); i++) {
             scroll += heightOf(pages.get(i)) + gap;
         }
-        if (place.notebookId == null) {
-            openScratchpad(scroll);
-        } else {
-            openNotebook(place.notebookId, scroll);
-        }
+        openNotebookOrScratch(place.notebookId, scroll);
     }
 
     private List<Board> pagesIn(String id) {
-        return repository.pages(SCRATCHPAD.equals(id) ? null : id);
+        return repository.pages(notebookKey(id));
     }
 
     private void onScrolled(int scrollY) {
@@ -2105,8 +2097,7 @@ public final class CanvasActivity extends Activity {
             reloadPages(effectiveScrollY());
             return;
         }
-        cancelLinking();
-        cancelReorder();
+        cancelMode();
         hideLassoMenu();
         showNotebookHierarchyMenu(slot.moveButton, drawingArea, null, true, slot,
                 notebookId -> movePageToNotebook(live.id, notebookId));
@@ -2984,7 +2975,7 @@ public final class CanvasActivity extends Activity {
         // Underline only the open notebook (leaf), not its ancestors. Trail still
         // opens child bars; ancestry chrome made parent+child look like one sheet
         // (Dating selected ⇒ Stacey also underlined while pages had not switched).
-        String open = SCRATCHPAD.equals(collectionId) ? null : collectionId;
+        String open = notebookKey(collectionId);
         for (NotebookTab tab : notebookTabs) {
             tab.setCurrent(open != null && tab.id.equals(open));
         }
