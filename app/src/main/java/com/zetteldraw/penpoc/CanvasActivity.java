@@ -1965,7 +1965,7 @@ public final class CanvasActivity extends Activity {
             } else {
                 wipe(slot);
             }
-        });
+        }, true);
         showOverlay(box, pageAnchoredLp(slot.moreButton, box), drawingArea);
     }
 
@@ -2277,22 +2277,9 @@ public final class CanvasActivity extends Activity {
             }
             return false;
         });
-        // Keep inline: empty name must leave the form open (helper would dismiss first).
-        LinearLayout actions = new LinearLayout(this);
-        actions.setGravity(Gravity.END);
-        Button cancel = tinyButton(getString(R.string.cancel), 15);
-        onTap(cancel, v -> dismissOverlay());
-        Button ok = tinyButton(getString(id == null ? R.string.create : R.string.save), 15);
-        styleButton(ok, true);
-        onTap(ok, v -> submit.run());
-        actions.addView(cancel, wrap());
-        LinearLayout.LayoutParams okLp = wrap();
-        okLp.leftMargin = dp(8);
-        actions.addView(ok, okLp);
-        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        actionsLp.topMargin = dp(8);
-        form.addView(actions, actionsLp);
+        // Empty name must leave the form open — confirm does not dismiss first.
+        addCancelConfirmRow(form, getString(id == null ? R.string.create : R.string.save),
+                submit, false);
 
         if (anchor != null) {
             showOverlay(form, anchoredLp(anchor, form), root);
@@ -2330,12 +2317,17 @@ public final class CanvasActivity extends Activity {
             if (opened) {
                 reopenAfterNotebookGone(null);
             }
-        });
+        }, true);
         showOverlay(box, anchoredLp(anchor, box), root);
     }
 
-    /** Cancel + primary confirm row for page/notebook confirm panels. */
-    private void addCancelConfirmRow(LinearLayout box, String confirmLabel, Runnable onConfirm) {
+    /**
+     * Cancel + primary action row. When {@code dismissFirst}, overlay closes before
+     * {@code onConfirm} (wipe/delete). When false, caller validates then dismisses
+     * (name form keeps the form open on empty input).
+     */
+    private void addCancelConfirmRow(LinearLayout box, String confirmLabel, Runnable onConfirm,
+                                     boolean dismissFirst) {
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         Button cancel = tinyButton(getString(R.string.cancel), 15);
@@ -2345,7 +2337,9 @@ public final class CanvasActivity extends Activity {
         confirm.setMinimumHeight(dp(48));
         styleButton(confirm, true);
         onTap(confirm, v -> {
-            dismissOverlay();
+            if (dismissFirst) {
+                dismissOverlay();
+            }
             if (onConfirm != null) {
                 onConfirm.run();
             }

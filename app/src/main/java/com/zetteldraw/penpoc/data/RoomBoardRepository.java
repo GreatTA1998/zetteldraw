@@ -38,6 +38,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 
@@ -946,11 +947,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             row.position = Positions.after(dao.lastNotebookPosition());
             row.createdAt = now;
             row.updatedAt = now;
-            db.runInTransaction(() -> {
-                dao.upsertNotebook(row);
-                queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
-            });
-            scheduleIndex();
+            saveNotebookQueued(row);
             return new NotebookInfo(row.id, row.title, row.parentId);
         }
     }
@@ -968,11 +965,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             row.title = clean;
             row.updatedAt = clock.getAsLong();
-            db.runInTransaction(() -> {
-                dao.upsertNotebook(row);
-                queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
-            });
-            scheduleIndex();
+            saveNotebookQueued(row);
         }
     }
 
@@ -1020,39 +1013,16 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         ArrayList<NotebookLogEntity> logs = new ArrayList<>();
         synchronized (lock) {
             for (OutboxEntry entry : dao.outboxBatch(limit)) {
+                // One pick spine: load row or drop stale outbox; remember queuedAt early
+                // (attach may still drop log/board after disk stage).
                 if (OutboxEntry.NOTEBOOK.equals(entry.entity)) {
-                    NotebookEntity row = dao.notebook(entry.id);
-                    if (row == null) {
-                        dao.deleteOutbox(entry.entity, entry.id);
-                        continue;
-                    }
-                    batch.notebooks.add(row);
-                    batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
+                    takeQueued(entry, dao::notebook, batch.notebooks::add, batch);
                 } else if (OutboxEntry.LOG.equals(entry.entity)) {
-                    NotebookLogEntity row = dao.notebookLog(entry.id);
-                    if (row == null) {
-                        dao.deleteOutbox(entry.entity, entry.id);
-                        continue;
-                    }
-                    logs.add(row);
-                    // queuedAt early — same map as notebook/link; attach may drop the row.
-                    batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
+                    takeQueued(entry, dao::notebookLog, logs::add, batch);
                 } else if (OutboxEntry.LINK.equals(entry.entity)) {
-                    PageLinkEntity row = dao.pageLink(entry.id);
-                    if (row == null) {
-                        dao.deleteOutbox(entry.entity, entry.id);
-                        continue;
-                    }
-                    batch.links.add(row);
-                    batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
+                    takeQueued(entry, dao::pageLink, batch.links::add, batch);
                 } else if (OutboxEntry.BOARD.equals(entry.entity)) {
-                    BoardEntity row = dao.board(entry.id);
-                    if (row == null) {
-                        dao.deleteOutbox(entry.entity, entry.id);
-                        continue;
-                    }
-                    boards.add(row);
-                    batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
+                    takeQueued(entry, dao::board, boards::add, batch);
                 } else {
                     dao.deleteOutbox(entry.entity, entry.id);
                 }
@@ -1110,6 +1080,21 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
         }
         return batch;
+    }
+
+    /**
+     * Outbox pick: load entity or delete the stale row. Remembers {@code queuedAt}
+     * so push results can drop the outbox only when unchanged mid-flight.
+     */
+    private <T> void takeQueued(OutboxEntry entry, Function<String, T> load,
+                                Consumer<T> keep, PushBatch batch) {
+        T row = load.apply(entry.id);
+        if (row == null) {
+            dao.deleteOutbox(entry.entity, entry.id);
+            return;
+        }
+        keep.accept(row);
+        batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
     }
 
     /** Hash-checked pull blob for board or log; null = no body / not in page. */
@@ -1704,11 +1689,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             row.parentId = parentId;
             row.position = Positions.after(dao.lastNotebookPosition());
             row.updatedAt = clock.getAsLong();
-            db.runInTransaction(() -> {
-                dao.upsertNotebook(row);
-                queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
-            });
-            scheduleIndex();
+            saveNotebookQueued(row);
             return true;
         }
     }
@@ -1899,6 +1880,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         lastQueuedAt = Math.max(clock.getAsLong(), lastQueuedAt + 1);
         entry.queuedAt = lastQueuedAt;
         dao.upsertOutbox(entry);
+    }
+
+    /** Upsert notebook row + outbox UPSERT + Documents index. Caller set fields. */
+    private void saveNotebookQueued(NotebookEntity row) {
+        db.runInTransaction(() -> {
+            dao.upsertNotebook(row);
+            queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.UPSERT);
+        });
+        scheduleIndex();
     }
 
     private void setRevLocked(String entity, String id, long rev) {
