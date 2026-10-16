@@ -1402,17 +1402,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     try {
                         for (NotebookEntity remote : page.notebooks) {
                             metaPull.applyRemoteNotebook(remote);
-                        }
-                        for (BoardEntity remote : page.boards) {
-                            metaPull.applyRemoteBoard(remote, staged, refreshed, mirrorOps);
-                        }
-                        for (NotebookLogEntity remote : page.logs) {
-                            sheetStore.applyRemoteLogLocked(remote, stagedLogs, mirrorOps);
-                        }
-                        for (PageLinkEntity remote : page.links) {
-                            metaPull.applyRemoteLink(remote);
-                        }
-                        for (NotebookEntity remote : page.notebooks) {
                             NotebookEntity now = dao.notebook(remote.id);
                             if (now != null && now.deletedAt != null) {
                                 // Pages still filed here (e.g. moved in on this device after the
@@ -1422,6 +1411,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                                 returnPagesToScratchpadLocked(remote.id);
                                 promoteChildrenLocked(remote.id, now.parentId);
                             }
+                        }
+                        for (BoardEntity remote : page.boards) {
+                            metaPull.applyRemoteBoard(remote, staged, refreshed, mirrorOps);
+                        }
+                        for (NotebookLogEntity remote : page.logs) {
+                            sheetStore.applyRemoteLogLocked(remote, stagedLogs, mirrorOps);
+                        }
+                        for (PageLinkEntity remote : page.links) {
+                            metaPull.applyRemoteLink(remote);
                         }
                         SyncState state = dao.syncState();
                         if (state == null) {

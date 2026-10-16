@@ -1581,12 +1581,9 @@ public final class CanvasActivity extends Activity {
             return;
         }
         cancelReorder();
-        hideLassoMenu();
         linkSourceId = slot.page.id;
         linkSourceRef = refOnScreen(slot);
-        modeBar.setVisibility(View.VISIBLE);
-        refreshModeBar();
-        updateExcludeRects();
+        beginModeChrome();
     }
 
     private void startReorder(PageSlot slot) {
@@ -1594,10 +1591,14 @@ public final class CanvasActivity extends Activity {
             return;
         }
         cancelLinking();
-        hideLassoMenu();
         reorderSourceId = slot.page.id;
         reorderSourceRef = refOnScreen(slot);
         reorderSourceNotebookId = SCRATCHPAD.equals(collectionId) ? null : collectionId;
+        beginModeChrome();
+    }
+
+    private void beginModeChrome() {
+        hideLassoMenu();
         modeBar.setVisibility(View.VISIBLE);
         refreshModeBar();
         updateExcludeRects();
@@ -1626,19 +1627,17 @@ public final class CanvasActivity extends Activity {
     private void cancelLinking() {
         linkSourceId = null;
         linkSourceRef = null;
-        if (!modeActive()) {
-            modeBar.setVisibility(View.GONE);
-            modeConfirm.setVisibility(View.GONE);
-        } else {
-            refreshModeBar();
-        }
-        updateExcludeRects();
+        endModeChrome();
     }
 
     private void cancelReorder() {
         reorderSourceId = null;
         reorderSourceRef = null;
         reorderSourceNotebookId = null;
+        endModeChrome();
+    }
+
+    private void endModeChrome() {
         if (!modeActive()) {
             modeBar.setVisibility(View.GONE);
             modeConfirm.setVisibility(View.GONE);
@@ -1662,21 +1661,8 @@ public final class CanvasActivity extends Activity {
 
     private void confirmReorder() {
         PageSlot target = reorderTargetSlot();
-        if (reorderSourceId == null || target == null || target.page.id.equals(reorderSourceId)) {
-            refreshModeBar();
-            return;
-        }
-        // Slots still show the previous notebook while a load runs. Confirm
-        // would label dest as collectionId but the midline page belongs elsewhere.
-        if (loading()) {
-            refreshModeBar();
-            return;
-        }
-        if (!target.page.isBlank() && sameNotebookForReorder(target) && isAlreadyBeforeTarget(target)) {
-            refreshModeBar();
-            return;
-        }
-        if (target.page.isBlank() && sameNotebookForReorder(target) && isSourceLastInked()) {
+        // Blocked while loading: slots can still show the previous notebook.
+        if (reorderSourceId == null || reorderConfirmBlocked(target)) {
             refreshModeBar();
             return;
         }
@@ -1851,18 +1837,7 @@ public final class CanvasActivity extends Activity {
         }
         if (reorderSourceId != null && reorderSourceRef != null) {
             PageSlot target = reorderTargetSlot();
-            if (loading()) {
-                modeText.setText(getString(R.string.reordering, reorderSourceRef));
-                setModeConfirmEnabled(false);
-            } else if (target == null || target.page.id.equals(reorderSourceId)) {
-                modeText.setText(getString(R.string.reordering, reorderSourceRef));
-                setModeConfirmEnabled(false);
-            } else if (!target.page.isBlank() && sameNotebookForReorder(target)
-                    && isAlreadyBeforeTarget(target)) {
-                modeText.setText(getString(R.string.reordering, reorderSourceRef));
-                setModeConfirmEnabled(false);
-            } else if (target.page.isBlank() && sameNotebookForReorder(target)
-                    && isSourceLastInked()) {
+            if (reorderConfirmBlocked(target)) {
                 modeText.setText(getString(R.string.reordering, reorderSourceRef));
                 setModeConfirmEnabled(false);
             } else if (target.page.isBlank()) {
@@ -1873,6 +1848,15 @@ public final class CanvasActivity extends Activity {
                 setModeConfirmEnabled(true);
             }
         }
+    }
+
+    /** Same gate for mode-bar Confirm and {@link #confirmReorder}. */
+    private boolean reorderConfirmBlocked(PageSlot target) {
+        return loading()
+                || target == null
+                || target.page.id.equals(reorderSourceId)
+                || (!target.page.isBlank() && sameNotebookForReorder(target) && isAlreadyBeforeTarget(target))
+                || (target.page.isBlank() && sameNotebookForReorder(target) && isSourceLastInked());
     }
 
     /**

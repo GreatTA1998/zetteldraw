@@ -218,18 +218,22 @@ public final class SyncEngine {
         }
     }
 
-    /** Pull JSON omits large Base64 blobs; fetch board + log hashes raw before applyPull. */
+    /**
+     * Pull JSON omits large Base64 blobs. Skip getBlob when local log hash already
+     * matches (applyPull meta-only omit for logs). Boards still always fetch when absent.
+     */
     private void fetchMissingBlobs(SyncStore.PullPage page) throws IOException {
         for (NotebookLogEntity log : page.logs) {
-            ensureBlob(page.blobs, log.inkHash, log.deletedAt);
+            ensureBlob(page.blobs, log.inkHash, log.deletedAt, store.localInkLogHash(log.id));
         }
         for (BoardEntity board : page.boards) {
-            ensureBlob(page.blobs, board.inkHash, board.deletedAt);
+            ensureBlob(page.blobs, board.inkHash, board.deletedAt, null);
         }
     }
 
-    private void ensureBlob(Map<String, byte[]> blobs, String hash, Long deletedAt) throws IOException {
-        if (hash == null || deletedAt != null || blobs.containsKey(hash)) {
+    private void ensureBlob(Map<String, byte[]> blobs, String hash, Long deletedAt, String localHash)
+            throws IOException {
+        if (hash == null || deletedAt != null || blobs.containsKey(hash) || hash.equals(localHash)) {
             return;
         }
         blobs.put(hash, client.getBlob(hash));
