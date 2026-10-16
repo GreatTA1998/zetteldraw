@@ -1580,14 +1580,6 @@ public final class CanvasActivity extends Activity {
         lassoMenu.setLayoutParams(lp);
     }
 
-    private void startLinking(PageSlot slot) {
-        startMode(slot, false);
-    }
-
-    private void startReorder(PageSlot slot) {
-        startMode(slot, true);
-    }
-
     /** Link or Reorder: one clear + source capture + chrome. */
     private void startMode(PageSlot slot, boolean reorder) {
         if (slot.page.isBlank()) {
@@ -2074,7 +2066,7 @@ public final class CanvasActivity extends Activity {
     private void showMoveMenu(PageSlot slot) {
         // Reseat by id before enabling the menu — stale sliceIndex can make a
         // blank/orphaned chrome look inked (or the reverse) after prior Moves.
-        Board live = livePageById(slot.page.id);
+        Board live = livePageIn(notebookKey(collectionId), slot.page.id);
         if (live == null || live.isBlank()) {
             showHint(getString(R.string.move_failed), true);
             reloadPages(effectiveScrollY());
@@ -2224,42 +2216,21 @@ public final class CanvasActivity extends Activity {
      * from Ready, then {@link BoardRepository#movePageToNotebook} (same
      * {@code placePageBefore} spine as Reorder Confirm — slice id + dest-first).
      */
-    private void movePageToNotebook(PageSlot slot, String targetNotebookId) {
-        if (slot == null || slot.page == null) {
-            return;
-        }
-        movePageToNotebook(slot.page.id, targetNotebookId);
-    }
-
     private void movePageToNotebook(String pageId, String targetNotebookId) {
         if (pageId == null || targetNotebookId == null) {
             return;
         }
-        Board live = livePageById(pageId);
-        if (live == null || live.isBlank()) {
-            LaunchLog.mark("Move menu refused: source missing/blank after reseat " + pageId);
-            showHint(getString(R.string.move_failed), true);
-            reloadPages(effectiveScrollY());
-            return;
+        Board live = livePageIn(notebookKey(collectionId), pageId);
+        boolean ok = live != null && !live.isBlank();
+        if (ok) {
+            repository.saveInk(live);
+            ok = repository.movePageToNotebook(pageId, targetNotebookId);
         }
-        repository.saveInk(live);
-        if (!repository.movePageToNotebook(pageId, targetNotebookId)) {
+        if (!ok) {
             LaunchLog.mark("Move menu refused for " + targetNotebookId + " page=" + pageId);
             showHint(getString(R.string.move_failed), true);
-            reloadPages(effectiveScrollY());
-            return;
         }
         reloadPages(effectiveScrollY());
-    }
-
-    /**
-     * Current Ready board for {@code pageId} in the open collection, or null
-     * when the id is gone (already moved / orphaned chrome). Re-reads via
-     * {@link #pagesIn} so sliceIndex / paper match the open sheet, not a
-     * stale {@link PageSlot} captured when the hierarchy menu opened.
-     */
-    private Board livePageById(String pageId) {
-        return livePageIn(notebookKey(collectionId), pageId);
     }
 
     /** Board with {@code pageId} in notebook {@code notebookKey} ({@code null} = Scratchpad). */
@@ -2303,25 +2274,18 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Create ({@code id == null}) or rename a notebook. With an {@code anchor}
-     * in the top bar the form hangs under it.
+     * Create / rename. When {@code moveAfter} is set (Move → + New notebook),
+     * the page is filed into the created notebook instead of opening it empty.
+     * {@code parentId} null = top-level; omit {@code moveAfter} for create/rename only.
      */
     private void showNameForm(String id, View anchor) {
         showNameForm(id, anchor, null, null);
     }
 
-    /**
-     * Create ({@code id == null}) or rename a notebook. {@code parentId} is
-     * the parent of a notebook created from a child bar; null is top-level.
-     */
     private void showNameForm(String id, View anchor, String parentId) {
         showNameForm(id, anchor, parentId, null);
     }
 
-    /**
-     * Create / rename. When {@code moveAfter} is set (Move → + New notebook),
-     * the page is filed into the created notebook instead of opening it empty.
-     */
     private void showNameForm(String id, View anchor, String parentId, PageSlot moveAfter) {
         LinearLayout form = panel();
         form.addView(panelText(getString(id == null ? R.string.new_notebook : R.string.rename_notebook), 15));
@@ -2356,8 +2320,8 @@ public final class CanvasActivity extends Activity {
             rebuildNotebookTabs();
             if (created == null) {
                 syncNav();
-            } else if (moveAfter != null) {
-                movePageToNotebook(moveAfter, created.id);
+            } else if (moveAfter != null && moveAfter.page != null) {
+                movePageToNotebook(moveAfter.page.id, created.id);
             } else {
                 openNotebook(created.id);
             }
@@ -3168,8 +3132,8 @@ public final class CanvasActivity extends Activity {
             moreButton.setIncludeFontPadding(false);
             moreButton.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
             moreButton.setContentDescription(getString(R.string.page_options));
-            onTap(linkButton, v -> startLinking(this));
-            onTap(reorderButton, v -> startReorder(this));
+            onTap(linkButton, v -> startMode(this, false));
+            onTap(reorderButton, v -> startMode(this, true));
             onTap(moveButton, v -> showMoveMenu(this));
             onTap(moreButton, v -> showPageMenu(this));
 

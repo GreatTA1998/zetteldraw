@@ -152,14 +152,9 @@ public final class SyncClient {
             conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
             conn.setRequestProperty("Accept", "application/octet-stream");
             int code = conn.getResponseCode();
-            if (code == 401 || code == 403) {
-                throw new Unauthorized();
-            }
-            if (code == 409) {
-                throw new SchemaMismatch(-1);
-            }
             if (code < 200 || code >= 300) {
                 String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
+                throwIfAuthOrSchema(code, text);
                 throw new IOException("GET /sync/blob/" + hash + " -> " + code + ": " + text);
             }
             try (InputStream in = conn.getInputStream()) {

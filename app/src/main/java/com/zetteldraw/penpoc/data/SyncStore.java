@@ -47,6 +47,11 @@ public interface SyncStore {
         return "";
     }
 
+    /** Room board {@code ink_hash}, or empty — omit-fetch when it matches remote. */
+    default String localBoardInkHash(String boardId) {
+        return "";
+    }
+
     void markSynced(long now);
 
     int outboxSize();

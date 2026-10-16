@@ -1238,6 +1238,17 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return sheetStore.localInkLogHash(sheetId);
     }
 
+    @Override
+    public String localBoardInkHash(String boardId) {
+        if (boardId == null) {
+            return "";
+        }
+        synchronized (lock) {
+            BoardEntity row = dao.board(boardId);
+            return row == null || row.inkHash == null ? "" : row.inkHash;
+        }
+    }
+
     /**
      * Blobs are verified, decoded and staged (fsync'd) before the lock is
      * taken; under the lock each applied board only renames its staged file.

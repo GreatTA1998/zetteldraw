@@ -64,42 +64,35 @@ public final class InkLogSync {
         int adopted = 0;
         for (int i = 0; i < heads.length(); i++) {
             JSONObject head;
+            NotebookLogEntity remote;
             try {
                 head = heads.getJSONObject(i);
+                remote = SyncProtocol.logFrom(head);
             } catch (JSONException e) {
                 throw new IOException("bad log-heads row", e);
             }
-            String id = head.optString("id", "");
-            String hash = head.optString("ink_hash", "");
-            long remoteBytes = head.optLong("ink_bytes", -1L);
-            if (id.isEmpty() || hash.isEmpty() || remoteBytes < 0) {
+            if (remote.id == null || remote.id.isEmpty()
+                    || remote.inkHash == null || remote.inkHash.isEmpty()
+                    || remote.inkBytes < 0) {
                 continue;
             }
-            long localBytes = store.localInkLogBytes(id);
-            String localHash = store.localInkLogHash(id);
-            boolean sameHash = hash.equals(localHash);
-            if (remoteBytes < localBytes || (remoteBytes == localBytes && sameHash)) {
+            long localBytes = store.localInkLogBytes(remote.id);
+            String localHash = store.localInkLogHash(remote.id);
+            boolean sameHash = remote.inkHash.equals(localHash);
+            if (remote.inkBytes < localBytes || (remote.inkBytes == localBytes && sameHash)) {
                 continue;
             }
-            LaunchLog.mark("length sync longer log " + id
-                    + " remoteBytes=" + remoteBytes + " localBytes=" + localBytes
+            LaunchLog.mark("length sync longer log " + remote.id
+                    + " remoteBytes=" + remote.inkBytes + " localBytes=" + localBytes
                     + " hashMatch=" + sameHash);
             // SyncClient.getBlob already hash-checks; empty body is a mismatch too.
-            byte[] bytes = client.getBlob(hash);
-            NotebookLogEntity remote = new NotebookLogEntity();
-            remote.id = id;
-            remote.notebookId = optNullString(head, "notebook_id");
-            remote.inkHash = hash;
-            remote.inkBytes = remoteBytes;
-            remote.sliceHeight = head.optInt("slice_height", 0);
-            remote.createdAt = head.optLong("created_at", 0L);
-            remote.updatedAt = head.optLong("updated_at", 0L);
-            remote.rev = head.optLong("rev", 0L);
+            byte[] bytes = client.getBlob(remote.inkHash);
+            // log-heads are live primaries only (SQL filters deleted/conflict).
             remote.deletedAt = null;
             remote.conflictOf = null;
             SyncStore.PullPage page = new SyncStore.PullPage();
             page.logs.add(remote);
-            page.blobs.put(hash, bytes);
+            page.blobs.put(remote.inkHash, bytes);
             page.cursor = store.pullCursor();
             page.hasMore = false;
             store.applyPull(page);
@@ -109,13 +102,5 @@ public final class InkLogSync {
             LaunchLog.mark("length sync adopted " + adopted + " longer log(s)");
         }
         return adopted;
-    }
-
-    private static String optNullString(JSONObject o, String key) {
-        if (o.isNull(key)) {
-            return null;
-        }
-        String v = o.optString(key, "");
-        return v.isEmpty() ? null : v;
     }
 }

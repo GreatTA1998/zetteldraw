@@ -165,7 +165,8 @@ final class SyncProtocol {
                 .put("deleted_at", orNull(log.deletedAt));
     }
 
-    private static NotebookLogEntity logFrom(JSONObject j) throws JSONException {
+    /** Pull row or log-heads row → entity (missing deleted_at / conflict_of ⇒ null). */
+    static NotebookLogEntity logFrom(JSONObject j) throws JSONException {
         NotebookLogEntity log = new NotebookLogEntity();
         log.id = j.getString("id");
         log.notebookId = optString(j, "notebook_id");
