@@ -2289,16 +2289,9 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Cross-notebook append Move (menu path). Places before the dest trailing
-     * blank via {@code placePageBefore} so page id + holdFlush / dest-id (v63+)
-     * stay intact — not the legacy append tear that dropped the slice id.
-     *
-     * <p>Always reseats the source from the current Ready projection by page
-     * id (never trust a stale {@link PageSlot} alone), and {@code ensureSheet}s
-     * the destination before reading its trailing blank. A log-backed dest that
-     * was never opened this session used to make {@code pages(dest)} return
-     * {@code []} and this method returned with no feedback — Elton's
-     * "Move does nothing until I visit other notebooks" class of bug.
+     * Cross-notebook append Move (menu path). Reseats the source by page id
+     * from Ready, then {@link BoardRepository#movePageToNotebook} (same
+     * {@code placePageBefore} spine as Reorder Confirm — slice id + dest-first).
      */
     private void movePageToNotebook(PageSlot slot, String targetNotebookId) {
         if (slot == null || slot.page == null) {
@@ -2312,32 +2305,15 @@ public final class CanvasActivity extends Activity {
             return;
         }
         Board live = livePageById(pageId);
-        if (live == null) {
-            LaunchLog.mark("Move menu refused: page id missing from Ready paper " + pageId);
-            showHint(getString(R.string.move_failed), true);
-            reloadPages(effectiveScrollY());
-            return;
-        }
-        if (live.isBlank()) {
-            LaunchLog.mark("Move menu refused: source blank after reseat " + pageId);
+        if (live == null || live.isBlank()) {
+            LaunchLog.mark("Move menu refused: source missing/blank after reseat " + pageId);
             showHint(getString(R.string.move_failed), true);
             reloadPages(effectiveScrollY());
             return;
         }
         repository.saveInk(live);
-        if (pageHeight > 0) {
-            repository.ensureSheet(targetNotebookId, pageHeight, legacyPageHeight, shortPagesSince);
-        }
-        List<Board> destPages = repository.pages(targetNotebookId);
-        if (destPages.isEmpty()) {
-            LaunchLog.mark("Move menu refused: dest pages empty after ensure " + targetNotebookId);
-            showHint(getString(R.string.move_failed), true);
-            return;
-        }
-        Board trailing = destPages.get(destPages.size() - 1);
-        if (!repository.placePageBefore(pageId, trailing.id, targetNotebookId)) {
-            LaunchLog.mark("Move menu place-before refused for " + targetNotebookId
-                    + " page=" + pageId);
+        if (!repository.movePageToNotebook(pageId, targetNotebookId)) {
+            LaunchLog.mark("Move menu refused for " + targetNotebookId + " page=" + pageId);
             showHint(getString(R.string.move_failed), true);
             reloadPages(effectiveScrollY());
             return;

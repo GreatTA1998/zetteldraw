@@ -66,7 +66,8 @@ public class MovePageTearTest {
         Board inked = inkNearBottom(null, "mark");
         assertEquals(0, inked.paper.lastInkedSlice());
 
-        repo.movePageToNotebook(inked.id, doodles);
+        String pageId = inked.id;
+        assertTrue(repo.movePageToNotebook(pageId, doodles));
 
         List<Board> scratch = repo.scratchpadPages();
         assertEquals(1, scratch.size());
@@ -77,6 +78,8 @@ public class MovePageTearTest {
         assertEquals("inked page plus trailing blank", 2, pages.size());
         assertFalse(pages.get(0).isBlank());
         assertTrue(pages.get(1).isBlank());
+        assertEquals("placePageBefore spine keeps slice id (links stay valid)",
+                pageId, pages.get(0).id);
         assertNotNull(pages.get(0).paper.stroke("mark"));
         assertEquals("open lands on the moved page", 0, pages.get(0).paper.lastInkedSlice());
         assertEquals(0, openScrollIndex(pages));

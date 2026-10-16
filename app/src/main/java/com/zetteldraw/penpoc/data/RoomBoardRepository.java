@@ -48,7 +48,8 @@ import java.util.function.LongSupplier;
  * <p>Ink-log <em>open / remote apply / length / disk write</em> live in
  * {@link InkSheetStore} (+ {@link InkLogApply}). Notebook / link / legacy
  * board pull LWW lives in {@link MetaPullApply}. This class keeps board
- * projection, Move/tear orchestration, and pull orchestration.
+ * projection, <em>one</em> Move spine ({@link #placePageBefore}), and pull
+ * orchestration.
  *
  * <p>Ink saves are write-behind. {@link #saveInk} takes an immutable snapshot
  * of the page's strokes and returns; one serialized writer thread encodes it,
@@ -806,8 +807,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return sheetId;
     }
 
+    /**
+     * Cross-notebook Move for callers that only know the dest notebook id.
+     * Log-backed pages go through {@link #placePageBefore} (same spine as the
+     * UI Move menu) so slice id + dest-first persist stay intact — not the
+     * old append-{@code tearMove} path that dropped the id and tombstoned links.
+     */
     @Override
-    public void movePageToNotebook(String boardId, String notebookId) {
+    public boolean movePageToNotebook(String boardId, String notebookId) {
         Board moving;
         synchronized (lock) {
             moving = cache.get(boardId);
@@ -816,49 +823,25 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (knownPageHeight > 0) {
                 ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
             }
-            synchronized (lock) {
-                InkSheetStore.OpenSheet dest = sheetStore.get(NotebookPaper.sheetId(notebookId));
-                int sourceIndex = moving.paper.indexOfSliceId(boardId);
-                if (dest != null && dest.ready && sourceIndex >= 0
-                        && moving.paper.containsInk(sourceIndex)) {
-                    int destStrokes = dest.paper.strokes().size();
-                    try {
-                        moving.paper.tearMove(sourceIndex, dest.paper);
-                    } catch (RuntimeException e) {
-                        // tearMove puts the ink back on the source when the
-                        // destination append fails; do not flush a half-move.
-                        Log.e(TAG, "move page failed; left both notebooks unchanged", e);
-                        LaunchLog.mark("tearMove failed; both notebooks unchanged: " + e.getMessage());
-                        return;
-                    }
-                    if (dest.paper.strokes().size() < destStrokes) {
-                        LaunchLog.mark("tearMove postflight: dest shrank; refusing disk commit");
-                        Log.e(TAG, "tearMove postflight failed; not persisting");
-                        return;
-                    }
-                    // The slice id does not survive append-style move, so a link would name a missing page.
-                    tombstoneLinksTouchingLocked(boardId);
-                    // Destination first: only flush source after dest write succeeds.
-                    String destSheetId = NotebookPaper.sheetId(notebookId);
-                    String sourceSheetId = moving.sheetId;
-                    sheetStore.holdSheetFlush(sourceSheetId);
-                    sheetStore.holdSheetFlush(destSheetId);
-                    writer.execute(() -> persistCrossNotebookAppend(destSheetId, sourceSheetId));
-                }
+            List<Board> destPages = pages(notebookId);
+            if (destPages.isEmpty()) {
+                LaunchLog.mark("movePageToNotebook refused: dest empty after ensure " + notebookId);
+                return false;
             }
-            return;
+            Board trailing = destPages.get(destPages.size() - 1);
+            return placePageBefore(boardId, trailing.id, notebookId);
         }
         synchronized (lock) {
             NotebookEntity target = dao.notebook(notebookId);
             if (target == null || target.deletedAt != null) {
-                return;
+                return false;
             }
             BoardEntity row = dao.board(boardId);
             String source;
             if (row == null) {
                 String key = listOfBlankLocked(boardId);
                 if (key == null) {
-                    return;
+                    return false;
                 }
                 Board blank = trailingBlanks.remove(key);
                 source = notebookOfKey(key);
@@ -881,6 +864,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             ensureTrailingBlankLocked(source);
             ensureTrailingBlankLocked(notebookId);
             scheduleIndex();
+            return true;
         }
     }
 
@@ -2327,22 +2311,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             pages.add(blank);
         }
         return pages;
-    }
-
-    /** Append-style cross-notebook move: dest flush, then source tear flush. */
-    private void persistCrossNotebookAppend(String destSheetId, String sourceSheetId) {
-        // Holds blocked incidental flushes; release dest first so this flush can run.
-        sheetStore.releaseSheetFlush(destSheetId);
-        if (!sheetStore.flushSheetOrFalse(destSheetId)) {
-            LaunchLog.mark("tearMove dest flush failed; source not torn on disk");
-            Log.e(TAG, "tearMove dest flush failed; source not torn on disk");
-            sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
-            sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
-            sheetStore.releaseSheetFlush(sourceSheetId);
-            return;
-        }
-        sheetStore.releaseSheetFlush(sourceSheetId);
-        sheetStore.flushSheet(sourceSheetId);
     }
 
     private void mirrorLog(String sheetId, byte[] bytes) {

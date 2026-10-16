@@ -1,6 +1,8 @@
 # Ink SoT rewrite
 
-Tip **v89 / 3.68** — meta pull LWW (notebook / link / legacy board + conflict shelf) lives in `MetaPullApply`. Ink-log open / apply / length / disk write stay in `InkSheetStore`.
+Tip **v90 / 3.69** — one Move spine: `movePageToNotebook` delegates to `placePageBefore` (id-preserving dest-first). Deleted dual append-`tearMove` persist path.
+
+**v89 / 3.68** — meta pull LWW (notebook / link / legacy board + conflict shelf) lives in `MetaPullApply`. Ink-log open / apply / length / disk write stay in `InkSheetStore`.
 
 **v88 / 3.67** — Move ensureSheet for never-opened dest notebooks.
 
@@ -22,4 +24,4 @@ Tip **v89 / 3.68** — meta pull LWW (notebook / link / legacy board + conflict 
 
 open → Apply → disk write → length sync — all in `InkSheetStore`.  
 Meta pull (notebook / link / legacy `.zdi` board) → `MetaPullApply`.  
-Repo keeps projection + Move/tear + pull orchestration.
+Repo keeps projection + **one** Move spine (`placePageBefore`) + pull orchestration.

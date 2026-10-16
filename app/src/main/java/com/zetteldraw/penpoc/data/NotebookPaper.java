@@ -619,8 +619,11 @@ public final class NotebookPaper {
     }
 
     /**
-     * The inside of the slice, already shifted so it lands as one piece at
-     * the bottom of {@code destination}. The source then closes the gap.
+     * Append-style tear: shifts ink to the bottom of {@code destination}, then
+     * closes the source gap. Does <em>not</em> keep the source slice id.
+     * Repository Move uses {@link #tearMoveBefore}/{@link #tearMoveAfter}
+     * via {@code placePageBefore} instead (id-preserving). Kept for paper
+     * unit tests of dense append rollback.
      *
      * <p>Atomic for dense pages: the destination receives every taken stroke
      * in one log append before the source gap closes. If that append throws
