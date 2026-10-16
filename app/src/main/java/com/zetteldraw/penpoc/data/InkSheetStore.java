@@ -459,7 +459,6 @@ public final class InkSheetStore {
             LaunchLog.mark("ink log rewrite failed " + sheetId + ": " + e.getMessage());
             return false;
         }
-        String hash = InkFileStore.sha256(all);
         synchronized (deps.lock()) {
             OpenSheet open = sheets.get(sheetId);
             if (open == null) {
@@ -479,24 +478,8 @@ public final class InkSheetStore {
                 return true;
             }
             open.flushed = all.length;
-            NotebookLogEntity row = deps.dao().notebookLog(sheetId);
-            if (row == null) {
-                row = new NotebookLogEntity();
-                row.id = sheetId;
-                row.notebookId = open.notebookId;
-                row.createdAt = deps.clock().getAsLong();
-            }
-            row.inkHash = hash;
-            row.inkBytes = all.length;
-            row.sliceHeight = open.paper.sliceHeight;
-            row.updatedAt = Math.max(row.updatedAt, deps.clock().getAsLong());
-            row.deletedAt = null;
-            row.conflictOf = null;
-            NotebookLogEntity stored = row;
-            deps.db().runInTransaction(() -> {
-                deps.dao().upsertNotebookLog(stored);
-                deps.queueLogUpsert(stored.id);
-            });
+            // One post-write spine: meta via ensureNotebookLogMetaLocked, then mirror + local-edit.
+            ensureNotebookLogMetaLocked(open, all, true);
             deps.mirrorLog(sheetId, all);
             deps.noteLocalSheetEdit(sheetId);
         }
@@ -582,26 +565,11 @@ public final class InkSheetStore {
             }
             open.flushed = Math.max(open.flushed, flushed);
             NotebookLogEntity row = deps.dao().notebookLog(sheetId);
-            if (row == null || java.util.Objects.equals(row.inkHash, hash)) {
-                if (row != null) {
-                    return true;
-                }
-                row = new NotebookLogEntity();
-                row.id = sheetId;
-                row.notebookId = open.notebookId;
-                row.createdAt = deps.clock().getAsLong();
+            // Append already on disk; skip Room/outbox/mirror when meta already matches.
+            if (row != null && java.util.Objects.equals(row.inkHash, hash)) {
+                return true;
             }
-            row.inkHash = hash;
-            row.inkBytes = all.length;
-            row.sliceHeight = open.paper.sliceHeight;
-            row.updatedAt = Math.max(row.updatedAt, deps.clock().getAsLong());
-            row.deletedAt = null;
-            row.conflictOf = null;
-            NotebookLogEntity stored = row;
-            deps.db().runInTransaction(() -> {
-                deps.dao().upsertNotebookLog(stored);
-                deps.queueLogUpsert(stored.id);
-            });
+            ensureNotebookLogMetaLocked(open, all, true);
             deps.mirrorLog(sheetId, all);
             deps.noteLocalSheetEdit(sheetId);
         }
