@@ -326,7 +326,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     continue;
                 }
             }
-            byte[] bytes = readInkQuietly(row.id);
+            byte[] bytes = readQuietly(row.id, false);
             if (bytes == null) {
                 continue;
             }
@@ -1072,13 +1072,13 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         ArrayList<NotebookLogEntity> logsKept = new ArrayList<>();
         for (NotebookLogEntity row : logs) {
             if (stagePushBlob(row.id, row.inkHash, row.deletedAt, ink.logFile(row.id),
-                    haveLarge, smallBlobs, largeBlobs, this::readLogQuietly)) {
+                    haveLarge, smallBlobs, largeBlobs, id -> readQuietly(id, true))) {
                 logsKept.add(row);
             }
         }
         for (BoardEntity row : boards) {
             if (stagePushBlob(row.id, row.inkHash, row.deletedAt, ink.fileFor(row.id),
-                    haveLarge, smallBlobs, largeBlobs, this::readInkQuietly)) {
+                    haveLarge, smallBlobs, largeBlobs, id -> readQuietly(id, false))) {
                 boardsKept.add(row);
             }
         }
@@ -1395,20 +1395,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                                  Map<String, List<InkRenderer.InkStroke>> refreshed,
                                  Map<String, Long> editsSeen, Map<String, Board> boardsSeen) throws IOException {
         synchronized (lock) {
-            for (BoardEntity remote : page.boards) {
-                if (remote.inkHash == null || remote.deletedAt != null || page.blobs.containsKey(remote.inkHash)) continue;
-                BoardEntity local = dao.board(remote.id);
-                if (local == null || !remote.inkHash.equals(local.inkHash)) {
-                    throw new IOException("pull page is missing ink " + remote.inkHash);
-                }
-            }
-            for (NotebookLogEntity remote : page.logs) {
-                if (remote.inkHash == null || remote.deletedAt != null || page.blobs.containsKey(remote.inkHash)) continue;
-                NotebookLogEntity local = dao.notebookLog(remote.id);
-                if (local == null || !remote.inkHash.equals(local.inkHash)) {
-                    throw new IOException("pull page is missing ink log " + remote.inkHash);
-                }
-            }
+            // Omitted-blob policy lives in MetaPullApply / InkSheetStore (hash match ⇒ keep local).
             ArrayList<Runnable> mirrorOps = new ArrayList<>();
             try {
                 db.runInTransaction(() -> {
@@ -2007,7 +1994,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         Board board = new Board(row.id, row.createdAt);
         if (row.inkHash != null) {
-            byte[] bytes = readInkQuietly(row.id);
+            byte[] bytes = readQuietly(row.id, false);
             if (bytes == null) {
                 LaunchLog.mark("ink file missing for page " + row.id + "; shown blank");
             } else {
@@ -2025,21 +2012,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return board;
     }
 
-    private byte[] readLogQuietly(String sheetId) {
+    /** Null on IO failure — one quiet read for {@code .zdl} / {@code .zdi}. */
+    private byte[] readQuietly(String id, boolean log) {
         try {
-            return ink.readLog(sheetId);
+            return log ? ink.readLog(id) : ink.read(id);
         } catch (IOException e) {
-            Log.e(TAG, "ink log read failed " + sheetId, e);
-            return null;
-        }
-    }
-
-    private byte[] readInkQuietly(String boardId) {
-        try {
-            return ink.read(boardId);
-        } catch (IOException e) {
-            Log.e(TAG, "ink read failed " + boardId, e);
-            LaunchLog.mark("ink read failed for page " + boardId + ": " + e);
+            Log.e(TAG, (log ? "ink log" : "ink") + " read failed " + id, e);
+            if (!log) {
+                LaunchLog.mark("ink read failed for page " + id + ": " + e);
+            }
             return null;
         }
     }
@@ -2160,7 +2141,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             List<InkRenderer.InkStroke> strokes = Collections.emptyList();
             if (row.inkHash != null) {
-                byte[] bytes = readInkQuietly(row.id);
+                byte[] bytes = readQuietly(row.id, false);
                 if (bytes != null) {
                     try {
                         strokes = InkCodec.decode(bytes);

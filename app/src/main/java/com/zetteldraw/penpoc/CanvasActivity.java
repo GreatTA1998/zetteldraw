@@ -1122,16 +1122,10 @@ public final class CanvasActivity extends Activity {
             awaitingLayout = loaded;
             return;
         }
-        show(loaded);
-    }
-
-    private void show(Loaded loaded) {
-        if (loaded.generation != loadGeneration || shownGeneration == loaded.generation) {
+        if (loaded.pages.isEmpty()) {
             return;
         }
-        if (!loaded.ready || loaded.pages.isEmpty()) {
-            return;
-        }
+        // Same Ready paint spine as snappy open / reload / delete.
         showReady(loaded.id, loaded.pages, loaded.keepScroll);
         if (!firstListShown) {
             firstListShown = true;

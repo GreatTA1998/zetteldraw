@@ -285,6 +285,7 @@ public final class InkSheetStore {
         }
 
         boolean conflictCopy = remote.conflictOf != null;
+        // Same omitted-blob rule as MetaPullApply boards: hash match ⇒ local body is SoT.
         boolean hasBody = !conflictCopy && remote.deletedAt == null && remote.inkHash != null;
         byte[] bytes = null;
         NotebookPaper paper = null;
@@ -296,14 +297,17 @@ public final class InkSheetStore {
             bytes = staged == null ? null : staged.bytes;
         } else if (hasBody) {
             StagedLog staged = stagedLogs.remove(remote.id);
-            if (staged == null || staged.bytes == null || staged.paper == null) {
+            if (staged != null && staged.bytes != null && staged.paper != null) {
+                bytes = staged.bytes;
+                paper = staged.paper;
+                localSlices = localReadySliceCountLocked(remote.id, open);
+                diskBytes = localInkLogBytes(remote.id);
+                remoteSlices = paper.sliceCount();
+            } else if (local != null && remote.inkHash.equals(local.inkHash)) {
+                hasBody = false;
+            } else {
                 throw new IOException("bad ink log for " + remote.id);
             }
-            bytes = staged.bytes;
-            paper = staged.paper;
-            localSlices = localReadySliceCountLocked(remote.id, open);
-            diskBytes = localInkLogBytes(remote.id);
-            remoteSlices = paper.sliceCount();
         }
 
         boolean holdFlush = open != null && open.ready && open.holdFlush;

@@ -45,8 +45,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Tip v100: showReady spine for reload/delete; ink-log length/hash without full read.
-        versionCode = 100
-        versionName = "3.79"
+        versionCode = 101
+        versionName = "3.80"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
