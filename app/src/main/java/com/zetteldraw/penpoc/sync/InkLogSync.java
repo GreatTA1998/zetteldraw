@@ -3,7 +3,6 @@ package com.zetteldraw.penpoc.sync;
 import android.util.Log;
 
 import com.zetteldraw.penpoc.LaunchLog;
-import com.zetteldraw.penpoc.data.InkFileStore;
 import com.zetteldraw.penpoc.data.SyncStore;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 
@@ -79,22 +78,14 @@ public final class InkLogSync {
             long localBytes = store.localInkLogBytes(id);
             String localHash = store.localInkLogHash(id);
             boolean sameHash = hash.equals(localHash);
-            if (remoteBytes < localBytes) {
-                continue;
-            }
-            if (remoteBytes == localBytes && sameHash) {
+            if (remoteBytes < localBytes || (remoteBytes == localBytes && sameHash)) {
                 continue;
             }
             LaunchLog.mark("length sync longer log " + id
                     + " remoteBytes=" + remoteBytes + " localBytes=" + localBytes
                     + " hashMatch=" + sameHash);
+            // SyncClient.getBlob already hash-checks; empty body is a mismatch too.
             byte[] bytes = client.getBlob(hash);
-            if (bytes == null || bytes.length == 0) {
-                throw new IOException("missing blob for longer log " + id);
-            }
-            if (!InkFileStore.sha256(bytes).equals(hash)) {
-                throw new IOException("bad blob hash for longer log " + id);
-            }
             NotebookLogEntity remote = new NotebookLogEntity();
             remote.id = id;
             remote.notebookId = optNullString(head, "notebook_id");

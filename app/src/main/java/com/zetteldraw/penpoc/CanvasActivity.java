@@ -1202,9 +1202,8 @@ public final class CanvasActivity extends Activity {
             return;
         }
         ++loadGeneration;
-        String anchor = collectionNav.anchorPageId(pages, targetScrollY, pageLayout());
-        collectionNav.rememberScroll(collectionId, targetScrollY, pages.size(), anchor);
-        showPages(pages, targetScrollY);
+        // Same Ready paint + scroll spine as snappy open / async load.
+        showReady(collectionId, pages, targetScrollY);
     }
 
     private void showPages(List<Board> pages, int targetScrollY) {
@@ -2083,10 +2082,7 @@ public final class CanvasActivity extends Activity {
             target += heightOf(pages.get(i)) + layoutGap(pages);
         }
         ++loadGeneration;
-        int scroll = index < 0 ? effectiveScrollY() : target;
-        String anchor = collectionNav.anchorPageId(pages, scroll, pageLayout());
-        collectionNav.rememberScroll(collectionId, scroll, pages.size(), anchor);
-        showPages(pages, scroll);
+        showReady(collectionId, pages, index < 0 ? effectiveScrollY() : target);
     }
 
     /** The blank page that ends every list: it has nothing to wipe, move or delete. */

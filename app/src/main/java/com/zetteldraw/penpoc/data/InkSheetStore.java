@@ -9,6 +9,7 @@ import com.zetteldraw.penpoc.data.db.OutboxEntry;
 import com.zetteldraw.penpoc.data.db.ZettelDao;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
@@ -416,30 +417,20 @@ public final class InkSheetStore {
         }
     }
 
+    /** On-disk {@code .zdl} length without loading the file (Scratchpad can be multi-MB). */
     long localInkLogBytes(String sheetId) {
-        if (sheetId == null) {
-            return 0L;
-        }
-        try {
-            byte[] existing = deps.ink().readLog(sheetId);
-            return existing == null ? 0L : existing.length;
-        } catch (IOException e) {
-            Log.e(TAG, "local ink log size failed " + sheetId, e);
-            return 0L;
-        }
+        File file = sheetId == null ? null : deps.ink().logFile(sheetId);
+        return file != null && file.isFile() ? file.length() : 0L;
     }
 
     /** Disk hash of the primary {@code .zdl}, or empty when missing/unreadable. */
     public String localInkLogHash(String sheetId) {
-        if (sheetId == null) {
+        File file = sheetId == null ? null : deps.ink().logFile(sheetId);
+        if (file == null || !file.isFile() || file.length() == 0) {
             return "";
         }
         try {
-            byte[] existing = deps.ink().readLog(sheetId);
-            if (existing == null || existing.length == 0) {
-                return "";
-            }
-            return InkFileStore.sha256(existing);
+            return InkFileStore.sha256File(file);
         } catch (IOException e) {
             Log.e(TAG, "local ink log hash failed " + sheetId, e);
             return "";
