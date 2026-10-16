@@ -48,7 +48,7 @@ import java.util.function.LongSupplier;
  * <p>Ink-log <em>open / remote apply / length / disk write</em> live in
  * {@link InkSheetStore} (+ {@link InkLogApply}). Notebook / link / legacy
  * board pull LWW lives in {@link MetaPullApply}. This class keeps board
- * projection, <em>one</em> Move spine ({@link #placePageBefore}), and pull
+ * projection, <em>one</em> Move/Reorder spine ({@link #placePageBefore}), and pull
  * orchestration.
  *
  * <p>Ink saves are write-behind. {@link #saveInk} takes an immutable snapshot
@@ -538,42 +538,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         int now = decoded + decodeIntoCache(Collections.singletonList(rows.get(index)));
         writer.execute(() -> warmNext(rows, index + 1, now, started));
-    }
-
-    @Override
-    public void reorderPageAfter(String boardId, String afterBoardId) {
-        if (boardId == null || afterBoardId == null || boardId.equals(afterBoardId)) {
-            return;
-        }
-        Board moving;
-        Board after;
-        synchronized (lock) {
-            moving = cache.get(boardId);
-            after = cache.get(afterBoardId);
-            if (moving == null || after == null || moving.paper == null || after.paper == null
-                    || moving.paper != after.paper
-                    || !java.util.Objects.equals(moving.sheetId, after.sheetId)) {
-                return;
-            }
-            int sourceIndex = moving.paper.indexOfSliceId(boardId);
-            int afterIndex = after.paper.indexOfSliceId(afterBoardId);
-            if (sourceIndex < 0 || afterIndex < 0
-                    || !moving.paper.containsInk(sourceIndex)
-                    || !after.paper.containsInk(afterIndex)) {
-                return;
-            }
-            String sheetId = moving.sheetId;
-            try {
-                moving.paper.reorderAfter(sourceIndex, afterIndex);
-            } catch (RuntimeException e) {
-                Log.e(TAG, "reorder page failed; left notebook unchanged", e);
-                LaunchLog.mark("reorder failed; notebook left unchanged: " + e.getMessage());
-                return;
-            }
-            syncSliceIndex(moving.paper, boardId);
-            syncSliceIndex(after.paper, afterBoardId);
-            writer.execute(() -> sheetStore.rewriteSheet(sheetId));
-        }
     }
 
     @Override

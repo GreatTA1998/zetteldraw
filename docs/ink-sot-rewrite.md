@@ -1,6 +1,8 @@
 # Ink SoT rewrite
 
-Tip **v90 / 3.69** — one Move spine: `movePageToNotebook` delegates to `placePageBefore` (id-preserving dest-first). Deleted dual append-`tearMove` persist path.
+Tip **v91 / 3.70** — one Reorder spine: deleted dead `reorderPageAfter`; same-notebook Reorder uses `placePageBefore` (UI already did).
+
+**v90 / 3.69** — one Move spine: `movePageToNotebook` delegates to `placePageBefore` (id-preserving dest-first). Deleted dual append-`tearMove` persist path.
 
 **v89 / 3.68** — meta pull LWW (notebook / link / legacy board + conflict shelf) lives in `MetaPullApply`. Ink-log open / apply / length / disk write stay in `InkSheetStore`.
 

@@ -15,13 +15,14 @@ Soft ambition via true simplification: Android main ~6k; server sync ~500–1k. 
 | **v87 sheet disk I/O → store** | `RoomBoardRepository` **2437** (−226); `InkSheetStore` **711** (+239) | Rewrite/flush/hold/reload/hash live in sheet module; Move orchestration stays in repo |
 | **v89 meta pull LWW → MetaPullApply** | `RoomBoardRepository` **2376** (−75 vs v88); `MetaPullApply` **158** | Notebook/link/legacy-board pull LWW + conflict shelf; ink logs stay in `InkSheetStore` |
 | **v90 one Move spine** | repo **2344** (−32); `CanvasActivity` **3534** (−24); net **−50** main (+test lock) | `movePageToNotebook` → `placePageBefore`; deleted dual append-`tearMove` + `persistCrossNotebookAppend` |
+| **v91 one Reorder spine** | repo **2308** (−36); `BoardRepository` **192** (−5); tests **−10**; commit net **−51** (−67/+16) | Deleted dead `reorderPageAfter` dual path; UI Reorder already used `placePageBefore` |
 
 ### Still fat (why)
 
 | File | ~lines | Why |
 | --- | ---: | --- |
 | `CanvasActivity` | ~3534 | Move/Link/chrome + open |
-| `RoomBoardRepository` | ~2344 | One Move spine (`placePageBefore`) + outbox + pull orchestration |
+| `RoomBoardRepository` | ~2308 | One Move/Reorder spine (`placePageBefore`) + outbox + pull orchestration |
 | `PageInkView` | ~2065 | Pen path — leave alone |
 | `InkSheetStore` | ~711 | Open / apply / length / disk write |
 | `MetaPullApply` | ~158 | Meta LWW exception shelf (beside `Lww`) |

@@ -65,17 +65,12 @@ public interface BoardRepository {
     boolean movePageToNotebook(String boardId, String notebookId);
 
     /**
-     * Same-notebook only: place {@code boardId} immediately after
-     * {@code afterBoardId}. No-op when the pages are missing, blank, the same,
-     * or in different notebooks. Dense pages stay atomic (one log rewrite).
-     */
-    void reorderPageAfter(String boardId, String afterBoardId);
-
-    /**
      * Place {@code boardId} immediately before {@code beforeBoardId}.
      * Destination notebook is inferred from the target page's sheet.
      * Prefer {@link #placePageBefore(String, String, String)} with an explicit
      * dest so a stale on-screen target cannot misfile into the wrong notebook.
+     * Same-notebook Reorder and cross-notebook Move share this spine (UI already
+     * did; the old {@code reorderPageAfter} dual path is gone).
      *
      * @return false when nothing changed
      */

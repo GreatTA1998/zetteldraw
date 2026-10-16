@@ -25,8 +25,9 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Same-notebook Reorder places a page after the one on screen. Dense pages
- * rewrite the log once; a failure rolls the paper back.
+ * Same-notebook Reorder uses {@link RoomBoardRepository#placePageBefore} (same
+ * spine as Move Confirm). Dense pages rewrite the log once; a failure rolls
+ * the paper back.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
@@ -56,7 +57,7 @@ public class PageReorderTest {
     }
 
     @Test
-    public void reorderAfterPageTwoOfFourYieldsOneThreeTwoFour() {
+    public void placeBeforePageFourYieldsOneThreeTwoFour() {
         Board p1 = inkNearBottom(notebook, "a");
         Board p2 = inkNearBottom(notebook, "b");
         Board p3 = inkNearBottom(notebook, "c");
@@ -68,8 +69,8 @@ public class PageReorderTest {
         assertEquals(p3.id, before.get(2).id);
         assertEquals(p4.id, before.get(3).id);
 
-        // Place page 2 after page 3 → 1,3,2,4 (+ blank).
-        repo.reorderPageAfter(p2.id, p3.id);
+        // Place page 2 before page 4 (= after page 3) → 1,3,2,4 (+ blank).
+        assertTrue(repo.placePageBefore(p2.id, p4.id));
 
         List<Board> after = repo.pages(notebook);
         assertEquals(5, after.size());
@@ -82,21 +83,6 @@ public class PageReorderTest {
         assertNotNull(after.get(1).paper.stroke("c"));
         assertNotNull(after.get(2).paper.stroke("b"));
         assertNotNull(after.get(3).paper.stroke("d"));
-    }
-
-    @Test
-    public void crossNotebookReorderIsRefused() {
-        String other = repo.createNotebook("other").id;
-        repo.ensureSheet(other, PAGE, PAGE, 0L);
-        Board source = inkNearBottom(notebook, "keep");
-        Board foreign = inkNearBottom(other, "there");
-
-        repo.reorderPageAfter(source.id, foreign.id);
-
-        List<Board> pages = repo.pages(notebook);
-        assertEquals(source.id, pages.get(0).id);
-        assertNotNull(pages.get(0).paper.stroke("keep"));
-        assertEquals(foreign.id, repo.pages(other).get(0).id);
     }
 
     @Test
@@ -165,15 +151,15 @@ public class PageReorderTest {
     }
 
     @Test
-    public void reorderOntoSelfIsNoOp() {
+    public void placeBeforeSelfIsNoOp() {
         Board only = inkNearBottom(notebook, "solo");
-        repo.reorderPageAfter(only.id, only.id);
+        assertFalse(repo.placePageBefore(only.id, only.id));
         assertEquals(only.id, repo.pages(notebook).get(0).id);
         assertNotNull(repo.pages(notebook).get(0).paper.stroke("solo"));
     }
 
     @Test
-    public void densePageReorderKeepsEveryStroke() throws Exception {
+    public void densePlaceBeforeTrailingKeepsEveryStroke() throws Exception {
         Board blank = repo.pages(notebook).get(0);
         String adopted = blank.id;
         for (int i = 0; i < DENSE_STROKES; i++) {
@@ -184,10 +170,14 @@ public class PageReorderTest {
         Board second = inkNearBottom(notebook, "anchor");
         Board dense = repo.pages(notebook).get(0);
         assertEquals(DENSE_STROKES, dense.paper.touching(0).size());
+        Board trailing = repo.pages(notebook).get(repo.pages(notebook).size() - 1);
+        assertTrue(trailing.isBlank());
 
-        repo.reorderPageAfter(dense.id, second.id);
+        // After second (= before trailing blank), same as old reorderPageAfter.
+        assertTrue(repo.placePageBefore(dense.id, trailing.id));
 
         List<Board> pages = repo.pages(notebook);
+        assertEquals(second.id, pages.get(0).id);
         assertEquals(dense.id, pages.get(1).id);
         assertEquals(DENSE_STROKES, pages.get(1).paper.touching(1).size());
         assertEquals(DENSE_STROKES + 1, pages.get(1).paper.strokes().size());
