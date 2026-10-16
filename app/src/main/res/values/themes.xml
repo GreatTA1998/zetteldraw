@@ -3,9 +3,10 @@
     <style name="Theme.PenPoc" parent="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
         <item name="android:windowBackground">#FFFFFFFF</item>
         <item name="android:colorBackground">#FFFFFFFF</item>
-        <!-- Target 35 draws behind the system bars unless this is set. Page height is the
+        <!-- Target 35+ draws behind the system bars unless this is set. Page height is the
              drawing area; keep the pre-35 fullscreen window so existing ink does not reflow.
-             Ignored below API 35. A later build that targets API 36 must handle insets itself. -->
+             Ignored below API 35. On API 36 the opt-out may be ignored — Boox tip remains
+             on the last released APK until insets are handled if edge-to-edge regresses. -->
         <item name="android:windowOptOutEdgeToEdgeEnforcement" tools:targetApi="35">true</item>
     </style>
 </resources>

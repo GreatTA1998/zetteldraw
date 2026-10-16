@@ -38,14 +38,16 @@ if (uploadSigningValues.count { it != null } in 1..3) {
 
 android {
     namespace = "com.zetteldraw.penpoc"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 91
-        versionName = "3.70"
+        targetSdk = 36
+        // Play rejected versionCode 92 for targetSdk 35; keep tip APK at last released
+        // tag until a tip ship is intentional. This bump is for Play AAB readiness.
+        versionCode = 93
+        versionName = "3.72"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
