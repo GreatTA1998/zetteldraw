@@ -105,10 +105,9 @@ public final class SyncEngine {
                     pull(result);
                 } catch (IOException e) {
                     pullError = e;
-                    Log.w(TAG, live ? "pull failed after live push"
-                            : "pull failed; still running ink log length sync", e);
-                    LaunchLog.mark((live ? "pull failed after live push: "
-                            : "pull failed before length sync: ") + e.getMessage());
+                    String when = live ? "after live push" : "before length sync";
+                    Log.w(TAG, "pull failed " + when, e);
+                    LaunchLog.mark("pull failed " + when + ": " + e.getMessage());
                 }
             }
             if (!live) {

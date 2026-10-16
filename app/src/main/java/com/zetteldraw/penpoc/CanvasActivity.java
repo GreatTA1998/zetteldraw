@@ -577,10 +577,6 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    private void rebuildNotebookTabs() {
-        rebuildNotebookTabs(repository.notebooks());
-    }
-
     /** {@code notebooks} null: not loaded yet, so only + shows. */
     private void rebuildNotebookTabs(List<BoardRepository.NotebookInfo> notebooks) {
         if (notebooks != null && sameNotebooks(notebooks)) {
@@ -738,10 +734,6 @@ public final class CanvasActivity extends Activity {
     }
 
     /** Reopens the last notebook, else the first; the Scratchpad when none are left. */
-    private void openNotebooks() {
-        openNotebooks(repository.notebooks());
-    }
-
     private void openNotebooks(List<BoardRepository.NotebookInfo> notebooks) {
         String target = notebookId != null && notebookByIdIn(notebooks, notebookId) != null
                 ? notebookId
@@ -764,10 +756,8 @@ public final class CanvasActivity extends Activity {
     private void reopenAfterNotebookGone(List<BoardRepository.NotebookInfo> notebooks) {
         if (!trail.isEmpty()) {
             openNotebook(trail.get(trail.size() - 1), null);
-        } else if (notebooks != null) {
-            openNotebooks(notebooks);
         } else {
-            openNotebooks();
+            openNotebooks(notebooks != null ? notebooks : repository.notebooks());
         }
     }
 
@@ -801,7 +791,7 @@ public final class CanvasActivity extends Activity {
             cursor = info.parentId;
         }
         if (next.isEmpty()) {
-            openNotebooks();
+            openNotebooks(repository.notebooks());
             return;
         }
         boolean sameBars = !refreshed && barParents(trail).equals(barParents(next));
@@ -1086,18 +1076,13 @@ public final class CanvasActivity extends Activity {
         return n;
     }
 
+    /** Launch-log name: Scratchpad as-is, else quoted title via {@link #titleOf}. */
     private String label(String id) {
         if (SCRATCHPAD.equals(id)) {
             return SCRATCHPAD;
         }
-        if (shownNotebooks != null) {
-            for (BoardRepository.NotebookInfo each : shownNotebooks) {
-                if (each.id.equals(id)) {
-                    return "'" + each.title + "'";
-                }
-            }
-        }
-        return id;
+        String title = titleOf(id);
+        return title.isEmpty() ? id : "'" + title + "'";
     }
 
     private void onPagesLoaded(Loaded loaded) {
@@ -1974,30 +1959,13 @@ public final class CanvasActivity extends Activity {
         LinearLayout box = panel();
         box.addView(panelText(getString(delete ? R.string.delete_page_title : R.string.wipe_page_title), 15));
         box.addView(panelText(getString(delete ? R.string.delete_page_body : R.string.wipe_page_body), 13));
-        LinearLayout actions = new LinearLayout(this);
-        actions.setGravity(Gravity.END);
-        Button cancel = tinyButton(getString(R.string.cancel), 15);
-        cancel.setMinimumHeight(dp(48));
-        onTap(cancel, v -> dismissOverlay());
-        Button confirm = tinyButton(getString(delete ? R.string.delete : R.string.wipe), 15);
-        confirm.setMinimumHeight(dp(48));
-        styleButton(confirm, true);
-        onTap(confirm, v -> {
-            dismissOverlay();
+        addCancelConfirmRow(box, getString(delete ? R.string.delete : R.string.wipe), () -> {
             if (delete) {
                 deletePage(slot);
             } else {
                 wipe(slot);
             }
         });
-        actions.addView(cancel, wrap());
-        LinearLayout.LayoutParams lp = wrap();
-        lp.leftMargin = dp(8);
-        actions.addView(confirm, lp);
-        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        actionsLp.topMargin = dp(8);
-        box.addView(actions, actionsLp);
         showOverlay(box, pageAnchoredLp(slot.moreButton, box), drawingArea);
     }
 
@@ -2036,7 +2004,7 @@ public final class CanvasActivity extends Activity {
             if (repository.placeNotebook(id, null) && trail.contains(id)) {
                 openNotebook(id, null);
             } else {
-                rebuildNotebookTabs();
+                rebuildNotebookTabs(repository.notebooks());
             }
         });
         addPanelButton(menu, getString(R.string.delete), 0, () -> confirmDelete(id, tab));
@@ -2080,7 +2048,7 @@ public final class CanvasActivity extends Activity {
                 if (trail.contains(notebookId) || notebookId.equals(collectionId)) {
                     openNotebook(notebookId, null);
                 } else {
-                    rebuildNotebookTabs();
+                    rebuildNotebookTabs(repository.notebooks());
                 }
             }
         });
@@ -2288,12 +2256,12 @@ public final class CanvasActivity extends Activity {
             dismissOverlay();
             if (id != null) {
                 repository.renameNotebook(id, text);
-                rebuildNotebookTabs();
+                rebuildNotebookTabs(repository.notebooks());
                 syncNav();
                 return;
             }
             BoardRepository.NotebookInfo created = repository.createNotebook(text, parentId);
-            rebuildNotebookTabs();
+            rebuildNotebookTabs(repository.notebooks());
             if (created == null) {
                 syncNav();
             } else if (moveAfter != null && moveAfter.page != null) {
@@ -2309,6 +2277,7 @@ public final class CanvasActivity extends Activity {
             }
             return false;
         });
+        // Keep inline: empty name must leave the form open (helper would dismiss first).
         LinearLayout actions = new LinearLayout(this);
         actions.setGravity(Gravity.END);
         Button cancel = tinyButton(getString(R.string.cancel), 15);
@@ -2349,14 +2318,7 @@ public final class CanvasActivity extends Activity {
         if (!childrenOf(id).isEmpty()) {
             box.addView(panelText(getString(R.string.delete_notebook_children), 13));
         }
-        LinearLayout actions = new LinearLayout(this);
-        actions.setGravity(Gravity.END);
-        Button cancel = tinyButton(getString(R.string.cancel), 15);
-        onTap(cancel, v -> dismissOverlay());
-        Button delete = tinyButton(getString(R.string.delete), 15);
-        styleButton(delete, true);
-        onTap(delete, v -> {
-            dismissOverlay();
+        addCancelConfirmRow(box, getString(R.string.delete), () -> {
             repository.deleteNotebook(id);
             collectionNav.clear(id);
             int cut = trail.indexOf(id);
@@ -2364,20 +2326,38 @@ public final class CanvasActivity extends Activity {
                 trail.subList(cut, trail.size()).clear();
             }
             boolean opened = id.equals(collectionId);
-            rebuildNotebookTabs();
+            rebuildNotebookTabs(repository.notebooks());
             if (opened) {
                 reopenAfterNotebookGone(null);
+            }
+        });
+        showOverlay(box, anchoredLp(anchor, box), root);
+    }
+
+    /** Cancel + primary confirm row for page/notebook confirm panels. */
+    private void addCancelConfirmRow(LinearLayout box, String confirmLabel, Runnable onConfirm) {
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button cancel = tinyButton(getString(R.string.cancel), 15);
+        cancel.setMinimumHeight(dp(48));
+        onTap(cancel, v -> dismissOverlay());
+        Button confirm = tinyButton(confirmLabel, 15);
+        confirm.setMinimumHeight(dp(48));
+        styleButton(confirm, true);
+        onTap(confirm, v -> {
+            dismissOverlay();
+            if (onConfirm != null) {
+                onConfirm.run();
             }
         });
         actions.addView(cancel, wrap());
         LinearLayout.LayoutParams lp = wrap();
         lp.leftMargin = dp(8);
-        actions.addView(delete, lp);
+        actions.addView(confirm, lp);
         LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         actionsLp.topMargin = dp(8);
         box.addView(actions, actionsLp);
-        showOverlay(box, anchoredLp(anchor, box), root);
     }
 
     /** In-window Settings: Google Sign-In, sync toggle, privacy, version. */

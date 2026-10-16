@@ -97,8 +97,7 @@ public final class SyncClient {
                 }
             }
             int code = conn.getResponseCode();
-            String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
-            throwIfAuthOrSchema(code, text);
+            String text = readChecked(conn, code);
             if (code == 404) {
                 // Prod briefly lacked these routes when v69 shipped ahead of Render deploy.
                 throw new IOException("Sync server updating — retry Prepare transfer in a minute.");
@@ -141,8 +140,7 @@ public final class SyncClient {
             conn.setRequestProperty("Accept", "application/octet-stream");
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
-                String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
-                throwIfAuthOrSchema(code, text);
+                String text = readChecked(conn, code);
                 throw new IOException("GET /sync/blob/" + hash + " -> " + code + ": " + text);
             }
             byte[] bytes = readBytes(conn.getInputStream());
@@ -208,8 +206,7 @@ public final class SyncClient {
                 }
             }
             int code = conn.getResponseCode();
-            String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
-            throwIfAuthOrSchema(code, text);
+            String text = readChecked(conn, code);
             if (code < 200 || code >= 300) {
                 String message = "";
                 try {
@@ -242,8 +239,12 @@ public final class SyncClient {
         return conn;
     }
 
-    /** Shared 401/403/409 spine for JSON request and raw putBlob. */
-    private static void throwIfAuthOrSchema(int code, String text) throws IOException {
+    /**
+     * One response spine for putBlob / getBlob / JSON request: drain the body
+     * stream, then throw on 401/403/409 before the caller interprets status.
+     */
+    private static String readChecked(HttpURLConnection conn, int code) throws IOException {
+        String text = readAll(code >= 400 ? conn.getErrorStream() : conn.getInputStream());
         if (code == 401 || code == 403) {
             String err = "";
             String message = "";
@@ -266,6 +267,7 @@ public final class SyncClient {
             }
             throw new SchemaMismatch(server);
         }
+        return text;
     }
 
     private static String readAll(InputStream in) throws IOException {

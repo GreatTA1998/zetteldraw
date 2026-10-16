@@ -496,11 +496,6 @@ public final class InkSheetStore {
         return true;
     }
 
-    /** Writer thread. Appends the new tail of the log; it does not rewrite the prefix. */
-    void flushSheet(String sheetId) {
-        flushSheetOrFalse(sheetId);
-    }
-
     /**
      * Hold or release flush for one sheet. Place/Move holds both sheets until
      * dest-first persist finishes (or reloads from disk on failure).
@@ -523,7 +518,7 @@ public final class InkSheetStore {
         setSheetFlushHeld(destSheetId, held);
     }
 
-    /** @return false when an append was needed and failed. */
+    /** Writer thread. Appends the new tail of the log. False when append was needed and failed. */
     boolean flushSheetOrFalse(String sheetId) {
         if (sheetId == null) {
             return false;

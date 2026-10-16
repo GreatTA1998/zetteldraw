@@ -363,7 +363,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return;
         }
         if (page.paper != null) {
-            writer.execute(() -> sheetStore.flushSheet(page.sheetId));
+            writer.execute(() -> sheetStore.flushSheetOrFalse(page.sheetId));
             return;
         }
         List<InkRenderer.InkStroke> snapshot = Collections.unmodifiableList(new ArrayList<>(page.strokes));
@@ -721,7 +721,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         sheetStore.setPairFlushHeld(sourceSheetId, destSheetId, false);
         if (!Objects.equals(sourceSheetId, destSheetId)) {
-            sheetStore.flushSheet(sourceSheetId);
+            sheetStore.flushSheetOrFalse(sourceSheetId);
         }
     }
 
@@ -809,7 +809,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 if (board.sliceIndex >= 0 && board.sliceIndex < board.paper.sliceCount()) {
                     board.paper.tearWipe(board.sliceIndex);
                     String sheetId = board.sheetId;
-                    writer.execute(() -> sheetStore.flushSheet(sheetId));
+                    writer.execute(() -> sheetStore.flushSheetOrFalse(sheetId));
                 }
                 return;
             }
@@ -1201,11 +1201,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         case PushResult.APPLIED:
                         case PushResult.CONFLICT_WON:
                             setRevLocked(result.entity, result.id, result.rev);
-                            dao.deleteOutboxIfUnchanged(result.entity, result.id, queuedAt);
-                            break;
+                            // fall through — drop outbox when unchanged (won or lost)
                         case PushResult.CONFLICT_LOST:
-                            // The server kept its row and stored ours as a conflict copy;
-                            // the next pull brings both down.
+                            // CONFLICT_LOST: server kept its row and shelved ours;
+                            // next pull brings both down.
                             dao.deleteOutboxIfUnchanged(result.entity, result.id, queuedAt);
                             break;
                         default:
@@ -1868,7 +1867,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 paper.tearDelete(i);
                 tombstoneLinksTouchingLocked(boardId);
                 String sheetId = entry.getKey();
-                writer.execute(() -> sheetStore.flushSheet(sheetId));
+                writer.execute(() -> sheetStore.flushSheetOrFalse(sheetId));
                 return true;
             }
         }
