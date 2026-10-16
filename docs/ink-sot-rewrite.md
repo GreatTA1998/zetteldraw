@@ -2,6 +2,8 @@
 
 Tip **v91 / 3.70** — one Reorder spine: deleted dead `reorderPageAfter`; same-notebook Reorder uses `placePageBefore` (UI already did).
 
+**Hour-3 (main, tip unchanged):** `SyncEngine` one pull+deferred-error phase (live vs non-writer); `fetchMissingBlobs` shared; server push missing-blob scan + conflict-copy upsert dual collapsed. Net **−20 LOC**.
+
 **v90 / 3.69** — one Move spine: `movePageToNotebook` delegates to `placePageBefore` (id-preserving dest-first). Deleted dual append-`tearMove` persist path.
 
 **v89 / 3.68** — meta pull LWW (notebook / link / legacy board + conflict shelf) lives in `MetaPullApply`. Ink-log open / apply / length / disk write stay in `InkSheetStore`.

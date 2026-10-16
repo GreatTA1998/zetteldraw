@@ -84,46 +84,41 @@ public final class SyncEngine {
                 pull(result);
                 result.restoredFromCloud = true;
             }
-            if (!claimLiveWriter(result)) {
+            boolean live = claimLiveWriter(result);
+            if (live) {
+                // Live writer: push-only for ink. Pull may update meta; never adopt
+                // remote ink over local (InkLogApply KEEP_LIVE_LOCAL).
+                store.setInkPullPolicy(SyncStore.InkPullPolicy.LIVE_PUSH_ONLY);
+                if (neverSynced) {
+                    store.queuePlaceholderSeedsForUpload();
+                }
+                store.ensureUnsyncedQueued();
+                push(result);
+            } else {
                 // Non-writer: read catch-up only.
                 store.setInkPullPolicy(SyncStore.InkPullPolicy.CATCH_UP);
-                IOException pullError = null;
-                if (!neverSynced) {
-                    try {
-                        pull(result);
-                    } catch (IOException e) {
-                        pullError = e;
-                        Log.w(TAG, "pull failed; still running ink log length sync", e);
-                        LaunchLog.mark("pull failed before length sync: " + e.getMessage());
-                    }
-                }
-                result.pulledNotebooks += inkLogSync.syncLengths();
-                if (pullError != null) {
-                    throw pullError;
-                }
-                return result;
             }
-            // Live writer: push-only for ink. Pull may update meta; never adopt
-            // remote ink over local (InkLogApply KEEP_LIVE_LOCAL).
-            store.setInkPullPolicy(SyncStore.InkPullPolicy.LIVE_PUSH_ONLY);
-            if (neverSynced) {
-                store.queuePlaceholderSeedsForUpload();
-            }
-            store.ensureUnsyncedQueued();
-            push(result);
+            // One pull + deferred error: non-writer still runs length sync first.
             IOException pullError = null;
-            try {
-                pull(result);
-            } catch (IOException e) {
-                pullError = e;
-                Log.w(TAG, "pull failed after live push", e);
-                LaunchLog.mark("pull failed after live push: " + e.getMessage());
+            if (live || !neverSynced) {
+                try {
+                    pull(result);
+                } catch (IOException e) {
+                    pullError = e;
+                    Log.w(TAG, live ? "pull failed after live push"
+                            : "pull failed; still running ink log length sync", e);
+                    LaunchLog.mark((live ? "pull failed after live push: "
+                            : "pull failed before length sync: ") + e.getMessage());
+                }
             }
-            // Live length work = push + refuse shorter on pull — not log-heads adopt.
+            if (!live) {
+                result.pulledNotebooks += inkLogSync.syncLengths();
+            }
             if (pullError != null) {
                 throw pullError;
             }
-            if (store.outboxSize() == 0) {
+            if (live && store.outboxSize() == 0) {
+                // Live length work = push + refuse shorter on pull — not log-heads adopt.
                 store.markSynced(clock.getAsLong());
             }
         } finally {
@@ -232,20 +227,17 @@ public final class SyncEngine {
     /** Pull JSON omits large Base64 blobs; fetch them raw before applyPull. */
     private void fetchMissingBlobs(SyncStore.PullPage page) throws IOException {
         for (NotebookLogEntity log : page.logs) {
-            if (log.inkHash == null || log.deletedAt != null) {
-                continue;
-            }
-            if (!page.blobs.containsKey(log.inkHash)) {
-                page.blobs.put(log.inkHash, client.getBlob(log.inkHash));
-            }
+            ensureBlob(page.blobs, log.inkHash, log.deletedAt);
         }
         for (BoardEntity board : page.boards) {
-            if (board.inkHash == null || board.deletedAt != null) {
-                continue;
-            }
-            if (!page.blobs.containsKey(board.inkHash)) {
-                page.blobs.put(board.inkHash, client.getBlob(board.inkHash));
-            }
+            ensureBlob(page.blobs, board.inkHash, board.deletedAt);
         }
+    }
+
+    private void ensureBlob(Map<String, byte[]> blobs, String hash, Long deletedAt) throws IOException {
+        if (hash == null || deletedAt != null || blobs.containsKey(hash)) {
+            return;
+        }
+        blobs.put(hash, client.getBlob(hash));
     }
 }

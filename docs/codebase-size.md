@@ -16,6 +16,7 @@ Soft ambition via true simplification: Android main ~6k; server sync ~500–1k. 
 | **v89 meta pull LWW → MetaPullApply** | `RoomBoardRepository` **2376** (−75 vs v88); `MetaPullApply` **158** | Notebook/link/legacy-board pull LWW + conflict shelf; ink logs stay in `InkSheetStore` |
 | **v90 one Move spine** | repo **2344** (−32); `CanvasActivity` **3534** (−24); net **−50** main (+test lock) | `movePageToNotebook` → `placePageBefore`; deleted dual append-`tearMove` + `persistCrossNotebookAppend` |
 | **v91 one Reorder spine** | repo **2308** (−36); `BoardRepository` **192** (−5); tests **−10**; commit net **−51** (−67/+16) | Deleted dead `reorderPageAfter` dual path; UI Reorder already used `placePageBefore` |
+| **Hour-3 sync dual collapse** | `SyncEngine` **243** (−8); `server/sync.ts` **424** (−12); commit net **−20** (−63/+43) | One pull+deferred-error phase; shared pull blob fetch; server missing-blob + conflict-copy dual collapsed. Tip stays **v91** (clarity, not safer tip) |
 
 ### Still fat (why)
 
@@ -26,3 +27,4 @@ Soft ambition via true simplification: Android main ~6k; server sync ~500–1k. 
 | `PageInkView` | ~2065 | Pen path — leave alone |
 | `InkSheetStore` | ~711 | Open / apply / length / disk write |
 | `MetaPullApply` | ~158 | Meta LWW exception shelf (beside `Lww`) |
+| `SyncEngine` | ~243 | One pull phase (hour-3); push rounds + lease |

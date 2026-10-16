@@ -126,15 +126,11 @@ async function applyDecision<T extends { id: string; rev: number }>(
   } else if (decision.restamp && existing) {
     rev = await restamp(client, table, existing.id);
   }
-  if (decision.copy && table === "boards") {
+  if (decision.copy && (table === "boards" || table === "notebook_logs")) {
     const copy = decision.copy as { id: string };
-    await upsert(client, "boards", BOARD_COLS, decision.copy as unknown as Record<string, unknown>);
-    await maybeStamp(client, "boards", copy.id, scope);
-  }
-  if (decision.copy && table === "notebook_logs") {
-    const copy = decision.copy as { id: string };
-    await upsert(client, "notebook_logs", LOG_COLS, decision.copy as unknown as Record<string, unknown>);
-    await maybeStamp(client, "notebook_logs", copy.id, scope);
+    const cols = table === "boards" ? BOARD_COLS : LOG_COLS;
+    await upsert(client, table, cols, decision.copy as unknown as Record<string, unknown>);
+    await maybeStamp(client, table, copy.id, scope);
   }
   return rev;
 }
@@ -185,17 +181,9 @@ export async function push(
     await storage.put(hash, bytes);
   }
   const missing = new Set<string>();
-  for (const board of body.boards) {
-    const hash = board.ink_hash;
-    if (hash && board.deleted_at === null && !(hash in body.blobs) && !missing.has(hash)) {
-      if (!(await storage.has(hash))) {
-        missing.add(hash);
-      }
-    }
-  }
-  for (const log of body.logs) {
-    const hash = log.ink_hash;
-    if (hash && log.deleted_at === null && !(hash in body.blobs) && !missing.has(hash)) {
+  for (const row of [...body.boards, ...body.logs]) {
+    const hash = row.ink_hash;
+    if (hash && row.deleted_at === null && !(hash in body.blobs) && !missing.has(hash)) {
       if (!(await storage.has(hash))) {
         missing.add(hash);
       }
