@@ -45,8 +45,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Tip v106: board omit-fetch; logFrom + getBlob auth; Move refuse spine.
-        versionCode = 106
-        versionName = "3.85"
+        versionCode = 107
+        versionName = "3.86"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

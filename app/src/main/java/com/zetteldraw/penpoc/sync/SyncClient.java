@@ -80,15 +80,9 @@ public final class SyncClient {
         String q = deviceId == null || deviceId.isEmpty()
                 ? ""
                 : "?device_id=" + URLEncoder.encode(deviceId, StandardCharsets.UTF_8.name());
-        HttpURLConnection conn = (HttpURLConnection) new URL(
-                config.serverUrl + "/sync/blob/" + hash + q).openConnection();
+        HttpURLConnection conn = open("PUT", "/sync/blob/" + hash + q, READ_TIMEOUT_MS);
         try {
-            conn.setRequestMethod("PUT");
-            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
             conn.setDoOutput(true);
-            conn.setRequestProperty("Authorization", "Bearer " + config.bearerToken());
-            conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
             conn.setRequestProperty("Content-Type", "application/octet-stream");
             conn.setRequestProperty("Accept", "application/json");
             long length = file.length();
@@ -142,14 +136,8 @@ public final class SyncClient {
     }
 
     private byte[] getBlobOnce(String hash) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(
-                config.serverUrl + "/sync/blob/" + hash).openConnection();
+        HttpURLConnection conn = open("GET", "/sync/blob/" + hash, BLOB_READ_TIMEOUT_MS);
         try {
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(BLOB_READ_TIMEOUT_MS);
-            conn.setRequestProperty("Authorization", "Bearer " + config.bearerToken());
-            conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
             conn.setRequestProperty("Accept", "application/octet-stream");
             int code = conn.getResponseCode();
             if (code < 200 || code >= 300) {
@@ -157,20 +145,12 @@ public final class SyncClient {
                 throwIfAuthOrSchema(code, text);
                 throw new IOException("GET /sync/blob/" + hash + " -> " + code + ": " + text);
             }
-            try (InputStream in = conn.getInputStream()) {
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                byte[] buf = new byte[64 * 1024];
-                int n;
-                while ((n = in.read(buf)) > 0) {
-                    out.write(buf, 0, n);
-                }
-                byte[] bytes = out.toByteArray();
-                String actual = InkFileStore.sha256(bytes);
-                if (!actual.equals(hash)) {
-                    throw new IOException("downloaded blob hash mismatch for " + hash);
-                }
-                return bytes;
+            byte[] bytes = readBytes(conn.getInputStream());
+            String actual = InkFileStore.sha256(bytes);
+            if (!actual.equals(hash)) {
+                throw new IOException("downloaded blob hash mismatch for " + hash);
             }
+            return bytes;
         } finally {
             conn.disconnect();
         }
@@ -216,13 +196,8 @@ public final class SyncClient {
     }
 
     private JSONObject request(String method, String path, byte[] body) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(config.serverUrl + path).openConnection();
+        HttpURLConnection conn = open(method, path, READ_TIMEOUT_MS);
         try {
-            conn.setRequestMethod(method);
-            conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
-            conn.setReadTimeout(READ_TIMEOUT_MS);
-            conn.setRequestProperty("Authorization", "Bearer " + config.bearerToken());
-            conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
             conn.setRequestProperty("Accept", "application/json");
             if (body != null) {
                 conn.setDoOutput(true);
@@ -256,6 +231,17 @@ public final class SyncClient {
         }
     }
 
+    /** One bearer + schema connection spine for JSON and blob transport. */
+    private HttpURLConnection open(String method, String path, int readTimeoutMs) throws IOException {
+        HttpURLConnection conn = (HttpURLConnection) new URL(config.serverUrl + path).openConnection();
+        conn.setRequestMethod(method);
+        conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        conn.setReadTimeout(readTimeoutMs);
+        conn.setRequestProperty("Authorization", "Bearer " + config.bearerToken());
+        conn.setRequestProperty(SyncProtocol.SCHEMA_HEADER, String.valueOf(schemaVersion));
+        return conn;
+    }
+
     /** Shared 401/403/409 spine for JSON request and raw putBlob. */
     private static void throwIfAuthOrSchema(int code, String text) throws IOException {
         if (code == 401 || code == 403) {
@@ -283,17 +269,22 @@ public final class SyncClient {
     }
 
     private static String readAll(InputStream in) throws IOException {
+        return new String(readBytes(in), StandardCharsets.UTF_8.name());
+    }
+
+    /** Shared octet drain for blob GET and error/JSON bodies. */
+    private static byte[] readBytes(InputStream in) throws IOException {
         if (in == null) {
-            return "";
+            return new byte[0];
         }
         try (InputStream stream = in) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[16 * 1024];
+            byte[] buf = new byte[64 * 1024];
             int n;
             while ((n = stream.read(buf)) > 0) {
                 out.write(buf, 0, n);
             }
-            return out.toString(StandardCharsets.UTF_8.name());
+            return out.toByteArray();
         }
     }
 }

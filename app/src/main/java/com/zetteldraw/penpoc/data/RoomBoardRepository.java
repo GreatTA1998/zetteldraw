@@ -507,11 +507,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Writer thread, at startup: decodes every live page into the cache so
-     * switching lists rarely waits on ink files. One page per writer task, so
-     * an ink save queued meanwhile is written after at most one page.
+     * After the first page list is read: decode live pages into cache so
+     * switching lists rarely waits on ink. One page per writer task so an ink
+     * save queued meanwhile writes after at most one page decode.
      */
-    /** After the first page list is read, so warming never competes with what the screen waits for. */
     private void scheduleWarmCache() {
         if (warmScheduled.compareAndSet(false, true)) {
             writer.execute(this::warmCache);
@@ -1019,8 +1018,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         PushBatch batch = new PushBatch();
         ArrayList<BoardEntity> boards = new ArrayList<>();
         ArrayList<NotebookLogEntity> logs = new ArrayList<>();
-        HashMap<String, Long> boardQueuedAt = new HashMap<>();
-        HashMap<String, Long> logQueuedAt = new HashMap<>();
         synchronized (lock) {
             for (OutboxEntry entry : dao.outboxBatch(limit)) {
                 if (OutboxEntry.NOTEBOOK.equals(entry.entity)) {
@@ -1038,7 +1035,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         continue;
                     }
                     logs.add(row);
-                    logQueuedAt.put(row.id, entry.queuedAt);
+                    // queuedAt early — same map as notebook/link; attach may drop the row.
+                    batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
                 } else if (OutboxEntry.LINK.equals(entry.entity)) {
                     PageLinkEntity row = dao.pageLink(entry.id);
                     if (row == null) {
@@ -1054,7 +1052,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         continue;
                     }
                     boards.add(row);
-                    boardQueuedAt.put(row.id, entry.queuedAt);
+                    batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
                 } else {
                     dao.deleteOutbox(entry.entity, entry.id);
                 }
@@ -1093,7 +1091,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     continue;
                 }
                 batch.logs.add(row);
-                batch.queuedAt.put(OutboxEntry.LOG + ":" + row.id, logQueuedAt.get(row.id));
             }
             for (BoardEntity seen : boardsKept) {
                 BoardEntity row = dao.board(seen.id);
@@ -1110,7 +1107,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     continue;
                 }
                 batch.boards.add(row);
-                batch.queuedAt.put(OutboxEntry.BOARD + ":" + row.id, boardQueuedAt.get(row.id));
             }
         }
         return batch;

@@ -371,7 +371,7 @@ public final class CanvasActivity extends Activity {
         syncNav();
         inkView.setLive(true);
         // Unconditionally, before any layout: the list is shown as soon as the drawing area has a size.
-        openCollection(collectionId);
+        openCollection(collectionId, null);
     }
 
     /**
@@ -439,7 +439,7 @@ public final class CanvasActivity extends Activity {
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
         scratchpadTab = iconButton(R.drawable.ic_scratchpad, R.string.scratchpad);
-        onTap(scratchpadTab, v -> openScratchpad());
+        onTap(scratchpadTab, v -> openScratchpad(null));
         onLongTap(scratchpadTab, v -> {
             showLaunchLog();
             return true;
@@ -460,7 +460,7 @@ public final class CanvasActivity extends Activity {
         addButton = tinyButton(getString(R.string.add_notebook), 22);
         addButton.setContentDescription(getString(R.string.new_notebook));
         addButton.setPadding(dp(8), 0, dp(8), dp(2));
-        onTap(addButton, v -> showNameForm(null, addButton));
+        onTap(addButton, v -> showNameForm(null, addButton, null, null));
         rebuildNotebookTabs(null);
         return bar;
     }
@@ -592,7 +592,7 @@ public final class CanvasActivity extends Activity {
         if (shownNotebooks != null && !SCRATCHPAD.equals(collectionId)) {
             BoardRepository.NotebookInfo open = notebookById(collectionId);
             if (open != null && (trail.isEmpty() || !trail.get(trail.size() - 1).equals(collectionId))) {
-                openNotebook(collectionId);
+                openNotebook(collectionId, null);
             }
         }
     }
@@ -667,7 +667,7 @@ public final class CanvasActivity extends Activity {
                 plus.setContentDescription(getString(R.string.new_notebook));
                 plus.setPadding(dp(8), 0, dp(8), dp(2));
                 String createUnder = parentId;
-                onTap(plus, v -> showNameForm(null, plus, createUnder));
+                onTap(plus, v -> showNameForm(null, plus, createUnder, null));
                 fillStrip(strip, kids, plus, depth + 1);
                 scroll.addView(strip, new FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
@@ -743,20 +743,17 @@ public final class CanvasActivity extends Activity {
     }
 
     private void openNotebooks(List<BoardRepository.NotebookInfo> notebooks) {
-        String target = null;
-        for (BoardRepository.NotebookInfo each : notebooks) {
-            if (each.id.equals(notebookId)) {
-                target = each.id;
-            }
-        }
+        String target = notebookId != null && notebookByIdIn(notebooks, notebookId) != null
+                ? notebookId
+                : null;
         if (target == null && !notebooks.isEmpty()) {
             target = notebooks.get(0).id;
         }
         if (target == null) {
             notebookId = null;
-            openCollection(SCRATCHPAD);
+            openCollection(SCRATCHPAD, null);
         } else {
-            openNotebook(target);
+            openNotebook(target, null);
         }
     }
 
@@ -766,16 +763,12 @@ public final class CanvasActivity extends Activity {
      */
     private void reopenAfterNotebookGone(List<BoardRepository.NotebookInfo> notebooks) {
         if (!trail.isEmpty()) {
-            openNotebook(trail.get(trail.size() - 1));
+            openNotebook(trail.get(trail.size() - 1), null);
         } else if (notebooks != null) {
             openNotebooks(notebooks);
         } else {
             openNotebooks();
         }
-    }
-
-    private void openScratchpad() {
-        openScratchpad(null);
     }
 
     private void openScratchpad(Integer keepScroll) {
@@ -787,10 +780,6 @@ public final class CanvasActivity extends Activity {
             styleTabs();
         }
         openCollection(SCRATCHPAD, keepScroll);
-    }
-
-    private void openNotebook(String id) {
-        openNotebook(id, null);
     }
 
     private void openNotebook(String id, Integer keepScroll) {
@@ -866,16 +855,11 @@ public final class CanvasActivity extends Activity {
     }
 
     private String titleOf(String id) {
-        for (BoardRepository.NotebookInfo each : repository.notebooks()) {
-            if (each.id.equals(id)) {
-                return each.title;
-            }
+        BoardRepository.NotebookInfo info = notebookById(id);
+        if (info == null) {
+            info = notebookByIdIn(repository.notebooks(), id);
         }
-        return "";
-    }
-
-    private void openCollection(String id) {
-        openCollection(id, null);
+        return info == null ? "" : info.title;
     }
 
     private void openCollection(String id, Integer keepScroll) {
@@ -2046,11 +2030,11 @@ public final class CanvasActivity extends Activity {
         }
         LinearLayout menu = panel();
         menu.setMinimumWidth(Math.max(dp(200), tab.getWidth()));
-        addPanelButton(menu, getString(R.string.rename), 0, () -> showNameForm(id, tab));
+        addPanelButton(menu, getString(R.string.rename), 0, () -> showNameForm(id, tab, null, null));
         addPanelButton(menu, getString(R.string.place_under), 0, () -> showPlaceUnderMenu(id, tab));
         addPanelButton(menu, getString(R.string.make_top_level), 0, () -> {
             if (repository.placeNotebook(id, null) && trail.contains(id)) {
-                openNotebook(id);
+                openNotebook(id, null);
             } else {
                 rebuildNotebookTabs();
             }
@@ -2094,7 +2078,7 @@ public final class CanvasActivity extends Activity {
             }
             if (repository.placeNotebook(notebookId, parentId)) {
                 if (trail.contains(notebookId) || notebookId.equals(collectionId)) {
-                    openNotebook(notebookId);
+                    openNotebook(notebookId, null);
                 } else {
                     rebuildNotebookTabs();
                 }
@@ -2278,14 +2262,6 @@ public final class CanvasActivity extends Activity {
      * the page is filed into the created notebook instead of opening it empty.
      * {@code parentId} null = top-level; omit {@code moveAfter} for create/rename only.
      */
-    private void showNameForm(String id, View anchor) {
-        showNameForm(id, anchor, null, null);
-    }
-
-    private void showNameForm(String id, View anchor, String parentId) {
-        showNameForm(id, anchor, parentId, null);
-    }
-
     private void showNameForm(String id, View anchor, String parentId, PageSlot moveAfter) {
         LinearLayout form = panel();
         form.addView(panelText(getString(id == null ? R.string.new_notebook : R.string.rename_notebook), 15));
@@ -2323,7 +2299,7 @@ public final class CanvasActivity extends Activity {
             } else if (moveAfter != null && moveAfter.page != null) {
                 movePageToNotebook(moveAfter.page.id, created.id);
             } else {
-                openNotebook(created.id);
+                openNotebook(created.id, null);
             }
         };
         name.setOnEditorActionListener((v, actionId, event) -> {
@@ -2968,9 +2944,9 @@ public final class CanvasActivity extends Activity {
             label = new Button(context, null, android.R.attr.borderlessButtonStyle);
             styleTabLabel(label, info.title);
             label.setMaxWidth(dp(220));
-            onTap(label, v -> openNotebook(id));
+            onTap(label, v -> openNotebook(id, null));
             onLongTap(label, v -> {
-                openNotebook(id);
+                openNotebook(id, null);
                 showNotebookMenu(id);
                 return true;
             });

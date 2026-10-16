@@ -115,10 +115,7 @@ public final class InkLogApply {
             if (LogLength.remoteLengthens(f.localSlices, f.remoteSlices) || remoteHasMoreBytes) {
                 // Empty local is seed/fill, not clobber. Live push-only blocks
                 // only when local already has ink.
-                if (!f.allowAdoptRemote && hasLocalInk(f)) {
-                    return Decision.KEEP_LIVE_LOCAL;
-                }
-                return Decision.ADOPT_LONGER;
+                return refuseRemoteBody(f) ? Decision.KEEP_LIVE_LOCAL : Decision.ADOPT_LONGER;
             }
             return equalLengthDecision(f);
         }
@@ -148,16 +145,14 @@ public final class InkLogApply {
             return Decision.SKIP_PENDING_NEWER;
         }
         if (f.hasRemoteBody && !f.remoteDeleted) {
-            if (!f.allowAdoptRemote && hasLocalInk(f)) {
-                return Decision.KEEP_LIVE_LOCAL;
-            }
-            return Decision.LWW_REPLACE;
+            return refuseRemoteBody(f) ? Decision.KEEP_LIVE_LOCAL : Decision.LWW_REPLACE;
         }
         return Decision.UPSERT_META_ONLY;
     }
 
-    private static boolean hasLocalInk(Facts f) {
-        return f.localBytes > 0 || f.localSlices > 0;
+    /** Live writer with local ink: cloud body must not replace the primary. */
+    private static boolean refuseRemoteBody(Facts f) {
+        return !f.allowAdoptRemote && (f.localBytes > 0 || f.localSlices > 0);
     }
 
     /** True when this decision may replace the live primary log bytes. */
