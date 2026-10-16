@@ -448,14 +448,12 @@ public final class InkSheetStore {
     }
 
     /**
-     * Writer thread. Replaces the whole on-disk log (reorder rewrites the
-     * prefix). Resets {@code flushed} so a later append starts from the new end.
+     * Writer thread. Replaces the whole on-disk log (reorder / Move dest-first
+     * rewrite). Resets {@code flushed} so a later append starts from the new end.
+     *
+     * @return false when the sheet could not be written; caller must not tear
+     *     the source on disk (and should reload memory from disk).
      */
-    void rewriteSheet(String sheetId) {
-        rewriteSheetOrFalse(sheetId);
-    }
-
-    /** @return false when the sheet could not be written; caller must not tear the source on disk. */
     boolean rewriteSheetOrFalse(String sheetId) {
         if (sheetId == null) {
             return false;

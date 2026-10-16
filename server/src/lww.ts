@@ -77,8 +77,8 @@ function stripBase<T>(incoming: Incoming<T>): Omit<T, "rev"> {
   return row as unknown as Omit<T, "rev">;
 }
 
-function withoutRev(row: Omit<BoardRow, "rev">): Omit<BoardRow, "rev"> {
-  const { rev: _rev, ...rest } = row as BoardRow;
+function withoutRev<T extends { rev?: number }>(row: T): Omit<T, "rev"> {
+  const { rev: _rev, ...rest } = row;
   return rest;
 }
 
@@ -103,9 +103,10 @@ function sameNotebook(a: Omit<NotebookRow, "rev">, b: Omit<NotebookRow, "rev">):
   );
 }
 
+/** Shelve loser ink when it still has a body the winner does not share (board or log). */
 export function needsConflictCopy(
-  loser: Omit<BoardRow, "rev">,
-  winner: Omit<BoardRow, "rev">,
+  loser: { ink_hash: string | null; deleted_at: number | null },
+  winner: { ink_hash: string | null; deleted_at: number | null },
 ): boolean {
   if (loser.ink_hash === null || loser.deleted_at !== null) {
     return false;
@@ -149,13 +150,6 @@ function sameLog(a: Omit<LogRow, "rev">, b: Omit<LogRow, "rev">): boolean {
   );
 }
 
-function needsLogCopy(loser: Omit<LogRow, "rev">, winner: Omit<LogRow, "rev">): boolean {
-  if (loser.ink_hash === null || loser.deleted_at !== null) {
-    return false;
-  }
-  return winner.deleted_at !== null || loser.ink_hash !== winner.ink_hash;
-}
-
 /**
  * True when a live incoming log would shrink the live primary by ink_bytes.
  * Length is monotonic: truncated clients must not clobber a longer cloud log.
@@ -188,8 +182,8 @@ export function resolveLog(
 ): Decision<LogRow> {
   const row = stripBase(incoming);
   if (existing !== null && incomingShrinksLog(existing, row)) {
-    const copy = needsLogCopy(row, existing)
-      ? { ...withoutLogRev(row), id: newId(), conflict_of: existing.id, deleted_at: null }
+    const copy = needsConflictCopy(row, existing)
+      ? { ...withoutRev(row), id: newId(), conflict_of: existing.id, deleted_at: null }
       : null;
     return { status: "conflict_lost", write: null, restamp: true, copy };
   }
@@ -202,17 +196,12 @@ export function resolveLog(
   const incomingWins = row.updated_at > existing.updated_at;
   const winner = incomingWins ? row : existing;
   const loser = incomingWins ? existing : row;
-  const copy = needsLogCopy(loser, winner)
-    ? { ...withoutLogRev(loser), id: newId(), conflict_of: existing.id, deleted_at: null }
+  const copy = needsConflictCopy(loser, winner)
+    ? { ...withoutRev(loser), id: newId(), conflict_of: existing.id, deleted_at: null }
     : null;
   return incomingWins
     ? { status: "conflict_won", write: row, restamp: false, copy }
     : { status: "conflict_lost", write: null, restamp: true, copy };
-}
-
-function withoutLogRev(row: Omit<LogRow, "rev">): Omit<LogRow, "rev"> {
-  const { rev: _rev, ...rest } = row as LogRow;
-  return rest;
 }
 
 function sameLink(a: Omit<LinkRow, "rev">, b: Omit<LinkRow, "rev">): boolean {

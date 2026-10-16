@@ -623,39 +623,27 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     // Memory may be torn; hold flushes and reload from disk.
                     sheetStore.holdSheetFlush(sourceSheetId);
                     sheetStore.holdSheetFlush(destSheetId);
-                    writer.execute(() -> {
-                        sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
-                        sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
-                        sheetStore.releaseSheetFlush(destSheetId);
-                        sheetStore.releaseSheetFlush(sourceSheetId);
-                    });
+                    writer.execute(() -> reloadPairFromDiskAndRelease(sourceSheetId, destSheetId));
                 }
                 return false;
             }
             syncSliceIndex(dest.paper, boardId);
-            if (sameNotebook) {
-                sheetStore.holdSheetFlush(destSheetId);
-                writer.execute(() -> {
-                    try {
-                        sheetStore.rewriteSheet(destSheetId);
-                    } finally {
-                        sheetStore.releaseSheetFlush(destSheetId);
-                    }
-                });
-                return true;
+            if (!sameNotebook) {
+                // Reseat source boards so Move chrome / isBlank agree mid-reload.
+                syncAllSliceIndices(moving.paper);
             }
-            // Remaining source boards keep stale sliceIndex until the next
-            // projectLocked; reseat them now so Move chrome / isBlank agree
-            // with paper even if the UI briefly reads the cache mid-reload.
-            syncAllSliceIndices(moving.paper);
+            // One persist spine: hold → dest-first rewrite → release → (cross) flush.
             sheetStore.holdSheetFlush(sourceSheetId);
             sheetStore.holdSheetFlush(destSheetId);
             final String movedId = boardId;
             final String destNb = destNotebookId;
             final String sourceNb = notebookIdOfSheet(sourceSheetId);
+            final boolean cross = !sameNotebook;
             writer.execute(() -> {
-                persistCrossNotebookPlace(destSheetId, sourceSheetId);
-                assertMoveLandedOrLog(movedId, destNb, sourceNb);
+                persistPlaceSheets(destSheetId, sourceSheetId);
+                if (cross) {
+                    assertMoveLandedOrLog(movedId, destNb, sourceNb);
+                }
             });
             return true;
         }
@@ -723,30 +711,30 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Writer thread: rewrite destination first; only then append the source tear.
-     * If dest rewrite fails, the source tear stays in memory but not on disk so a
-     * restart still has the page on the origin notebook.
-     *
-     * <p>{@link InkSheetStore#holdSheetFlush} must already be set on both sheets so a
-     * previously queued {@link #saveInk} flush cannot append the source tear
-     * (or a corrupt dest suffix) before this runs. On dest failure the holds
-     * stay so a later incidental flush cannot tear the source alone.
+     * Writer thread: dest-first rewrite for same-nb reorder and cross-nb Move.
+     * Same-nb passes {@code source == dest} (rewrite is enough; skip flush).
+     * Holds must already be set. Dest failure → reload pair from disk.
      */
-    private void persistCrossNotebookPlace(String destSheetId, String sourceSheetId) {
+    private void persistPlaceSheets(String destSheetId, String sourceSheetId) {
         if (!sheetStore.rewriteSheetOrFalse(destSheetId)) {
             LaunchLog.mark("place-before dest rewrite failed; source not torn on disk");
             Log.e(TAG, "place-before dest rewrite failed; source not torn on disk");
-            // Memory was torn; disk still has the pre-move logs. Reload both so
-            // UI/cache match disk, then release holds so pen-up can flush again.
-            sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
-            sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
-            sheetStore.releaseSheetFlush(destSheetId);
-            sheetStore.releaseSheetFlush(sourceSheetId);
+            reloadPairFromDiskAndRelease(sourceSheetId, destSheetId);
             return;
         }
         sheetStore.releaseSheetFlush(destSheetId);
         sheetStore.releaseSheetFlush(sourceSheetId);
-        sheetStore.flushSheet(sourceSheetId);
+        if (!Objects.equals(sourceSheetId, destSheetId)) {
+            sheetStore.flushSheet(sourceSheetId);
+        }
+    }
+
+    /** Pre-tear disk wins; restore memory and drop holdFlush. */
+    private void reloadPairFromDiskAndRelease(String sourceSheetId, String destSheetId) {
+        sheetStore.reloadSheetFromDisk(sourceSheetId, knownPageHeight);
+        sheetStore.reloadSheetFromDisk(destSheetId, knownPageHeight);
+        sheetStore.releaseSheetFlush(destSheetId);
+        sheetStore.releaseSheetFlush(sourceSheetId);
     }
 
     /** Notebook id for a sheet id ({@code null} = Scratchpad). */
