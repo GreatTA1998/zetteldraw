@@ -159,7 +159,7 @@ sign-in can still be reviewed. Pen latency cannot be reviewed without a Boox.
 
 ## Graphics checklist
 
-The manifest icon is still the platform drawable `@android:drawable/ic_menu_edit`. The 512 icon you upload in Play Console does not change the icon on the device. Replace the launcher icon before you ship if you want a branded one on the Boox.
+The launcher icon is `@mipmap/ic_launcher` (`android:roundIcon` is `@mipmap/ic_launcher_round`): density PNGs plus an adaptive icon (`mipmap-anydpi-v26`) with the pen artwork inside the safe zone on `#F5F5F2`. The 512 icon you upload in Play Console is a separate listing asset and does not replace the icon inside the bundle.
 
 | Asset | Spec | Status |
 | --- | --- | --- |
