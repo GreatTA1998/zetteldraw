@@ -1274,7 +1274,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         HashMap<String, Long> editsSeen = new HashMap<>();
         HashMap<String, Board> boardsSeen = new HashMap<>();
         HashMap<String, MetaPullApply.Staged> staged = new HashMap<>();
-        HashMap<String, byte[]> logBytes = new HashMap<>();
+        HashMap<String, InkSheetStore.StagedLog> stagedLogs = new HashMap<>();
         try {
             for (NotebookLogEntity remote : page.logs) {
                 if (remote.inkHash == null || remote.deletedAt != null) {
@@ -1287,9 +1287,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 if (!InkFileStore.sha256(bytes).equals(remote.inkHash)) {
                     throw new IOException("bad ink log for " + remote.id);
                 }
-                // Replay now, before the lock, so a torn file never becomes the notebook.
-                NotebookPaper.replace(bytes);
-                logBytes.put(remote.id, bytes);
+                // Replay once before the lock so a torn log never becomes the notebook.
+                stagedLogs.put(remote.id, new InkSheetStore.StagedLog(bytes, NotebookPaper.replay(bytes)));
             }
             for (BoardEntity remote : page.boards) {
                 if (remote.inkHash == null || remote.deletedAt != null) {
@@ -1313,7 +1312,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 staged.put(remote.id, new MetaPullApply.Staged(
                         ink.stage(remote.id, "pull", bytes), bytes, strokes));
             }
-            applyPullLocked(page, staged, logBytes, refreshed, editsSeen, boardsSeen);
+            applyPullLocked(page, staged, stagedLogs, refreshed, editsSeen, boardsSeen);
         } finally {
             for (MetaPullApply.Staged s : staged.values()) {
                 ink.discard(s.file);
@@ -1426,7 +1425,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     private void applyPullLocked(PullPage page, Map<String, MetaPullApply.Staged> staged,
-                                 Map<String, byte[]> logBytes,
+                                 Map<String, InkSheetStore.StagedLog> stagedLogs,
                                  Map<String, List<InkRenderer.InkStroke>> refreshed,
                                  Map<String, Long> editsSeen, Map<String, Board> boardsSeen) throws IOException {
         synchronized (lock) {
@@ -1459,7 +1458,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                             metaPull.applyRemoteBoard(remote, staged, refreshed, mirrorOps);
                         }
                         for (NotebookLogEntity remote : page.logs) {
-                            sheetStore.applyRemoteLogLocked(remote, logBytes, mirrorOps);
+                            sheetStore.applyRemoteLogLocked(remote, stagedLogs, mirrorOps);
                         }
                         for (PageLinkEntity remote : page.links) {
                             metaPull.applyRemoteLink(remote);

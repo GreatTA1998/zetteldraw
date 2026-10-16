@@ -69,6 +69,21 @@ public final class InkSheetStore {
     }
 
     /**
+     * Pulled log staged outside the lock (hash-checked + replayed once).
+     * Same idea as {@link MetaPullApply.Staged} for legacy board ink — apply
+     * under lock must not replay again.
+     */
+    static final class StagedLog {
+        final byte[] bytes;
+        final NotebookPaper paper;
+
+        StagedLog(byte[] bytes, NotebookPaper paper) {
+            this.bytes = bytes;
+            this.paper = paper;
+        }
+    }
+
+    /**
      * In-memory Ready (or loading) sheet. Package-visible so Move/tear in the
      * repository can call holdFlush / rewrite under the same lock.
      */
@@ -252,9 +267,10 @@ public final class InkSheetStore {
 
     /**
      * Apply a pulled notebook log. Caller holds {@link Deps#lock()}. All body
-     * installs go through {@link InkLogApply#decide}.
+     * installs go through {@link InkLogApply#decide}. {@code stagedLogs} was
+     * replayed once outside the lock — do not replay again here.
      */
-    void applyRemoteLogLocked(NotebookLogEntity remote, Map<String, byte[]> logBytes,
+    void applyRemoteLogLocked(NotebookLogEntity remote, Map<String, StagedLog> stagedLogs,
                               List<Runnable> mirrorOps) throws IOException {
         ZettelDao dao = deps.dao();
         NotebookLogEntity local = dao.notebookLog(remote.id);
@@ -275,13 +291,15 @@ public final class InkSheetStore {
         int remoteSlices = -1;
         long diskBytes = 0L;
         if (conflictCopy) {
-            bytes = logBytes.remove(remote.id);
+            StagedLog staged = stagedLogs.remove(remote.id);
+            bytes = staged == null ? null : staged.bytes;
         } else if (hasBody) {
-            bytes = logBytes.remove(remote.id);
-            if (bytes == null) {
+            StagedLog staged = stagedLogs.remove(remote.id);
+            if (staged == null || staged.bytes == null || staged.paper == null) {
                 throw new IOException("bad ink log for " + remote.id);
             }
-            paper = NotebookPaper.replace(bytes);
+            bytes = staged.bytes;
+            paper = staged.paper;
             localSlices = localReadySliceCountLocked(remote.id, open);
             diskBytes = localInkLogBytes(remote.id);
             remoteSlices = paper.sliceCount();

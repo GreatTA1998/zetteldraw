@@ -887,16 +887,13 @@ public final class CanvasActivity extends Activity {
         pagesLoaded = true;
         collectionId = id;
         syncNav();
-        // Snappy path: Ready sheet → CollectionOpen bind (pages + scroll Y only).
+        // Snappy path: Ready sheet → same showReady spine as async load.
         String notebook = SCRATCHPAD.equals(id) ? null : id;
-        if (pageHeight > 0) {
-            CollectionOpen.Bind bind = CollectionOpen.tryBindReady(
-                    repository, collectionNav, id, notebook, keepScroll,
-                    SCRATCHPAD.equals(id), pageLayout());
-            if (bind != null) {
+        if (pageHeight > 0 && repository.isSheetReady(notebook)) {
+            List<Board> ready = repository.pages(notebook);
+            if (ready != null && !ready.isEmpty()) {
                 ++loadGeneration;
-                showPages(bind.pages, bind.scrollY);
-                syncNav();
+                showReady(id, ready, keepScroll);
                 return;
             }
         }

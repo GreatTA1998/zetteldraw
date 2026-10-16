@@ -193,7 +193,7 @@ public class NotebookPaperTest {
         remote.appendStroke(line("other", 9f, 10f, 40f));
         remote.appendStroke(line("second", 9f, 1700f, 1900f));
 
-        NotebookPaper pulled = NotebookPaper.replace(remote.bytes());
+        NotebookPaper pulled = NotebookPaper.replay(remote.bytes());
         assertNull(pulled.stroke("cross"));
         assertEquals(2, pulled.strokes().size());
         assertEquals(3, pulled.stroke("second").points.size());

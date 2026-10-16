@@ -208,14 +208,6 @@ public final class NotebookPaper {
         return paper;
     }
 
-    /**
-     * A pull installs one whole log. It does not look at the strokes already
-     * here, so it cannot leave half of one of them behind.
-     */
-    public static NotebookPaper replace(byte[] incoming) throws IOException {
-        return replay(incoming);
-    }
-
     public byte[] bytes() {
         return Arrays.copyOf(log, log.length);
     }
@@ -561,14 +553,9 @@ public final class NotebookPaper {
      * {@code beforeSlice == 0} makes it the new first page.
      * Keeps the source slice id so the page identity survives the move.
      * Same {@code destination} as {@code this} reorders in place (no undo tear).
+     * Bounds / null checks live in {@link #tearMoveInsert}.
      */
     public Tear tearMoveBefore(int slice, NotebookPaper destination, int beforeSlice) {
-        if (destination == null) {
-            throw new IllegalArgumentException("destination");
-        }
-        if (beforeSlice < 0 || beforeSlice > destination.heights.size()) {
-            return new Tear();
-        }
         return tearMoveInsert(slice, destination, beforeSlice);
     }
 

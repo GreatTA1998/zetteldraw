@@ -1,16 +1,15 @@
 package com.zetteldraw.penpoc.nav;
 
 import com.zetteldraw.penpoc.Board;
-import com.zetteldraw.penpoc.data.BoardRepository;
 
 import java.util.List;
 
 /**
- * UI open path: bind a <em>Ready</em> page list and resolve scroll Y.
+ * UI open path: resolve scroll Y for a <em>Ready</em> page list.
  *
- * <p>Length SoT is {@link BoardRepository} / ink sheet — never prefs or trust
- * snapshots. This module only answers "what Ready list + where to scroll".
- * CanvasActivity paints the result; it must not invent page counts here.
+ * <p>Length SoT is the repository / ink sheet — never prefs or trust
+ * snapshots. This module only answers "where to scroll". CanvasActivity
+ * loads Ready pages and paints; it must not invent page counts here.
  *
  * @see CollectionNav
  * @see docs/ink-sot-rewrite.md
@@ -31,35 +30,8 @@ public final class CollectionOpen {
     }
 
     /**
-     * If the notebook sheet is Ready with a non-empty projection, remember scroll
-     * and return a bind. Null means the caller must {@code ensureSheet} / load.
-     *
-     * @param notebookId null = Scratchpad
-     */
-    public static Bind tryBindReady(
-            BoardRepository repository,
-            CollectionNav nav,
-            String collectionId,
-            String notebookId,
-            Integer keepScroll,
-            boolean scratchpad,
-            CollectionNav.PageLayout layout) {
-        if (repository == null || nav == null || collectionId == null || layout == null) {
-            return null;
-        }
-        if (!repository.isSheetReady(notebookId)) {
-            return null;
-        }
-        List<Board> pages = repository.pages(notebookId);
-        if (pages == null || pages.isEmpty()) {
-            return null;
-        }
-        return bindScroll(nav, collectionId, pages, keepScroll, scratchpad, layout);
-    }
-
-    /**
-     * Scroll-only bind for an already-Ready list (background load finished).
-     * Does not re-check {@link BoardRepository#isSheetReady}.
+     * Scroll-only bind for a Ready list (snappy open or background load finished).
+     * Does not check {@code isSheetReady} — caller already has the Ready pages.
      */
     public static Bind bindScroll(
             CollectionNav nav,
