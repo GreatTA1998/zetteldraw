@@ -1068,32 +1068,32 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         // the push JSON — that OOM'd Boox Prepare transfer (~75MB alloc on 256MB heap).
         // At most one large on-disk blob per batch so sync stays one-at-a-time.
         // One stage/attach spine for log + legacy board ink (same size/hash rules).
+        // One small/large stage map for log + board (ids are distinct entity UUIDs).
         boolean[] haveLarge = {false};
-        HashMap<String, byte[]> smallInk = new HashMap<>();
-        HashMap<String, File> largeInk = new HashMap<>();
-        HashMap<String, byte[]> smallLogs = new HashMap<>();
-        HashMap<String, File> largeLogs = new HashMap<>();
+        HashMap<String, byte[]> smallBlobs = new HashMap<>();
+        HashMap<String, File> largeBlobs = new HashMap<>();
         ArrayList<BoardEntity> boardsKept = new ArrayList<>();
         ArrayList<NotebookLogEntity> logsKept = new ArrayList<>();
         for (NotebookLogEntity row : logs) {
             if (stagePushBlob(row.id, row.inkHash, row.deletedAt, ink.logFile(row.id),
-                    haveLarge, smallLogs, largeLogs, this::readLogQuietly)) {
+                    haveLarge, smallBlobs, largeBlobs, this::readLogQuietly)) {
                 logsKept.add(row);
             }
         }
         for (BoardEntity row : boards) {
             if (stagePushBlob(row.id, row.inkHash, row.deletedAt, ink.fileFor(row.id),
-                    haveLarge, smallInk, largeInk, this::readInkQuietly)) {
+                    haveLarge, smallBlobs, largeBlobs, this::readInkQuietly)) {
                 boardsKept.add(row);
             }
         }
         synchronized (lock) {
             for (NotebookLogEntity seen : logsKept) {
                 NotebookLogEntity row = dao.notebookLog(seen.id);
-                if (row == null || !sameLog(seen, row)) {
+                if (row == null || !sameInkOutbox(seen.inkHash, seen.deletedAt, seen.updatedAt, seen.rev,
+                        row.inkHash, row.deletedAt, row.updatedAt, row.rev)) {
                     continue;
                 }
-                if (!attachPushBlob(row.id, row.inkHash, smallLogs, largeLogs, batch, (hash, bytes) -> {
+                if (!attachPushBlob(row.id, row.inkHash, smallBlobs, largeBlobs, batch, (hash, bytes) -> {
                     row.inkHash = hash;
                     row.inkBytes = bytes;
                     dao.upsertNotebookLog(row);
@@ -1105,10 +1105,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             for (BoardEntity seen : boardsKept) {
                 BoardEntity row = dao.board(seen.id);
-                if (row == null || !sameRow(seen, row)) {
+                if (row == null || !sameInkOutbox(seen.inkHash, seen.deletedAt, seen.updatedAt, seen.rev,
+                        row.inkHash, row.deletedAt, row.updatedAt, row.rev)) {
                     continue;
                 }
-                if (!attachPushBlob(row.id, row.inkHash, smallInk, largeInk, batch, (hash, bytes) -> {
+                if (!attachPushBlob(row.id, row.inkHash, smallBlobs, largeBlobs, batch, (hash, bytes) -> {
                     // Crash between file commit and row update: file is newer.
                     row.inkHash = hash;
                     row.inkBytes = bytes;
@@ -1176,14 +1177,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    private static boolean sameLog(NotebookLogEntity a, NotebookLogEntity b) {
-        return Objects.equals(a.inkHash, b.inkHash) && Objects.equals(a.deletedAt, b.deletedAt)
-                && a.updatedAt == b.updatedAt && a.rev == b.rev;
-    }
-
-    private static boolean sameRow(BoardEntity a, BoardEntity b) {
-        return Objects.equals(a.inkHash, b.inkHash) && Objects.equals(a.deletedAt, b.deletedAt)
-                && a.updatedAt == b.updatedAt && a.rev == b.rev;
+    /** Outbox re-read unchanged: same ink meta fields for board or log. */
+    private static boolean sameInkOutbox(String aHash, Long aDeleted, long aUpdated, long aRev,
+                                         String bHash, Long bDeleted, long bUpdated, long bRev) {
+        return Objects.equals(aHash, bHash) && Objects.equals(aDeleted, bDeleted)
+                && aUpdated == bUpdated && aRev == bRev;
     }
 
     @Override

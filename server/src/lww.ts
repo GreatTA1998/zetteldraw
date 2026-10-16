@@ -77,9 +77,24 @@ function stripBase<T>(incoming: Incoming<T>): Omit<T, "rev"> {
   return row as unknown as Omit<T, "rev">;
 }
 
-function withoutRev<T extends { rev?: number }>(row: T): Omit<T, "rev"> {
-  const { rev: _rev, ...rest } = row;
-  return rest;
+function withoutRev<T extends object>(row: T): Omit<T, "rev"> {
+  const { rev: _rev, ...rest } = row as T & { rev?: number };
+  return rest as Omit<T, "rev">;
+}
+
+/** Stale-rev LWW shelf for board or log ink (winner write / loser conflict_of). */
+function inkConflictDecision<
+  T extends { id: string; updated_at: number; ink_hash: string | null; deleted_at: number | null },
+>(existing: T, row: Omit<T, "rev">, newId: () => string): Decision<T> {
+  const incomingWins = row.updated_at > existing.updated_at;
+  const winner = incomingWins ? row : existing;
+  const loser = incomingWins ? existing : row;
+  const copy: Omit<T, "rev"> | null = needsConflictCopy(loser, winner)
+    ? ({ ...withoutRev(loser), id: newId(), conflict_of: existing.id, deleted_at: null } as unknown as Omit<T, "rev">)
+    : null;
+  return incomingWins
+    ? { status: "conflict_won", write: row, restamp: false, copy }
+    : { status: "conflict_lost", write: null, restamp: true, copy };
 }
 
 function sameBoard(a: Omit<BoardRow, "rev">, b: Omit<BoardRow, "rev">): boolean {
@@ -127,15 +142,7 @@ export function resolveBoard(
     // A retried push whose first attempt already landed.
     return { status: "applied", write: null, restamp: false, copy: null };
   }
-  const incomingWins = row.updated_at > existing.updated_at;
-  const winner = incomingWins ? row : existing;
-  const loser = incomingWins ? existing : row;
-  const copy = needsConflictCopy(loser, winner)
-    ? { ...withoutRev(loser), id: newId(), conflict_of: existing.id, deleted_at: null }
-    : null;
-  return incomingWins
-    ? { status: "conflict_won", write: row, restamp: false, copy }
-    : { status: "conflict_lost", write: null, restamp: true, copy };
+  return inkConflictDecision(existing, row, newId);
 }
 
 function sameLog(a: Omit<LogRow, "rev">, b: Omit<LogRow, "rev">): boolean {
@@ -193,15 +200,7 @@ export function resolveLog(
   if (sameLog(existing, row)) {
     return { status: "applied", write: null, restamp: false, copy: null };
   }
-  const incomingWins = row.updated_at > existing.updated_at;
-  const winner = incomingWins ? row : existing;
-  const loser = incomingWins ? existing : row;
-  const copy = needsConflictCopy(loser, winner)
-    ? { ...withoutRev(loser), id: newId(), conflict_of: existing.id, deleted_at: null }
-    : null;
-  return incomingWins
-    ? { status: "conflict_won", write: row, restamp: false, copy }
-    : { status: "conflict_lost", write: null, restamp: true, copy };
+  return inkConflictDecision(existing, row, newId);
 }
 
 function sameLink(a: Omit<LinkRow, "rev">, b: Omit<LinkRow, "rev">): boolean {

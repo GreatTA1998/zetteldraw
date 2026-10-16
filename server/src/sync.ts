@@ -160,6 +160,43 @@ async function assertWritable(
   return owner === null;
 }
 
+/**
+ * One push spine for notebooks / boards / logs / links: writable → lock row →
+ * resolve → apply → stamp. Board/log pass {@code blobMissing} for ink hashes
+ * not yet in storage or this push's blob map.
+ */
+async function pushEntityGroup<TExisting extends { id: string; rev: number }, TIncoming extends { id: string }>(
+  client: pg.PoolClient,
+  scope: SyncScope,
+  results: PushResult[],
+  entity: PushResult["entity"],
+  table: OwnerTable,
+  cols: readonly string[],
+  rows: TIncoming[],
+  resolve: (existing: TExisting | null, incoming: TIncoming) => Decision<TExisting>,
+  blobMissing?: (row: TIncoming) => boolean,
+): Promise<void> {
+  for (const incoming of rows) {
+    if (blobMissing?.(incoming)) {
+      results.push({ entity, id: incoming.id, status: "missing_blob", rev: 0 });
+      continue;
+    }
+    if (!(await assertWritable(client, table, incoming.id, scope))) {
+      results.push({ entity, id: incoming.id, status: "forbidden", rev: 0 });
+      continue;
+    }
+    const existing =
+      (await client.query<TExisting>(`SELECT * FROM ${table} WHERE id = $1 FOR UPDATE`, [incoming.id]))
+        .rows[0] ?? null;
+    const decision = resolve(existing, incoming);
+    const rev = await applyDecision(client, table, cols, existing, decision, scope);
+    if (decision.write || !existing) {
+      await maybeStamp(client, table, incoming.id, scope);
+    }
+    results.push({ entity, id: incoming.id, status: decision.status, rev });
+  }
+}
+
 function visibilitySql(table: OwnerTable, alias: string, scope: SyncScope, userParam: number): string {
   if (scope.kind === "user") {
     return ownedByUser(table, alias, userParam);
@@ -195,74 +232,20 @@ export async function push(
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock($1)", [PUSH_LOCK]);
-    for (const incoming of body.notebooks) {
-      if (!(await assertWritable(client, "notebooks", incoming.id, scope))) {
-        results.push({ entity: "notebook", id: incoming.id, status: "forbidden", rev: 0 });
-        continue;
-      }
-      const existing =
-        (await client.query<NotebookRow>("SELECT * FROM notebooks WHERE id = $1 FOR UPDATE", [incoming.id]))
-          .rows[0] ?? null;
-      const decision = resolveNotebook(existing, incoming);
-      const rev = await applyDecision(client, "notebooks", NOTEBOOK_COLS, existing, decision, scope);
-      if (decision.write || !existing) {
-        await maybeStamp(client, "notebooks", incoming.id, scope);
-      }
-      results.push({ entity: "notebook", id: incoming.id, status: decision.status, rev });
-    }
-    for (const incoming of body.boards) {
-      if (incoming.ink_hash && incoming.deleted_at === null && missing.has(incoming.ink_hash)) {
-        results.push({ entity: "board", id: incoming.id, status: "missing_blob", rev: 0 });
-        continue;
-      }
-      if (!(await assertWritable(client, "boards", incoming.id, scope))) {
-        results.push({ entity: "board", id: incoming.id, status: "forbidden", rev: 0 });
-        continue;
-      }
-      const existing =
-        (await client.query<BoardRow>("SELECT * FROM boards WHERE id = $1 FOR UPDATE", [incoming.id])).rows[0] ??
-        null;
-      const decision = resolveBoard(existing, incoming, randomUUID);
-      const rev = await applyDecision(client, "boards", BOARD_COLS, existing, decision, scope);
-      if (decision.write || !existing) {
-        await maybeStamp(client, "boards", incoming.id, scope);
-      }
-      results.push({ entity: "board", id: incoming.id, status: decision.status, rev });
-    }
-    for (const incoming of body.logs) {
-      if (incoming.ink_hash && incoming.deleted_at === null && missing.has(incoming.ink_hash)) {
-        results.push({ entity: "log", id: incoming.id, status: "missing_blob", rev: 0 });
-        continue;
-      }
-      if (!(await assertWritable(client, "notebook_logs", incoming.id, scope))) {
-        results.push({ entity: "log", id: incoming.id, status: "forbidden", rev: 0 });
-        continue;
-      }
-      const existing =
-        (await client.query<LogRow>("SELECT * FROM notebook_logs WHERE id = $1 FOR UPDATE", [incoming.id]))
-          .rows[0] ?? null;
-      const decision = resolveLog(existing, incoming, randomUUID);
-      const rev = await applyDecision(client, "notebook_logs", LOG_COLS, existing, decision, scope);
-      if (decision.write || !existing) {
-        await maybeStamp(client, "notebook_logs", incoming.id, scope);
-      }
-      results.push({ entity: "log", id: incoming.id, status: decision.status, rev });
-    }
-    for (const incoming of body.links) {
-      if (!(await assertWritable(client, "page_links", incoming.id, scope))) {
-        results.push({ entity: "link", id: incoming.id, status: "forbidden", rev: 0 });
-        continue;
-      }
-      const existing =
-        (await client.query<LinkRow>("SELECT * FROM page_links WHERE id = $1 FOR UPDATE", [incoming.id])).rows[0] ??
-        null;
-      const decision = resolveLink(existing, incoming);
-      const rev = await applyDecision(client, "page_links", LINK_COLS, existing, decision, scope);
-      if (decision.write || !existing) {
-        await maybeStamp(client, "page_links", incoming.id, scope);
-      }
-      results.push({ entity: "link", id: incoming.id, status: decision.status, rev });
-    }
+    const inkBlobMissing = (row: { ink_hash: string | null; deleted_at: number | null }) =>
+      !!(row.ink_hash && row.deleted_at === null && missing.has(row.ink_hash));
+    await pushEntityGroup<NotebookRow, (typeof body.notebooks)[number]>(
+      client, scope, results, "notebook", "notebooks", NOTEBOOK_COLS, body.notebooks,
+      (existing, incoming) => resolveNotebook(existing, incoming));
+    await pushEntityGroup<BoardRow, (typeof body.boards)[number]>(
+      client, scope, results, "board", "boards", BOARD_COLS, body.boards,
+      (existing, incoming) => resolveBoard(existing, incoming, randomUUID), inkBlobMissing);
+    await pushEntityGroup<LogRow, (typeof body.logs)[number]>(
+      client, scope, results, "log", "notebook_logs", LOG_COLS, body.logs,
+      (existing, incoming) => resolveLog(existing, incoming, randomUUID), inkBlobMissing);
+    await pushEntityGroup<LinkRow, (typeof body.links)[number]>(
+      client, scope, results, "link", "page_links", LINK_COLS, body.links,
+      (existing, incoming) => resolveLink(existing, incoming));
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -410,14 +393,12 @@ export async function pull(
     }
     blobs[hash] = bytes.toString("base64");
   };
-  for (const board of boards) {
-    if (board.ink_hash && board.deleted_at === null) {
-      await loadBlob(board.ink_hash, "board", board.id);
-    }
-  }
-  for (const log of logs) {
-    if (log.ink_hash && log.deleted_at === null) {
-      await loadBlob(log.ink_hash, "notebook_log", log.id);
+  for (const row of [
+    ...boards.map((b) => ({ hash: b.ink_hash, deleted: b.deleted_at, kind: "board", id: b.id })),
+    ...logs.map((l) => ({ hash: l.ink_hash, deleted: l.deleted_at, kind: "notebook_log", id: l.id })),
+  ]) {
+    if (row.hash && row.deleted === null) {
+      await loadBlob(row.hash, row.kind, row.id);
     }
   }
   return { schema_version: schemaVersion, cursor, has_more: hasMore, notebooks, boards, logs, links, blobs };
