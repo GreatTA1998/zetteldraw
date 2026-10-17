@@ -169,8 +169,6 @@ public final class CanvasActivity extends Activity {
     private final Runnable remoteChanged = this::onRemoteChange;
     /** The page list on screen, for re-laying it out when the page height changes. */
     private List<Board> currentPages;
-    /** A loaded list waiting for the drawing area to have a size. */
-    private Loaded awaitingLayout;
     private Integer pendingKeepScroll;
     private List<BoardRepository.NotebookInfo> shownNotebooks;
     /** Selected notebook and its ancestors, root first. Empty on the Scratchpad. */
@@ -369,13 +367,14 @@ public final class CanvasActivity extends Activity {
         syncHistory();
         styleTabs();
         inkView.setLive(true);
-        // Unconditionally, before any layout: the list is shown as soon as the drawing area has a size.
+        // Records open intent; cold load waits for pageHeight in onDrawingAreaLaidOut.
         openCollection(collectionId, null);
     }
 
     /**
      * Page height follows the drawing area: recomputed on every size change,
      * not fixed by the first layout. Sizes too small to hold a page are ignored.
+     * First real size starts the only cold load when openCollection deferred.
      */
     private void onDrawingAreaLaidOut() {
         int area = drawingArea.getHeight();
@@ -395,13 +394,12 @@ public final class CanvasActivity extends Activity {
             if (isDestroyed()) {
                 return;
             }
-            if (awaitingLayout != null) {
-                Loaded loaded = awaitingLayout;
-                awaitingLayout = null;
-                pageReflows.incrementAndGet();
-                // Same open intent (jump / restore / first-open); do not substitute scroller Y.
-                startLoad(loaded.id(), loaded.keepScroll(), false);
-            } else if (!first && currentPages != null && !loading()) {
+            if (first) {
+                // openCollection → startLoad deferred until height; same keepScroll intent.
+                if (loading()) {
+                    startLoad(collectionId, pendingKeepScroll, false);
+                }
+            } else if (currentPages != null && !loading()) {
                 pageReflows.incrementAndGet();
                 // Hold place across a size change; pending target wins over ScrollView lag.
                 startLoad(collectionId, effectiveScrollY(), false);
@@ -948,16 +946,22 @@ public final class CanvasActivity extends Activity {
     /**
      * Thin open/load spine: ensure Ready off the main thread, then
      * {@link #showReady}. Not-Ready / empty / fail retries until shown or
-     * superseded — no deadline/attempt state machine.
+     * superseded. When {@code pageHeight} is still 0, records intent only —
+     * first {@link #onDrawingAreaLaidOut} starts the only cold load.
      * {@code keepScroll} null means restore a remembered scroll, else first-open
      * last page / last inked.
      */
     private void startLoad(String id, Integer keepScroll, boolean holdPen) {
-        int generation = ++loadGeneration;
         pendingKeepScroll = keepScroll;
         if (holdPen) {
             inkView.hold(PageInkView.Hold.LOADING);
         }
+        // No ensure / pages until height is known — deletes cold-start double load.
+        if (pageHeight <= 0) {
+            ++loadGeneration;
+            return;
+        }
+        int generation = ++loadGeneration;
         requestReadyPages(generation, id, keepScroll, false);
     }
 
@@ -965,6 +969,7 @@ public final class CanvasActivity extends Activity {
      * One ensure→pages→paint pass. Arms a single deferred retry so a dropped /
      * stuck / not-Ready pass cannot leave the screen empty; {@code retry} uses a
      * fresh thread so a stuck first loader cannot block recovery.
+     * Caller guarantees {@code pageHeight > 0}.
      */
     private void requestReadyPages(int generation, String id, Integer keepScroll, boolean retry) {
         scheduleLoadRetry(generation, id, keepScroll);
@@ -986,24 +991,16 @@ public final class CanvasActivity extends Activity {
                             rebuildNotebookTabs(notebooks);
                         }
                     });
-                    // Ready-gate: never call pages() for show while height is unknown
-                    // (that used to return truncated Room rows, then show after layout).
-                    if (pageHeight <= 0) {
-                        main.post(() -> finishLoad(new Loaded(
-                                generation, id, keepScroll, notebooks,
-                                java.util.Collections.emptyList(), false)));
-                        return;
-                    }
                     ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight, shortPagesSince);
                     if (!ready) {
                         // Deleted notebook: ensureSheet fails; still post so UI can leave it.
                         if (notebook != null && notebookByIdIn(notebooks, notebook) == null) {
                             main.post(() -> finishLoad(new Loaded(
                                     generation, id, keepScroll, notebooks,
-                                    java.util.Collections.emptyList(), true)));
+                                    java.util.Collections.emptyList())));
                             return;
                         }
-                        // Not Ready — do not show truncated Room rows; armed retry.
+                        // Not Ready — do not show; armed retry.
                         LaunchLog.mark("page list " + name + " sheet not ready");
                         return;
                     }
@@ -1022,7 +1019,7 @@ public final class CanvasActivity extends Activity {
                     LaunchLog.mark("page list load failed: " + e);
                     return;
                 }
-                main.post(() -> finishLoad(new Loaded(generation, id, keepScroll, notebooks, pages, true)));
+                main.post(() -> finishLoad(new Loaded(generation, id, keepScroll, notebooks, pages)));
             });
         } catch (RuntimeException e) {
             Log.e(TAG, "page list load could not start; armed retry", e);
@@ -1070,11 +1067,6 @@ public final class CanvasActivity extends Activity {
             reopenAfterNotebookGone(loaded.notebooks());
             return;
         }
-        // Not Ready (height unknown or ensure pending): wait / retry — never show.
-        if (!loaded.ready() || pageHeight == 0) {
-            awaitingLayout = loaded;
-            return;
-        }
         if (loaded.pages().isEmpty()) {
             return;
         }
@@ -1114,14 +1106,13 @@ public final class CanvasActivity extends Activity {
         return null;
     }
 
-    /** One finished background load. {@code ready} means ensureSheet installed the sheet. */
+    /** One finished background load (ensureSheet succeeded or notebook gone). */
     private record Loaded(
             int generation,
             String id,
             Integer keepScroll,
             List<BoardRepository.NotebookInfo> notebooks,
-            List<Board> pages,
-            boolean ready) {
+            List<Board> pages) {
     }
 
     private boolean loading() {
@@ -1145,7 +1136,6 @@ public final class CanvasActivity extends Activity {
 
     private void showPages(List<Board> pages, int targetScrollY) {
         shownGeneration = loadGeneration;
-        awaitingLayout = null;
         inkView.release(PageInkView.Hold.LOADING);
         layoutPages(pages, targetScrollY);
     }
