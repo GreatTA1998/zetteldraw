@@ -6,6 +6,8 @@ import androidx.room.Room;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.zetteldraw.penpoc.Board;
+import com.zetteldraw.penpoc.data.db.BoardEntity;
+import com.zetteldraw.penpoc.data.db.OutboxEntry;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 
 import java.io.File;
@@ -48,11 +50,7 @@ final class Device {
         db.close();
     }
 
-    /**
-     * Installs a Ready sheet for Scratchpad (or {@code notebookId}). Not called
-     * from {@link #open()} — LegacyMigrationTest must import page-files before
-     * the first ensure migrates them.
-     */
+    /** Installs a Ready sheet for Scratchpad (or {@code notebookId}). */
     boolean ensureReady() {
         return ensureReady(null);
     }
@@ -62,13 +60,31 @@ final class Device {
     }
 
     /**
-     * Importer-shaped unmigrated {@code .zdi} seed for migration / retire tests.
-     * Production writers are Ready-only; do not use for day-to-day ink.
+     * Historical BOARD residue ({@code .zdi} + BOARD outbox) for migration /
+     * pull / retire tests. Production import is Ready-direct.
      */
     void seedUnmigrated(Board page) throws IOException {
-        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
-        legacy.scratchpad.add(page);
-        repo.importLegacy(legacy);
+        if (page == null || page.isBlank() || db.dao().board(page.id) != null) {
+            return;
+        }
+        String pos = Positions.after(db.dao().lastScratchpadPosition());
+        BoardEntity row = new BoardEntity();
+        row.id = page.id;
+        row.notebookId = null;
+        row.position = pos;
+        row.createdAt = page.createdAt;
+        row.updatedAt = clock.get();
+        byte[] bytes = InkCodec.encode(page.strokes);
+        row.inkHash = InkFileStore.sha256(bytes);
+        row.inkBytes = bytes.length;
+        new InkFileStore(inkDir()).write(page.id, bytes);
+        db.dao().upsertBoard(row);
+        OutboxEntry out = new OutboxEntry();
+        out.entity = OutboxEntry.BOARD;
+        out.id = page.id;
+        out.op = OutboxEntry.UPSERT;
+        out.queuedAt = clock.get();
+        db.dao().upsertOutbox(out);
     }
 
     File inkDir() {

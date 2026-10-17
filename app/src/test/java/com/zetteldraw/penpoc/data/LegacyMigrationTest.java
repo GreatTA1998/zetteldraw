@@ -61,12 +61,9 @@ public class LegacyMigrationTest {
     @Test
     public void importsEveryBoardInOrderAndKeepsTheOldFile() throws Exception {
         writeLegacyJson();
+        device.repo.setLegacyFilesDir(filesDir);
 
-        int imported = LegacyBoardImporter.importIfPresent(filesDir, device.repo);
-        // s1, s2, orphan (scratchpad) + c1, c2, j1Wiped (notebooks); the trailing blank is dropped.
-        assertEquals(6, imported);
-
-        // pages() is Ready-only: migrate BoardEntity rows into .zdl on first ensure.
+        // Production path: first ensureSheet with height drains JSON → Ready .zdl.
         assertTrue(device.ensureReady());
         assertTrue(device.ensureReady(Notebook.COMEDY.uuid));
         assertTrue(device.ensureReady(Notebook.JOURNAL.uuid));
@@ -91,19 +88,24 @@ public class LegacyMigrationTest {
 
         assertFalse(new File(filesDir, LegacyBoardImporter.FILE_NAME).exists());
         assertTrue(new File(filesDir, LegacyBoardImporter.FILE_NAME + LegacyBoardImporter.MIGRATED_SUFFIX).exists());
-        // Ready retire clears BoardEntity .zdi + BOARD outbox; LOG outbox remains.
-        assertFalse("scratch page-file must retire after Ready",
+        // Ready-direct: never wrote page files; LOG outbox only.
+        assertFalse("Ready-direct must not write .zdi",
                 new File(device.inkDir(), s1 + ".zdi").exists());
         assertFalse(new File(device.inkDir(), c1 + ".zdi").exists());
         assertNull(device.db.dao().board(s1).inkHash);
-        assertTrue("Ready LOG outbox after migrate+retire, was " + device.db.dao().outboxCount(),
+        assertTrue(new File(device.inkDir(), NotebookPaper.sheetId(null) + ".zdl").exists());
+        assertTrue("Ready LOG outbox after import, was " + device.db.dao().outboxCount(),
                 device.db.dao().outboxCount() >= 1);
         assertNotNull(device.db.dao().outbox(
                 com.zetteldraw.penpoc.data.db.OutboxEntry.LOG,
                 NotebookPaper.sheetId(null)));
+        assertNull(device.db.dao().outbox(
+                com.zetteldraw.penpoc.data.db.OutboxEntry.BOARD, s1));
 
         device.reopen();
-        assertEquals(-1, LegacyBoardImporter.importIfPresent(filesDir, device.repo));
+        device.repo.setLegacyFilesDir(filesDir);
+        assertEquals(-1, LegacyBoardImporter.importIfPresent(
+                filesDir, device.repo, Device.PAGE, Device.PAGE, 0L));
         assertTrue(device.ensureReady());
         assertEquals(s1, device.repo.scratchpadPages().get(0).id);
         assertPoints(device.repo.scratchpadPages().get(0), 3);
@@ -112,9 +114,11 @@ public class LegacyMigrationTest {
     @Test
     public void importingTwiceDoesNotDuplicate() throws Exception {
         writeLegacyJson();
-        LegacyBoardImporter.importIfPresent(filesDir, device.repo);
+        assertEquals(6, LegacyBoardImporter.importIfPresent(
+                filesDir, device.repo, Device.PAGE, Device.PAGE, 0L));
         writeLegacyJson();
-        assertEquals(0, LegacyBoardImporter.importIfPresent(filesDir, device.repo));
+        assertEquals(0, LegacyBoardImporter.importIfPresent(
+                filesDir, device.repo, Device.PAGE, Device.PAGE, 0L));
         assertTrue(device.ensureReady());
         assertTrue(device.ensureReady(Notebook.COMEDY.uuid));
         assertEquals(4, device.repo.scratchpadPages().size());
@@ -124,8 +128,17 @@ public class LegacyMigrationTest {
     @Test
     public void unreadableJsonIsKeptAsideNotDeleted() throws Exception {
         Files.write(new File(filesDir, LegacyBoardImporter.FILE_NAME).toPath(), "{not json".getBytes());
-        assertEquals(0, LegacyBoardImporter.importIfPresent(filesDir, device.repo));
+        assertEquals(0, LegacyBoardImporter.importIfPresent(
+                filesDir, device.repo, Device.PAGE, Device.PAGE, 0L));
         assertTrue(new File(filesDir, LegacyBoardImporter.FILE_NAME + ".unreadable").exists());
+    }
+
+    @Test
+    public void importWithoutPageHeightLeavesJsonForRetry() throws Exception {
+        writeLegacyJson();
+        assertEquals(0, LegacyBoardImporter.importIfPresent(
+                filesDir, device.repo, 0, 0, 0L));
+        assertTrue(new File(filesDir, LegacyBoardImporter.FILE_NAME).exists());
     }
 
     private void assertPoints(Board board, int points) {

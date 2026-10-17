@@ -9,12 +9,15 @@ import com.zetteldraw.penpoc.LaunchLog;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Process-wide repository. First call migrates BoardStore JSON into Room. */
+/**
+ * Process-wide repository. BoardStore JSON stays on disk until the first
+ * {@link RoomBoardRepository#ensureSheet} with a real page height — then Ready
+ * {@code .zdl} is written directly (no importer {@code .zdi} / BOARD outbox).
+ */
 public final class ZettelData {
     private static final String TAG = "zd-data";
     private static RoomBoardRepository repository;
@@ -45,14 +48,8 @@ public final class ZettelData {
                     mirrorExecutor,
                     app.getMainExecutor(),
                     System::currentTimeMillis);
-            try {
-                int imported = LegacyBoardImporter.importIfPresent(app.getFilesDir(), repository);
-                if (imported >= 0) {
-                    Log.i(TAG, "imported " + imported + " boards from " + LegacyBoardImporter.FILE_NAME);
-                }
-            } catch (IOException e) {
-                Log.e(TAG, "legacy import failed; will retry next launch", e);
-            }
+            repository.setLegacyFilesDir(app.getFilesDir());
+            Log.i(TAG, "legacy JSON deferred until pageHeight (Ready-direct import)");
         }
         return repository;
     }

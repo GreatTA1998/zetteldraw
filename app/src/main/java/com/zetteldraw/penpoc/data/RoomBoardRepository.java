@@ -54,11 +54,11 @@ import java.util.function.LongSupplier;
  *
  * <p>Ink saves are Ready-only write-behind: {@code page.paper != null} queues
  * {@link InkSheetStore#flushSheetOrFalse}. There is no BoardEntity {@code .zdi}
- * write-behind or board conflict shelf. Unmigrated page files from
- * {@link #importLegacy} feed {@link #migrationSourcesForSheet} once; after Ready
- * install {@link #retireBoardEntityInkLocked} clears them.
- * {@link MetaPullApply} board LWW writes migration {@code .zdi} only while not
- * log-backed — pull UI refresh is listener reload, not BoardEntity stroke swap.
+ * write-behind or board conflict shelf. {@link #importLegacy} writes Ready
+ * {@code .zdl} from in-memory SourcePages once pageHeight is known — never
+ * {@code .zdi} / BOARD outbox. Historical BOARD pull still stages migration
+ * {@code .zdi} via {@link MetaPullApply}; {@link #migrationSourcesForSheet} +
+ * {@link #retireBoardEntityInkLocked} clear that residue on first ensure.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
@@ -114,6 +114,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private int knownPageHeight;
     private int knownLegacyHeight;
     private long knownShortPagesSince;
+    /**
+     * App files dir holding {@link LegacyBoardImporter#FILE_NAME}. Import runs
+     * from {@link #ensureSheet} once pageHeight is known — not at open.
+     */
+    private File legacyFilesDir;
     /** Sync-pass ink policy; default catch-up so unit tests can adopt. */
     private volatile SyncStore.InkPullPolicy inkPullPolicy = SyncStore.InkPullPolicy.CATCH_UP;
 
@@ -1368,61 +1373,86 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     // region legacy import
 
-    /** Inserts BoardStore boards in their old order. Returns the count imported. */
-    int importLegacy(LegacyBoardImporter.Legacy legacy) throws IOException {
+    /** Where BoardStore JSON may still sit — set by {@link ZettelData} at open. */
+    void setLegacyFilesDir(File filesDir) {
+        this.legacyFilesDir = filesDir;
+    }
+
+    /**
+     * Ready-direct BoardStore import: identity BoardEntity rows + {@code .zdl}
+     * from in-memory SourcePages. Never writes {@code .zdi} or BOARD outbox.
+     * Requires {@code pageHeight > 0}. Returns the count imported.
+     */
+    int importLegacy(LegacyBoardImporter.Legacy legacy, int pageHeight, int legacyPageHeight,
+                     long shortPagesSince) throws IOException {
+        if (pageHeight <= 0) {
+            return 0;
+        }
+        LinkedHashMap<String, ArrayList<Board>> groups = new LinkedHashMap<>();
+        ArrayList<BoardEntity> rows = new ArrayList<>();
         synchronized (lock) {
-            ArrayList<BoardEntity> rows = new ArrayList<>();
-            ArrayList<Board> boards = new ArrayList<>();
             String last = dao.lastScratchpadPosition();
             ArrayList<Board> scratch = new ArrayList<>(legacy.scratchpad);
             scratch.addAll(legacy.orphans);
+            ArrayList<Board> scratchKept = new ArrayList<>();
             for (Board board : scratch) {
                 if (board.isBlank() || dao.board(board.id) != null) {
                     continue;
                 }
                 last = Positions.after(last);
                 rows.add(legacyRow(board, null, last));
-                boards.add(board);
+                scratchKept.add(board);
+            }
+            if (!scratchKept.isEmpty()) {
+                groups.put("", scratchKept);
             }
             for (Map.Entry<Notebook, List<Board>> entry : legacy.notebooks.entrySet()) {
                 String notebookId = entry.getKey().uuid;
                 String pos = dao.lastNotebookBoardPosition(notebookId);
+                ArrayList<Board> kept = new ArrayList<>();
                 for (Board board : entry.getValue()) {
                     if (dao.board(board.id) != null) {
                         continue;
                     }
                     pos = Positions.after(pos);
                     rows.add(legacyRow(board, notebookId, pos));
-                    boards.add(board);
+                    kept.add(board);
+                }
+                if (!kept.isEmpty()) {
+                    groups.put(notebookId, kept);
                 }
             }
-            for (int i = 0; i < rows.size(); i++) {
-                BoardEntity row = rows.get(i);
-                Board board = boards.get(i);
-                if (!board.isBlank()) {
-                    byte[] bytes = InkCodec.encode(board.strokes);
-                    row.inkHash = InkFileStore.sha256(bytes);
-                    row.inkBytes = bytes.length;
-                    writeInkLocked(row.id, bytes);
-                }
+            if (rows.isEmpty()) {
+                return 0;
             }
+            // Identity / createdAt only — ink lives on Ready .zdl.
             db.runInTransaction(() -> {
                 for (BoardEntity row : rows) {
                     dao.upsertBoard(row);
-                    queueLocked(OutboxEntry.BOARD, row.id, OutboxEntry.UPSERT);
                 }
             });
-            for (Board board : boards) {
-                cache.put(board.id, board);
-            }
             for (Board blank : trailingBlanks.values()) {
                 cache.remove(blank.id);
             }
             trailingBlanks.clear();
-            // Ready projectLocked mints the Scratchpad blank on next pages().
-            scheduleIndex();
-            return rows.size();
         }
+        for (Map.Entry<String, ArrayList<Board>> entry : groups.entrySet()) {
+            String notebookId = entry.getKey().isEmpty() ? null : entry.getKey();
+            ArrayList<NotebookPaper.SourcePage> sources = new ArrayList<>();
+            for (Board board : entry.getValue()) {
+                int height = NotebookPaper.measuredHeight(
+                        board.createdAt, board.strokes, pageHeight, legacyPageHeight, shortPagesSince);
+                sources.add(new NotebookPaper.SourcePage(board.id, height, board.strokes));
+            }
+            if (!sheetStore.installFromSources(notebookId, sources, pageHeight, true)) {
+                throw new IOException("Ready import failed for "
+                        + (notebookId == null ? "scratchpad" : notebookId));
+            }
+        }
+        synchronized (lock) {
+            scheduleIndex();
+        }
+        return rows.size();
     }
 
     private BoardEntity legacyRow(Board board, String notebookId, String position) {
@@ -1433,6 +1463,26 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         row.createdAt = board.createdAt;
         row.updatedAt = clock.getAsLong();
         return row;
+    }
+
+    /** Drain parked BoardStore JSON on first known pageHeight. */
+    private void importLegacyIfPresent(int pageHeight, int legacyPageHeight, long shortPagesSince) {
+        if (legacyFilesDir == null || pageHeight <= 0) {
+            return;
+        }
+        File pending = new File(legacyFilesDir, LegacyBoardImporter.FILE_NAME);
+        if (!pending.exists()) {
+            return;
+        }
+        try {
+            int imported = LegacyBoardImporter.importIfPresent(
+                    legacyFilesDir, this, pageHeight, legacyPageHeight, shortPagesSince);
+            if (imported > 0) {
+                LaunchLog.mark("Ready-direct import " + imported + " board(s)");
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "legacy import failed; will retry next ensureSheet", e);
+        }
     }
 
     // endregion
@@ -1658,15 +1708,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return dao.outbox(entity, id) != null;
     }
 
-    private void writeInkLocked(String boardId, byte[] bytes) throws IOException {
-        if (bytes == null) {
-            ink.delete(boardId);
-        } else {
-            ink.write(boardId, bytes);
-        }
-        mirrorInk(boardId, bytes);
-    }
-
     /** Queues the Documents copy of one board; a newer call for the same board replaces an unsent one. */
     private void mirrorInk(String boardId, byte[] bytes) {
         boolean start;
@@ -1809,6 +1850,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         knownPageHeight = pageHeight;
         knownLegacyHeight = legacyPageHeight;
         knownShortPagesSince = shortPagesSince;
+        // BoardStore JSON → Ready .zdl once height is real (never mid-open .zdi).
+        importLegacyIfPresent(pageHeight, legacyPageHeight, shortPagesSince);
         return sheetStore.ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
     }
 

@@ -204,9 +204,20 @@ public final class InkSheetStore {
         }
         List<NotebookPaper.SourcePage> sources =
                 deps.migrationSources(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
+        return installFromSources(notebookId, sources, pageHeight, true);
+    }
+
+    /**
+     * Write {@code .zdl} from {@link NotebookPaper.SourcePage}s and install Ready.
+     * Shared by page-file migration ({@link #ensureSheet}) and Ready-direct
+     * {@link RoomBoardRepository#importLegacy} — never writes {@code .zdi}.
+     */
+    boolean installFromSources(String notebookId, List<NotebookPaper.SourcePage> sources,
+                               int pageHeight, boolean queue) {
         if (sources == null) {
             return false;
         }
+        String sheetId = NotebookPaper.sheetId(notebookId);
         RoomBoardRepository.logReplays.incrementAndGet();
         NotebookPaper built = NotebookPaper.migrate(sources, pageHeight);
         NotebookPaper readBack;
@@ -237,7 +248,7 @@ public final class InkSheetStore {
             Log.e(TAG, "migration disk read-back refused " + sheetId);
             return false;
         }
-        installSheet(notebookId, sheetId, readBack, bytes.length, true);
+        installSheet(notebookId, sheetId, readBack, bytes.length, queue);
         return isSheetReady(notebookId);
     }
 

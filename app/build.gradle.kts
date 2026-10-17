@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v132: Prepare/backupStatus Ready-cover; stop BOARD push when log-backed.
-        versionCode = 132
-        versionName = "4.11"
+        // Tip v133: Ready-direct importLegacy — no importer .zdi / BOARD outbox.
+        versionCode = 133
+        versionName = "4.12"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

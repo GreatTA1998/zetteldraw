@@ -134,19 +134,22 @@ public class ReadyOnlyWritersTest {
     }
 
     @Test
-    public void importLegacyStillWritesUnmigratedPageFilesForMigration() throws Exception {
-        // Importer residue only — after ensureSheet, Ready retires .zdi.
+    public void importLegacyWritesReadyLogWithoutPageFilesOrBoardOutbox() throws Exception {
         Board page = Board.blank();
         TestInk.draw(page, 7f);
         LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
         legacy.scratchpad.add(page);
-        assertEquals(1, repo.importLegacy(legacy));
+        assertEquals(1, repo.importLegacy(legacy, PAGE, PAGE, 0L));
 
-        assertTrue(new File(inkDir, page.id + ".zdi").exists());
+        assertFalse("Ready-direct import must not write .zdi",
+                new File(inkDir, page.id + ".zdi").exists());
+        assertTrue(ink.hasLog(NotebookPaper.sheetId(null)));
         BoardEntity row = db.dao().board(page.id);
         assertNotNull(row);
-        assertNotNull(row.inkHash);
-        assertNotNull(db.dao().outbox(OutboxEntry.BOARD, page.id));
+        assertNull("identity row only — ink on .zdl", row.inkHash);
+        assertNull(db.dao().outbox(OutboxEntry.BOARD, page.id));
+        assertNotNull(db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(null)));
+        assertTrue(repo.isSheetReady(null));
     }
 
     @Test

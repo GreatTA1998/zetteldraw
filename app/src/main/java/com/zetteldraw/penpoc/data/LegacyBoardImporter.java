@@ -41,14 +41,20 @@ public final class LegacyBoardImporter {
     }
 
     /**
-     * Imports {@code filesDir/zetteldraw-boards.json} if present, then renames
-     * it to {@code .migrated} (kept as a fallback, never deleted).
-     * Returns the number of boards imported, or -1 when there was nothing to do.
+     * Imports {@code filesDir/zetteldraw-boards.json} onto Ready {@code .zdl}
+     * when {@code pageHeight} is known, then renames it to {@code .migrated}
+     * (kept as a fallback, never deleted). Returns the number of boards
+     * imported, 0 when height is unknown / JSON unreadable, or -1 when absent.
      */
-    public static int importIfPresent(File filesDir, RoomBoardRepository repository) throws IOException {
+    public static int importIfPresent(File filesDir, RoomBoardRepository repository,
+                                      int pageHeight, int legacyPageHeight,
+                                      long shortPagesSince) throws IOException {
         File file = new File(filesDir, FILE_NAME);
         if (!file.exists()) {
             return -1;
+        }
+        if (pageHeight <= 0) {
+            return 0;
         }
         Legacy legacy;
         try {
@@ -59,7 +65,7 @@ public final class LegacyBoardImporter {
             file.renameTo(bad);
             return 0;
         }
-        int count = repository.importLegacy(legacy);
+        int count = repository.importLegacy(legacy, pageHeight, legacyPageHeight, shortPagesSince);
         File done = new File(filesDir, FILE_NAME + MIGRATED_SUFFIX);
         if (!file.renameTo(done)) {
             throw new IOException("could not rename " + file);
