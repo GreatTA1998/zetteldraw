@@ -110,6 +110,20 @@ public class EnsureUnsyncedQueuedTest {
     }
 
     @Test
+    public void pendingPushDropsBoardOutboxWithoutPushing() throws Exception {
+        Board page = Board.blank();
+        TestInk.draw(page, 13f);
+        device.seedUnmigrated(page);
+        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+
+        SyncStore.PushBatch batch = repo.pendingPush(50);
+        assertTrue(batch.boards.isEmpty());
+        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+        // Local .zdi residue remains until open / Prepare migrate → LOG.
+        assertNotNull(device.db.dao().board(page.id).inkHash);
+    }
+
+    @Test
     public void ensureReadyInkForBackupMigratesUnopenedBeforeQueue() throws Exception {
         Board page = Board.blank();
         TestInk.draw(page, 12f);
