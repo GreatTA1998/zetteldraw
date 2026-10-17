@@ -97,6 +97,19 @@ public class EnsureUnsyncedQueuedTest {
     }
 
     @Test
+    public void doesNotQueueBoardUpsertForUnopenedHistorical() throws Exception {
+        Board page = Board.blank();
+        TestInk.draw(page, 11f);
+        device.seedUnmigrated(page);
+        // Drop seed outbox — SyncWorker must not revive BOARD UPSERT.
+        device.db.dao().deleteOutbox(OutboxEntry.BOARD, page.id);
+        assertEquals(0, repo.ensureUnsyncedQueued());
+        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+        // Ink stays on BoardEntity until open / Prepare ensureReadyInkForBackup.
+        assertNotNull(device.db.dao().board(page.id).inkHash);
+    }
+
+    @Test
     public void ensureReadyInkForBackupMigratesUnopenedBeforeQueue() throws Exception {
         Board page = Board.blank();
         TestInk.draw(page, 12f);

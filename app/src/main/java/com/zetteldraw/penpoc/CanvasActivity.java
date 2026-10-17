@@ -2534,9 +2534,8 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * When layout height is known, migrate unopened BoardEntity ink onto Ready
-     * {@code .zdl}, then queue never-pushed rows. Stops new BOARD bodies when
-     * the Ready path covers the notebook.
+     * Migrate unopened BoardEntity ink onto Ready {@code .zdl}, then queue LOG.
+     * No BOARD UPSERT — unopened {@code .zdi} must hit open/Prepare first.
      */
     private void queueLocalInkForSync() {
         RoomBoardRepository repo = ZettelData.repository(this);
@@ -2589,7 +2588,7 @@ public final class CanvasActivity extends Activity {
             try {
                 SyncConfig cfg = SyncConfig.load(CanvasActivity.this);
                 com.zetteldraw.penpoc.data.SyncStore store = ZettelData.repository(CanvasActivity.this);
-                // Migrate unopened .zdi → Ready before queue so Prepare pushes LOG, not BOARD.
+                // Migrate unopened .zdi → Ready before queue (BOARD UPSERT arm is gone).
                 queueLocalInkForSync();
                 SyncClient client = new SyncClient(cfg, ZettelDatabase.SCHEMA_VERSION);
                 SyncEngine engine = new SyncEngine(
