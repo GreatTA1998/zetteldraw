@@ -62,9 +62,9 @@ public interface SyncStore {
     }
 
     /**
-     * Defensive: queue every live local row that has never been pushed ({@code rev == 0})
-     * and is not already in the outbox. Used on first Google Sign-In so local-only notes
-     * upload even if an earlier path skipped {@code queueLocked}.
+     * Defensive: queue never-pushed NOTEBOOK / LOG / LINK ({@code rev == 0}) missing
+     * from the outbox. No BOARD UPSERT — Ready {@code .zdl} is ink push SoT; unopened
+     * {@code .zdi} waits for open/Prepare. Used on Sign-In / SyncWorker.
      *
      * @return how many new outbox rows were added
      */

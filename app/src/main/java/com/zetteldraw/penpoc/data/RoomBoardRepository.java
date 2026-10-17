@@ -1248,18 +1248,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         added[0]++;
                     }
                 }
+                // No BOARD UPSERT — Ready .zdl only. Drop stale BOARD outbox on log-backed.
+                // Unopened .zdi waits for open/Prepare (ensureReadyInkForBackup).
                 for (BoardEntity row : dao.liveBoardsForIndex()) {
-                    // inkHash-null rows are blanks / migration tails — not push bodies.
-                    if (row.rev != 0 || row.conflictOf != null || row.inkHash == null) {
-                        continue;
-                    }
-                    // Ready .zdl owns ink — never push new BOARD bodies for log-backed notebooks.
                     if (notebookLogBackedLocked(row.notebookId)) {
                         dao.deleteOutbox(OutboxEntry.BOARD, row.id);
-                        continue;
-                    }
-                    if (queueIfAbsent(OutboxEntry.BOARD, row.id)) {
-                        added[0]++;
                     }
                 }
                 for (NotebookLogEntity row : dao.liveNotebookLogs()) {
@@ -1283,7 +1276,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     /**
      * Before Prepare / Settings sync: migrate unopened BoardEntity ink onto Ready
-     * so {@link #ensureUnsyncedQueued} queues LOG instead of BOARD.
+     * so {@link #ensureUnsyncedQueued} can queue LOG (BOARD UPSERT is gone).
      */
     @Override
     public int ensureReadyInkForBackup(int pageHeight, int legacyPageHeight,
