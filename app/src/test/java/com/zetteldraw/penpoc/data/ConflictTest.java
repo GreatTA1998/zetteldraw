@@ -10,7 +10,6 @@ import static org.junit.Assert.assertTrue;
 import android.app.Application;
 
 import com.zetteldraw.penpoc.Board;
-import com.zetteldraw.penpoc.InkRenderer;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
@@ -171,9 +170,10 @@ public class ConflictTest {
             String localHash = local.inkHash;
             assertNotNull(bare.db.dao().outbox(OutboxEntry.BOARD, page.id));
 
-            List<InkRenderer.InkStroke> remoteInk =
-                    Collections.singletonList(TestInk.stroke(500f, 600f, 9));
-            SyncStore.PullPage pulled = remoteBoardPage(local, remoteInk, local.updatedAt + 5_000, 10);
+            // Pull has no BOARD channel (bag deleted); cursor-only page must not
+            // touch local .zdi residue.
+            SyncStore.PullPage pulled = new SyncStore.PullPage();
+            pulled.cursor = local.rev + 10;
             bare.repo.setInkPullPolicy(SyncStore.InkPullPolicy.CATCH_UP);
             bare.repo.applyPull(pulled);
 
@@ -253,21 +253,6 @@ public class ConflictTest {
             Thread.sleep(20);
         }
         assertEquals(0, target.pendingWrites());
-    }
-
-    private SyncStore.PullPage remoteBoardPage(BoardEntity base, List<InkRenderer.InkStroke> ink,
-                                               long updatedAt, long rev) {
-        byte[] bytes = InkCodec.encode(ink);
-        BoardEntity remote = base.copy();
-        remote.inkHash = InkFileStore.sha256(bytes);
-        remote.inkBytes = bytes.length;
-        remote.updatedAt = updatedAt;
-        remote.rev = rev;
-        SyncStore.PullPage p = new SyncStore.PullPage();
-        p.boards.add(remote);
-        p.blobs.put(remote.inkHash, bytes);
-        p.cursor = rev;
-        return p;
     }
 
     private static BoardEntity row(String hash, long updatedAt) {

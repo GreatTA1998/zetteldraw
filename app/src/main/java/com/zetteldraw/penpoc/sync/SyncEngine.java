@@ -51,7 +51,6 @@ public final class SyncEngine {
 
     public static final class Result {
         public int pushed;
-        public int pulledBoards;
         public int pulledNotebooks;
         /** True when this pass pulled before pushing (cloud seeded a new device). */
         public boolean restoredFromCloud;
@@ -191,7 +190,7 @@ public final class SyncEngine {
                 return;
             }
             store.applyPushResults(batch, results);
-            result.pushed += batch.notebooks.size() + batch.boards.size() + batch.logs.size();
+            result.pushed += batch.notebooks.size() + batch.logs.size() + batch.links.size();
             if (store.outboxSize() >= before) {
                 return;
             }
@@ -208,7 +207,6 @@ public final class SyncEngine {
             }
             fetchMissingBlobs(page);
             store.applyPull(page);
-            result.pulledBoards += page.boards.size();
             result.pulledNotebooks += page.notebooks.size();
             if (!page.hasMore) {
                 return;

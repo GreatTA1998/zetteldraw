@@ -1,7 +1,6 @@
 package com.zetteldraw.penpoc.sync;
 
 import com.zetteldraw.penpoc.data.SyncStore;
-import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.PageLinkEntity;
@@ -91,23 +90,7 @@ final class SyncProtocol {
             n.deletedAt = optLong(j, "deleted_at");
             page.notebooks.add(n);
         }
-        JSONArray boards = response.optJSONArray("boards");
-        for (int i = 0; boards != null && i < boards.length(); i++) {
-            JSONObject j = boards.getJSONObject(i);
-            BoardEntity b = new BoardEntity();
-            b.id = j.getString("id");
-            b.notebookId = optString(j, "notebook_id");
-            b.position = j.getString("position");
-            b.inkHash = optString(j, "ink_hash");
-            b.inkBytes = j.optLong("ink_bytes", 0L);
-            b.thumbHash = optString(j, "thumb_hash");
-            b.conflictOf = optString(j, "conflict_of");
-            b.createdAt = j.getLong("created_at");
-            b.updatedAt = j.getLong("updated_at");
-            b.rev = j.getLong("rev");
-            b.deletedAt = optLong(j, "deleted_at");
-            page.boards.add(b);
-        }
+        // Pull boards are ignored (server emits []); catch-up ink is Ready .zdl only.
         JSONArray logs = response.optJSONArray("logs");
         for (int i = 0; logs != null && i < logs.length(); i++) {
             page.logs.add(logFrom(logs.getJSONObject(i)));

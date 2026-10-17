@@ -1,6 +1,5 @@
 package com.zetteldraw.penpoc.data;
 
-import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.PageLinkEntity;
@@ -120,12 +119,12 @@ public interface SyncStore {
     }
 
     /**
-     * Shared notebook/board/log/link + small-blob bags for push and pull.
-     * Push adds large-file maps; pull adds cursor paging.
+     * Shared notebook/log/link + small-blob bags for push and pull.
+     * Push adds large-file maps; pull adds cursor paging. BOARD bags are gone —
+     * Ready {@code .zdl} / LOG is the only ink sync SoT.
      */
     class EntityBag {
         public final List<NotebookEntity> notebooks = new ArrayList<>();
-        public final List<BoardEntity> boards = new ArrayList<>();
         /** One ink log per notebook. A push sends the whole log, never a torn stroke. */
         public final List<NotebookLogEntity> logs = new ArrayList<>();
         /** Page links. Metadata only: a link copies no ink. */
@@ -138,7 +137,7 @@ public interface SyncStore {
         public final Map<String, byte[]> blobs = new HashMap<>();
 
         public boolean isEmpty() {
-            return notebooks.isEmpty() && boards.isEmpty() && logs.isEmpty() && links.isEmpty();
+            return notebooks.isEmpty() && logs.isEmpty() && links.isEmpty();
         }
     }
 

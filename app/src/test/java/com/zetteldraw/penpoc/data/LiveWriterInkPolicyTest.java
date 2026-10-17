@@ -112,20 +112,11 @@ public class LiveWriterInkPolicyTest {
         String localHash = local.inkHash;
         assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
 
-        List<InkRenderer.InkStroke> remoteInk =
-                Collections.singletonList(TestInk.stroke(500f, 600f, 9));
-        byte[] remoteBytes = InkCodec.encode(remoteInk);
-        BoardEntity remote = local.copy();
-        remote.inkHash = InkFileStore.sha256(remoteBytes);
-        remote.inkBytes = remoteBytes.length;
-        remote.rev = local.rev + 10;
-        remote.updatedAt = local.updatedAt + 5_000;
-
+        // Pull has no BOARD channel (bag deleted); cursor-only page must not
+        // adopt over local .zdi residue.
         repo.setInkPullPolicy(SyncStore.InkPullPolicy.LIVE_PUSH_ONLY);
         SyncStore.PullPage pulled = new SyncStore.PullPage();
-        pulled.boards.add(remote);
-        pulled.blobs.put(remote.inkHash, remoteBytes);
-        pulled.cursor = remote.rev;
+        pulled.cursor = local.rev + 10;
         repo.applyPull(pulled);
 
         BoardEntity after = device.db.dao().board(page.id);
