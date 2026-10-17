@@ -355,6 +355,17 @@ public final class InkSheetStore {
                         + " diskBytes=" + diskBytes);
                 // fall through — same primary-body install as LWW_REPLACE
             case LWW_REPLACE:
+                // Ready conflict shelf: pending local loser → hidden conflict_of
+                // copy before primary replace (MetaPullApply.conflictCopy for .zdl).
+                if (InkLogApply.shelvesLosingLocal(
+                        decision,
+                        deps.pendingLog(remote.id),
+                        localInkHashForShelfLocked(local, open),
+                        local == null ? null : local.deletedAt,
+                        remote.inkHash,
+                        remote.deletedAt)) {
+                    shelfLosingLocalLogLocked(remote.id, local, open, mirrorOps);
+                }
                 installRemotePaperLocked(remote, paper, bytes, open, mirrorOps);
                 upsertLogClearOutbox(remote);
                 return;
@@ -622,6 +633,66 @@ public final class InkSheetStore {
         mirrorOps.add(() -> deps.mirrorLog(id, bytes));
         deps.dao().upsertNotebookLog(copy);
         deps.queueLogUpsert(copy.id);
+    }
+
+    /**
+     * Exception shelf for Ready: keep the losing local primary {@code .zdl} as a
+     * hidden {@code conflict_of} copy before remote replaces the primary. Mirrors
+     * {@link MetaPullApply}'s board {@code conflictCopy} so Hand-off / history
+     * races do not drop ink once writers are Ready-only.
+     */
+    private void shelfLosingLocalLogLocked(String primaryId, NotebookLogEntity local,
+                                           OpenSheet open, List<Runnable> mirrorOps)
+            throws IOException {
+        byte[] localBytes = null;
+        if (open != null && open.ready && open.paper != null) {
+            localBytes = open.paper.bytes();
+        }
+        if (localBytes == null || localBytes.length == 0) {
+            localBytes = deps.ink().readLog(primaryId);
+        }
+        if (localBytes == null || localBytes.length == 0) {
+            return;
+        }
+        NotebookLogEntity copy = local != null ? local.copy() : new NotebookLogEntity();
+        copy.id = UUID.randomUUID().toString();
+        copy.notebookId = local != null ? local.notebookId
+                : (open != null ? open.notebookId : null);
+        copy.inkHash = InkFileStore.sha256(localBytes);
+        copy.inkBytes = localBytes.length;
+        if (open != null && open.paper != null) {
+            copy.sliceHeight = open.paper.sliceHeight;
+        }
+        copy.conflictOf = primaryId;
+        copy.rev = 0;
+        copy.deletedAt = null;
+        if (copy.createdAt == 0L) {
+            copy.createdAt = deps.clock().getAsLong();
+        }
+        if (copy.updatedAt == 0L) {
+            copy.updatedAt = deps.clock().getAsLong();
+        }
+        deps.ink().writeLog(copy.id, localBytes);
+        String id = copy.id;
+        byte[] bytes = localBytes;
+        mirrorOps.add(() -> deps.mirrorLog(id, bytes));
+        deps.dao().upsertNotebookLog(copy);
+        deps.queueLogUpsert(copy.id);
+        LaunchLog.mark("shelved losing local log " + primaryId + " as " + copy.id);
+    }
+
+    /** Hash of the local primary body for {@link InkLogApply#shelvesLosingLocal}. */
+    private String localInkHashForShelfLocked(NotebookLogEntity local, OpenSheet open) {
+        if (local != null && local.inkHash != null) {
+            return local.inkHash;
+        }
+        if (open != null && open.ready && open.paper != null) {
+            byte[] bytes = open.paper.bytes();
+            if (bytes != null && bytes.length > 0) {
+                return InkFileStore.sha256(bytes);
+            }
+        }
+        return null;
     }
 
     private void ensureLocalLogQueuedLocked(String sheetId, OpenSheet open) {

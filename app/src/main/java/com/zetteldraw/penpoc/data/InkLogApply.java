@@ -131,4 +131,19 @@ public final class InkLogApply {
     public static boolean protectsPrimaryLength(Decision d) {
         return d == Decision.REFUSE_SHORTER || d == Decision.KEEP_LIVE_LOCAL;
     }
+
+    /**
+     * Exception shelf: before replacing the primary body, keep a pending local
+     * loser as {@code conflict_of} (same guarantee as {@link MetaPullApply} for
+     * legacy boards). Day-to-day live push-only never reaches here
+     * ({@link Decision#KEEP_LIVE_LOCAL}).
+     */
+    public static boolean shelvesLosingLocal(
+            Decision d, boolean pendingLocal,
+            String localHash, Long localDeletedAt,
+            String remoteHash, Long remoteDeletedAt) {
+        return writesPrimaryBody(d)
+                && pendingLocal
+                && Lww.needsConflictCopy(localHash, localDeletedAt, remoteHash, remoteDeletedAt);
+    }
 }

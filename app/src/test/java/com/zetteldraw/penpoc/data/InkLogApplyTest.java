@@ -109,6 +109,23 @@ public class InkLogApplyTest {
     }
 
     @Test
+    public void shelvesLosingLocalOnlyWhenPendingReplaceDiffers() {
+        assertTrue(InkLogApply.shelvesLosingLocal(
+                InkLogApply.Decision.LWW_REPLACE, true, "aaa", null, "bbb", null));
+        assertTrue(InkLogApply.shelvesLosingLocal(
+                InkLogApply.Decision.ADOPT_LONGER, true, "aaa", null, "bbb", null));
+        assertFalse("no pending outbox — not a Hand-off race shelf",
+                InkLogApply.shelvesLosingLocal(
+                        InkLogApply.Decision.LWW_REPLACE, false, "aaa", null, "bbb", null));
+        assertFalse("same ink — idempotent",
+                InkLogApply.shelvesLosingLocal(
+                        InkLogApply.Decision.LWW_REPLACE, true, "aaa", null, "aaa", null));
+        assertFalse("live keep does not replace primary",
+                InkLogApply.shelvesLosingLocal(
+                        InkLogApply.Decision.KEEP_LIVE_LOCAL, true, "aaa", null, "bbb", null));
+    }
+
+    @Test
     public void logLengthPredicatesRemainMonotonic() {
         assertTrue(LogLength.remoteShortens(40, 22));
         assertFalse(LogLength.remoteShortens(22, 40));

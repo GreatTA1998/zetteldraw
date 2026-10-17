@@ -12,6 +12,7 @@ import android.app.Application;
 import com.zetteldraw.penpoc.Board;
 import com.zetteldraw.penpoc.InkRenderer;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
 
 import org.junit.After;
@@ -31,10 +32,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Exception-path conflict shelves on the device side of sync (Hand off /
  * history). Day-to-day sync is single live writer push + pull catch-up.
+ *
+ * <p>Ready path shelves losing local {@code .zdl} via {@link InkSheetStore};
+ * legacy BoardEntity {@code .zdi} shelf remains in {@link MetaPullApply} until
+ * writers no longer need page-file rows.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
 public class ConflictTest {
+    private static final int PAGE = 800;
+
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
@@ -170,6 +177,113 @@ public class ConflictTest {
         repo.applyPushResults(batch, Collections.singletonList(
                 new SyncStore.PushResult(OutboxEntry.BOARD, page.id, SyncStore.PushResult.MISSING_BLOB, 0)));
         assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+    }
+
+    @Test
+    public void newerRemoteLogWinsAndLocalLogBecomesHiddenCopy() throws Exception {
+        // Fresh Ready device — no legacy BoardEntity seed (that would inflate local .zdl).
+        Device readyDevice = new Device("ready-shelf", tmp.newFolder("ready-shelf"), 20_000_000L);
+        RoomBoardRepository readyRepo = readyDevice.repo;
+        try {
+            assertTrue(readyDevice.ensureReady());
+            Board ready = readyRepo.scratchpadPages().get(0);
+            TestInk.draw(ready, 10f);
+            readyRepo.saveInk(ready);
+            drainWrites(readyRepo);
+
+            String sheetId = NotebookPaper.sheetId(null);
+            NotebookLogEntity local = readyDevice.db.dao().notebookLog(sheetId);
+            assertNotNull(local);
+            assertNotNull(readyDevice.db.dao().outbox(OutboxEntry.LOG, sheetId));
+            String localHash = local.inkHash;
+            byte[] localBytes = new InkFileStore(readyDevice.inkDir()).readLog(sheetId);
+            assertNotNull(localBytes);
+
+            // Same slice count; remote body not shorter on disk (install refuses shrink).
+            NotebookPaper remotePaper = NotebookPaper.empty(PAGE);
+            remotePaper.appendStroke(TestInk.stroke(500f, 60f, 24), ready.id);
+            byte[] remoteBytes = remotePaper.bytes();
+            assertTrue("remote must not be shorter than local disk",
+                    remoteBytes.length >= localBytes.length);
+            NotebookLogEntity remote = local.copy();
+            remote.inkHash = InkFileStore.sha256(remoteBytes);
+            remote.inkBytes = remoteBytes.length;
+            remote.updatedAt = local.updatedAt + 5_000;
+            remote.rev = Math.max(1, local.rev) + 10;
+            SyncStore.PullPage pull = new SyncStore.PullPage();
+            pull.logs.add(remote);
+            pull.blobs.put(remote.inkHash, remoteBytes);
+            pull.cursor = remote.rev;
+            readyRepo.applyPull(pull);
+
+            NotebookLogEntity after = readyDevice.db.dao().notebookLog(sheetId);
+            assertEquals(remote.rev, after.rev);
+            assertEquals(remote.inkHash, after.inkHash);
+            assertNull(readyDevice.db.dao().outbox(OutboxEntry.LOG, sheetId));
+            assertEquals(remote.inkHash, readyRepo.localInkLogHash(sheetId));
+
+            List<NotebookLogEntity> copies = readyDevice.db.dao().conflictLogCopies();
+            assertEquals(1, copies.size());
+            NotebookLogEntity copy = copies.get(0);
+            assertEquals(sheetId, copy.conflictOf);
+            assertEquals(localHash, copy.inkHash);
+            assertEquals(0, copy.rev);
+            assertNotNull("copy is pushed so the server keeps it too",
+                    readyDevice.db.dao().outbox(OutboxEntry.LOG, copy.id));
+            byte[] shelved = new InkFileStore(readyDevice.inkDir()).readLog(copy.id);
+            assertNotNull(shelved);
+            assertTrue(java.util.Arrays.equals(localBytes, shelved));
+            for (Board b : readyRepo.scratchpadPages()) {
+                assertNotEquals("copies stay hidden from Ready projection", copy.id, b.id);
+            }
+        } finally {
+            readyDevice.close();
+        }
+    }
+
+    @Test
+    public void readyNewerLocalLogSurvivesOlderRemoteWithoutShelf() throws Exception {
+        Device readyDevice = new Device("ready-keep", tmp.newFolder("ready-keep"), 21_000_000L);
+        RoomBoardRepository readyRepo = readyDevice.repo;
+        try {
+            assertTrue(readyDevice.ensureReady());
+            Board ready = readyRepo.scratchpadPages().get(0);
+            TestInk.draw(ready, 11f);
+            readyRepo.saveInk(ready);
+            drainWrites(readyRepo);
+
+            String sheetId = NotebookPaper.sheetId(null);
+            NotebookLogEntity local = readyDevice.db.dao().notebookLog(sheetId);
+            assertNotNull(local);
+            String localHash = local.inkHash;
+
+            NotebookPaper remotePaper = NotebookPaper.empty(PAGE);
+            remotePaper.appendStroke(TestInk.stroke(1f, 60f, 12), ready.id);
+            byte[] remoteBytes = remotePaper.bytes();
+            NotebookLogEntity remote = local.copy();
+            remote.inkHash = InkFileStore.sha256(remoteBytes);
+            remote.inkBytes = remoteBytes.length;
+            remote.updatedAt = local.updatedAt - 1;
+            remote.rev = Math.max(1, local.rev) + 10;
+            SyncStore.PullPage pull = new SyncStore.PullPage();
+            pull.logs.add(remote);
+            pull.blobs.put(remote.inkHash, remoteBytes);
+            pull.cursor = remote.rev;
+            readyRepo.applyPull(pull);
+
+            assertEquals(localHash, readyDevice.db.dao().notebookLog(sheetId).inkHash);
+            assertNotNull(readyDevice.db.dao().outbox(OutboxEntry.LOG, sheetId));
+            assertTrue(readyDevice.db.dao().conflictLogCopies().isEmpty());
+        } finally {
+            readyDevice.close();
+        }
+    }
+
+    private static void drainWrites(RoomBoardRepository target) throws Exception {
+        for (int i = 0; i < 40 && target.pendingWrites() > 0; i++) {
+            Thread.sleep(20);
+        }
+        assertEquals(0, target.pendingWrites());
     }
 
     private SyncStore.PullPage remotePage(BoardEntity base, List<InkRenderer.InkStroke> ink, long updatedAt, long rev) {
