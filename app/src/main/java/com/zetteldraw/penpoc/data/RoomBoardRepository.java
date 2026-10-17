@@ -55,8 +55,9 @@ import java.util.function.LongSupplier;
  *
  * <p>Ink saves are Ready-only write-behind: {@code page.paper != null} queues
  * {@link InkSheetStore#flushSheetOrFalse}. There is no BoardEntity {@code .zdi}
- * write-behind — unmigrated page files are migration sources / conflict shelf
- * only ({@link #migrationSourcesForSheet}, {@link MetaPullApply}).
+ * write-behind. Unmigrated page files feed {@link #migrationSourcesForSheet}
+ * once; after Ready install {@link #retireBoardEntityInkLocked} clears them.
+ * {@link MetaPullApply} board LWW applies only while not log-backed.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
