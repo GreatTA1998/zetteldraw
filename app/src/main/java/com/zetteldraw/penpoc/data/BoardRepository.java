@@ -103,14 +103,17 @@ public interface BoardRepository {
      */
     boolean placePageBefore(String boardId, String beforeBoardId, String destNotebookId);
 
-    /** Clear one page's ink. */
+    /**
+     * Clear one Ready page's ink (paper slice wipe + log flush). Paper-null /
+     * unmigrated ids are a no-op — open via {@link #ensureSheet} first.
+     */
     void wipePage(String boardId);
 
     /**
-     * Tombstones the page (blank or not) so the delete syncs. Every list ends
-     * in exactly one blank page; that page cannot be deleted (a no-op), so a
-     * delete never looks like it undid itself. A link that names this page is
-     * tombstoned with it. Nothing is left that would show a missing page.
+     * Delete one Ready page (paper slice tear + log flush). Sync is the notebook
+     * log outbox, not a BoardEntity tombstone. Every list ends in exactly one
+     * blank page; that page cannot be deleted (a no-op). Links naming this page
+     * are tombstoned with it. Paper-null / unmigrated ids refuse — ensure first.
      */
     void deletePage(String boardId);
 

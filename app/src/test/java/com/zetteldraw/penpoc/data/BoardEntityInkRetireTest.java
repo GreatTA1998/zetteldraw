@@ -94,6 +94,31 @@ public class BoardEntityInkRetireTest {
     }
 
     @Test
+    public void deletePageRefusesUnmigratedPaperNull() throws Exception {
+        Board page = Board.blank();
+        TestInk.draw(page, 12f);
+        device.seedUnmigrated(page);
+        BoardEntity before = device.db.dao().board(page.id);
+        assertNotNull(before);
+        assertNull(before.deletedAt);
+        assertNotNull(before.inkHash);
+        repo.deletePage(page.id);
+        BoardEntity after = device.db.dao().board(page.id);
+        assertNotNull(after);
+        assertNull("BoardEntity wipe/delete dual deleted — no tombstone", after.deletedAt);
+        assertEquals(before.inkHash, after.inkHash);
+        // seedUnmigrated queues UPSERT — must not become DELETE.
+        OutboxEntry out = device.db.dao().outbox(OutboxEntry.BOARD, page.id);
+        assertNotNull(out);
+        assertEquals(OutboxEntry.UPSERT, out.op);
+        assertTrue(new File(inkDir, page.id + ".zdi").exists());
+        assertTrue(device.ensureReady());
+        assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
+        repo.deletePage(page.id);
+        assertFalse(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
+    }
+
+    @Test
     public void logBackedNotebookIgnoresRemoteBoardInk() throws Exception {
         assertTrue(device.ensureReady());
         Board ready = repo.scratchpadPages().get(0);

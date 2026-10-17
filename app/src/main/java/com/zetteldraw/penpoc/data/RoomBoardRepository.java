@@ -528,48 +528,26 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void wipePage(String boardId) {
-        mutateLegacyOrPaperPage(boardId, false);
+        mutateReadyPage(boardId, false);
     }
 
     @Override
     public void deletePage(String boardId) {
-        mutateLegacyOrPaperPage(boardId, true);
+        mutateReadyPage(boardId, true);
     }
 
     /**
-     * One wipe/delete spine: paper slice by id (Move-safe), else legacy board row.
-     * Paper-backed non-slices (trailing blank) are no-ops.
+     * Ready wipe/delete only — paper slice tear (same spine as UI). Unmigrated /
+     * paper-null ids refuse; open via {@link #ensureSheet} first so delete never
+     * BoardEntity-tombstones beside Ready. Remote BOARD tombstones stay in
+     * {@link MetaPullApply#applyRemoteBoard}.
      */
-    private void mutateLegacyOrPaperPage(String boardId, boolean delete) {
+    private void mutateReadyPage(String boardId, boolean delete) {
         synchronized (lock) {
             if (paperSliceActionLocked(boardId, delete)) {
                 return;
             }
-            Board cached = cache.get(boardId);
-            if (cached != null && cached.paper != null) {
-                return;
-            }
-            if (!delete) {
-                // UI only wipes Ready slices (paperSliceActionLocked). Unmigrated
-                // page-file wipe is gone with persistBoardEntityInk.
-                return;
-            }
-            BoardEntity row = dao.board(boardId);
-            if (row == null || row.deletedAt != null || row.conflictOf != null) {
-                return;
-            }
-            // Refuse deleting the sole stored trailing blank of an unmigrated
-            // list (migrationSources strips one inkHash-null tail). Ready
-            // deletes never reach here — paperSliceActionLocked returns first.
-            if (row.inkHash == null) {
-                List<BoardEntity> rows = rowsLocked(row.notebookId);
-                if (!rows.isEmpty() && rows.get(rows.size() - 1).id.equals(row.id)
-                        && !trailingBlanks.containsKey(listKey(row.notebookId))) {
-                    return;
-                }
-            }
-            tombstoneLocked(row);
-            tombstoneLinksTouchingLocked(row.id);
+            LaunchLog.mark((delete ? "deletePage" : "wipePage") + " refused: not Ready " + boardId);
         }
     }
 
@@ -1595,22 +1573,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     private List<BoardEntity> rowsLocked(String notebookId) {
         return notebookId == null ? dao.scratchpadBoards() : dao.notebookBoards(notebookId);
-    }
-
-    private void tombstoneLocked(BoardEntity row) {
-        long now = clock.getAsLong();
-        row.deletedAt = now;
-        row.updatedAt = now;
-        row.inkHash = null;
-        row.inkBytes = 0;
-        db.runInTransaction(() -> {
-            dao.upsertBoard(row);
-            queueLocked(OutboxEntry.BOARD, row.id, OutboxEntry.DELETE);
-        });
-        ink.delete(row.id);
-        cache.remove(row.id);
-        mirrorInk(row.id, null);
-        scheduleIndex();
     }
 
     /** Paper wipe/delete by page id on a Ready sheet — never trusts cached sliceIndex. */
