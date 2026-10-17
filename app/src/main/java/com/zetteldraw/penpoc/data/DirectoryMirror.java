@@ -8,8 +8,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Plain-file mirror: {@code <root>/index.json} and {@code <root>/ink/<id>.zdi}.
+ * Plain-file mirror: {@code <root>/index.json} and {@code <root>/ink/<id>.zdl}.
  * Used below Android 10 (public Documents via WRITE_EXTERNAL_STORAGE) and in tests.
+ * No BoardEntity {@code .zdi} copies — Ready log only.
  */
 public final class DirectoryMirror implements InkMirror {
     private static final String TAG = "zd-mirror";
@@ -19,17 +20,6 @@ public final class DirectoryMirror implements InkMirror {
     public DirectoryMirror(File root) {
         this.root = root;
         this.inkDir = new File(root, "ink");
-    }
-
-    @Override
-    public void writeInk(String boardId, byte[] bytes) {
-        write(new File(inkDir, boardId + ".zdi"), bytes);
-    }
-
-    @Override
-    public void deleteInk(String boardId) {
-        //noinspection ResultOfMethodCallIgnored
-        new File(inkDir, boardId + ".zdi").delete();
     }
 
     @Override
