@@ -12,16 +12,15 @@ import java.util.Map;
 
 /**
  * Exception-path meta LWW for pulled notebooks, page links, and legacy board
- * rows (Hand off / history / dual-push). Day-to-day ink SoT is
- * {@link InkSheetStore} + {@link InkLogApply}; this type is the shelf beside
- * {@link Lww}, not peer merge.
+ * rows (Hand-off / catch-up restore only). Day-to-day ink SoT is
+ * {@link InkSheetStore} + {@link InkLogApply}. One live writer — not peer merge.
  *
  * <p>Caller holds the repository lock and runs inside the pull transaction.
  * Board ink still bypasses {@link InkLogApply} for <em>unmigrated</em> notebooks
  * only — once {@link Deps#notebookLogBacked} is true, {@link #applyRemoteBoard}
  * is a no-op (Ready {@code .zdl} owns ink). Unmigrated board pull writes
- * app-private migration residue {@code .zdi} only (no Documents mirror) —
- * UI refresh is Ready listener reload, not BoardEntity stroke swap.
+ * app-private migration residue {@code .zdi} only under catch-up / Hand-off
+ * ({@link Deps#allowRemoteInkAdopt}); live push-only never adopts remote BOARD.
  *
  * @see Lww
  * @see docs/ink-sot-rewrite.md
@@ -46,6 +45,12 @@ public final class MetaPullApply {
          * on-disk {@code .zdl} primary — BoardEntity {@code .zdi} must not apply.
          */
         boolean notebookLogBacked(String notebookId);
+
+        /**
+         * False while live writer — push-only ink (no remote BOARD over local).
+         * True for Hand-off / non-writer catch-up restore.
+         */
+        boolean allowRemoteInkAdopt();
     }
 
     private final Deps deps;
@@ -77,9 +82,9 @@ public final class MetaPullApply {
     }
 
     /**
-     * Unmigrated BOARD-only residue for later {@code ensureSheet}. Writes
-     * app-private {@code .zdi} only — no Documents mirror copy. No UI stroke
-     * map — Ready catch-up reloads via remote listeners after {@code .zdl} install.
+     * Catch-up / Hand-off only: unmigrated BOARD-only residue for later
+     * {@code ensureSheet}. App-private {@code .zdi} — no Documents mirror.
+     * Live writer: no-op (cloud is backup, not a second ink writer).
      */
     public void applyRemoteBoard(BoardEntity remote, Map<String, Staged> staged)
             throws IOException {
@@ -87,18 +92,16 @@ public final class MetaPullApply {
             // Ready owns ink — do not recreate .zdi.
             return;
         }
+        if (!deps.allowRemoteInkAdopt()) {
+            // Live push-only: never adopt remote BOARD over local residue.
+            return;
+        }
         ZettelDao dao = deps.dao();
         BoardEntity local = dao.board(remote.id);
-        if (local != null) {
-            if (remote.rev <= local.rev) {
-                return;
-            }
-            if (deps.pendingOutbox(OutboxEntry.BOARD, remote.id)
-                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
-                // Local edit is newer; it stays queued with its old base rev.
-                return;
-            }
+        if (local != null && remote.rev <= local.rev) {
+            return;
         }
+        // One-SoT catch-up: take remote (no pending-BOARD LWW / dual-writer shelf).
         if (remote.deletedAt != null || remote.inkHash == null) {
             deps.ink().delete(remote.id);
         } else if (local == null || !remote.inkHash.equals(local.inkHash)) {

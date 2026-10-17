@@ -42,11 +42,8 @@ final class SyncProtocol {
                     .put("base_rev", n.rev));
         }
         body.put("notebooks", notebooks);
-        JSONArray boards = new JSONArray();
-        for (BoardEntity b : batch.boards) {
-            boards.put(boardJson(b).put("base_rev", b.rev));
-        }
-        body.put("boards", boards);
+        // Tip never pushes BOARD ink (v136+); keep empty array for server validate.
+        body.put("boards", new JSONArray());
         JSONArray logs = new JSONArray();
         for (NotebookLogEntity log : batch.logs) {
             logs.put(logJson(log).put("base_rev", log.rev));
@@ -187,13 +184,6 @@ final class SyncProtocol {
         log.rev = j.getLong("rev");
         log.deletedAt = optLong(j, "deleted_at");
         return log;
-    }
-
-    private static JSONObject boardJson(BoardEntity b) throws JSONException {
-        return inkJson(b.id, b.notebookId, b.inkHash, b.inkBytes, b.conflictOf,
-                b.createdAt, b.updatedAt, b.deletedAt)
-                .put("position", b.position)
-                .put("thumb_hash", orNull(b.thumbHash));
     }
 
     private static Object orNull(Object value) {

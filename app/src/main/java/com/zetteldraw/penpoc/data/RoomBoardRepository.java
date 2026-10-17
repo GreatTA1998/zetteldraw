@@ -56,10 +56,11 @@ import java.util.function.LongSupplier;
  * write-behind or board conflict shelf. {@link #importLegacy} writes Ready
  * {@code .zdl} from in-memory SourcePages once pageHeight is known — never
  * {@code .zdi} / BOARD outbox. Tip never pushes BOARD ink ({@link #pendingPush}
- * drops BOARD outbox). Historical BOARD pull still stages app-private migration
- * {@code .zdi} via {@link MetaPullApply} (no Documents {@code .zdi} mirror);
+ * drops BOARD outbox). Catch-up / Hand-off may stage app-private migration
+ * {@code .zdi} via {@link MetaPullApply}; live push-only never adopts remote
+ * BOARD. Documents index catalogs Ready {@code .zdl} only.
  * {@link #migrationSourcesForSheet} + {@link #retireBoardEntityInkLocked} clear
- * that residue on first ensure.
+ * residue on first ensure.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
@@ -169,6 +170,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         @Override public boolean notebookLogBacked(String notebookId) {
             return notebookLogBackedLocked(notebookId);
+        }
+        @Override public boolean allowRemoteInkAdopt() {
+            return RoomBoardRepository.this.allowRemoteInkAdopt();
         }
     }
 
@@ -1658,7 +1662,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         try {
             JSONObject root = new JSONObject();
             root.put("schema_version", ZettelDatabase.SCHEMA_VERSION);
-            root.put("ink_format", "zdi/" + InkCodec.VERSION);
+            // Documents mirrors Ready .zdl only (v137+); catalog matches that SoT.
+            root.put("ink_format", "zdl");
             root.put("generated_at", clock.getAsLong());
             JSONArray notebooks = new JSONArray();
             for (NotebookEntity row : dao.liveNotebooks()) {
@@ -1669,23 +1674,23 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         .put("parent_id", row.parentId == null ? JSONObject.NULL : row.parentId));
             }
             root.put("notebooks", notebooks);
-            JSONArray boards = new JSONArray();
-            for (BoardEntity row : dao.liveBoardsForIndex()) {
-                JSONObject b = new JSONObject()
+            JSONArray logs = new JSONArray();
+            for (NotebookLogEntity row : dao.liveNotebookLogs()) {
+                JSONObject log = new JSONObject()
                         .put("id", row.id)
                         .put("notebook_id", row.notebookId == null ? JSONObject.NULL : row.notebookId)
-                        .put("position", row.position)
                         .put("ink_hash", row.inkHash == null ? JSONObject.NULL : row.inkHash)
                         .put("ink_bytes", row.inkBytes)
-                        .put("file", row.inkHash == null ? JSONObject.NULL : "ink/" + row.id + ".zdi")
+                        .put("slice_height", row.sliceHeight)
+                        .put("file", row.inkHash == null ? JSONObject.NULL : "ink/" + row.id + ".zdl")
                         .put("created_at", row.createdAt)
                         .put("updated_at", row.updatedAt);
                 if (row.conflictOf != null) {
-                    b.put("conflict_of", row.conflictOf);
+                    log.put("conflict_of", row.conflictOf);
                 }
-                boards.put(b);
+                logs.put(log);
             }
-            root.put("boards", boards);
+            root.put("logs", logs);
             JSONArray links = new JSONArray();
             for (PageLinkEntity row : dao.livePageLinks()) {
                 links.put(new JSONObject()
