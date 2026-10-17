@@ -78,6 +78,22 @@ public class BoardEntityInkRetireTest {
     }
 
     @Test
+    public void movePageToNotebookRefusesUnmigratedPaperNull() throws Exception {
+        Board page = Board.blank();
+        TestInk.draw(page, 11f);
+        device.seedUnmigrated(page);
+        BoardRepository.NotebookInfo dest = repo.createNotebook("move-refuse");
+        assertFalse("BoardEntity Move dual deleted — ensure first",
+                repo.movePageToNotebook(page.id, dest.id()));
+        assertEquals(null, device.db.dao().board(page.id).notebookId);
+        assertTrue(device.ensureReady());
+        // Project Ready slices into cache (paper set) before Move.
+        assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
+        assertTrue(repo.movePageToNotebook(page.id, dest.id()));
+        assertTrue(RoomBoardRepositoryTest.ids(repo.notebookPages(dest.id())).contains(page.id));
+    }
+
+    @Test
     public void logBackedNotebookIgnoresRemoteBoardInk() throws Exception {
         assertTrue(device.ensureReady());
         Board ready = repo.scratchpadPages().get(0);

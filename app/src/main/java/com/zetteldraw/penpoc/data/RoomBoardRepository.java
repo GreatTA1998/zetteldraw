@@ -490,9 +490,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     /**
      * Cross-notebook Move for callers that only know the dest notebook id.
-     * Log-backed pages go through {@link #placePageBefore} (same spine as the
-     * UI Move menu) so slice id + dest-first persist stay intact — not the
-     * old append-{@code tearMove} path that dropped the id and tombstoned links.
+     * Ready pages only — {@link #placePageBefore} (same spine as the UI Move
+     * menu). Unmigrated / paper-null ids refuse; open via {@link #ensureSheet}
+     * first so Move never reseats BoardEntity rows beside Ready.
      */
     @Override
     public boolean movePageToNotebook(String boardId, String notebookId) {
@@ -500,50 +500,20 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             moving = cache.get(boardId);
         }
-        if (moving != null && moving.paper != null) {
-            if (knownPageHeight > 0) {
-                ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
-            }
-            List<Board> destPages = pages(notebookId);
-            if (destPages.isEmpty()) {
-                LaunchLog.mark("movePageToNotebook refused: dest empty after ensure " + notebookId);
-                return false;
-            }
-            Board trailing = destPages.get(destPages.size() - 1);
-            return placePageBefore(boardId, trailing.id, notebookId);
+        if (moving == null || moving.paper == null) {
+            LaunchLog.mark("movePageToNotebook refused: not Ready " + boardId);
+            return false;
         }
-        synchronized (lock) {
-            NotebookEntity target = dao.notebook(notebookId);
-            if (target == null || target.deletedAt != null) {
-                return false;
-            }
-            BoardEntity row = dao.board(boardId);
-            String source;
-            if (row == null) {
-                String key = listOfBlankLocked(boardId);
-                if (key == null) {
-                    return false;
-                }
-                Board blank = trailingBlanks.remove(key);
-                source = notebookOfKey(key);
-                row = new BoardEntity();
-                row.id = blank.id;
-                row.createdAt = blank.createdAt;
-                cache.put(row.id, blank);
-            } else {
-                source = row.notebookId;
-            }
-            row.position = Positions.after(dao.lastNotebookBoardPosition(notebookId));
-            row.notebookId = notebookId;
-            row.updatedAt = clock.getAsLong();
-            BoardEntity toSave = row;
-            db.runInTransaction(() -> {
-                dao.upsertBoard(toSave);
-                queueLocked(OutboxEntry.BOARD, toSave.id, OutboxEntry.UPSERT);
-            });
-            scheduleIndex();
-            return true;
+        if (knownPageHeight > 0) {
+            ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
         }
+        List<Board> destPages = pages(notebookId);
+        if (destPages.isEmpty()) {
+            LaunchLog.mark("movePageToNotebook refused: dest empty after ensure " + notebookId);
+            return false;
+        }
+        Board trailing = destPages.get(destPages.size() - 1);
+        return placePageBefore(boardId, trailing.id, notebookId);
     }
 
     @Override
@@ -1521,22 +1491,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return notebookId == null ? "" : notebookId;
     }
 
-    private static String notebookOfKey(String key) {
-        return key.isEmpty() ? null : key;
-    }
-
     private List<BoardEntity> rowsLocked(String notebookId) {
         return notebookId == null ? dao.scratchpadBoards() : dao.notebookBoards(notebookId);
-    }
-
-    /** Key of the list whose unsaved trailing blank is {@code boardId}, or null. */
-    private String listOfBlankLocked(String boardId) {
-        for (Map.Entry<String, Board> entry : trailingBlanks.entrySet()) {
-            if (entry.getValue().id.equals(boardId)) {
-                return entry.getKey();
-            }
-        }
-        return null;
     }
 
     private void tombstoneLocked(BoardEntity row) {

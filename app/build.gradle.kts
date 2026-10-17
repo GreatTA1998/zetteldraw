@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v130: delete BoardEntity pull→UI stroke swap; Ready listener reload.
-        versionCode = 130
-        versionName = "4.09"
+        // Tip v131: Ready-only movePageToNotebook; delete BoardEntity Move dual.
+        versionCode = 131
+        versionName = "4.10"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

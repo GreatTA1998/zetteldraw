@@ -57,10 +57,11 @@ public interface BoardRepository {
 
     /**
      * Append the page as the newest inked page of the notebook (before its
-     * trailing blank). Log-backed sheets use the same {@link #placePageBefore}
-     * spine as the UI Move menu (slice id preserved, dest-first disk).
+     * trailing blank). Ready sheets only — same {@link #placePageBefore} spine
+     * as the UI Move menu (slice id preserved, dest-first disk). Paper-null /
+     * unmigrated ids return false.
      *
-     * @return false when nothing changed (missing source/dest, blank source, etc.)
+     * @return false when nothing changed (not Ready, missing source/dest, etc.)
      */
     boolean movePageToNotebook(String boardId, String notebookId);
 
