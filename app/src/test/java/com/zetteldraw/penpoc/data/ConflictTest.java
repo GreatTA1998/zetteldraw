@@ -160,6 +160,8 @@ public class ConflictTest {
 
     @Test
     public void unmigratedRemoteBoardWinsWithoutShelvingLocal() throws Exception {
+        // Catch-up / Hand-off: cloud BOARD seed may replace local residue.
+        // Live push-only must not (see LiveWriterInkPolicyTest).
         Device bare = new Device("bare", tmp.newFolder("bare"), 11_000_000L);
         try {
             Board page = Board.blank();
@@ -172,6 +174,7 @@ public class ConflictTest {
             List<InkRenderer.InkStroke> remoteInk =
                     Collections.singletonList(TestInk.stroke(500f, 600f, 9));
             SyncStore.PullPage pulled = remoteBoardPage(local, remoteInk, local.updatedAt + 5_000, 10);
+            bare.repo.setInkPullPolicy(SyncStore.InkPullPolicy.CATCH_UP);
             bare.repo.applyPull(pulled);
 
             BoardEntity after = bare.db.dao().board(page.id);
