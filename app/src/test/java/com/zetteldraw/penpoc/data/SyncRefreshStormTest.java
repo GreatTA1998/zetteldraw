@@ -114,7 +114,8 @@ public class SyncRefreshStormTest {
 
     @Test
     public void pulledStrokesReachTheSharedBoardWithoutTheLock() throws Exception {
-        Board page = repo.scratchpadPages().get(0);
+        // Legacy board-row pull refresh (board.strokes), not Ready paper projection.
+        Board page = Board.blank();
         TestInk.draw(page, 10f);
         repo.saveInk(page);
         BoardEntity remote = db.dao().board(page.id).copy();

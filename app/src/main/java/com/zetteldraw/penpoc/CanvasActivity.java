@@ -2261,6 +2261,10 @@ public final class CanvasActivity extends Activity {
     }
 
     private void confirmDelete(String id, View anchor) {
+        // pages() is Ready-only; ensure when height is known so the count is real.
+        if (pageHeight > 0) {
+            repository.ensureSheet(id, pageHeight, legacyPageHeight, shortPagesSince);
+        }
         int pages = inked(repository.pages(id));
         LinearLayout box = panel();
         box.addView(panelText(getString(R.string.delete_notebook_title, titleOf(id)), 15));

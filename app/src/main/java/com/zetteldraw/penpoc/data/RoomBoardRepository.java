@@ -1,6 +1,5 @@
 package com.zetteldraw.penpoc.data;
 
-import android.os.SystemClock;
 import android.util.Log;
 
 import com.zetteldraw.penpoc.Board;
@@ -88,7 +87,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private final Object lock = new Object();
     private final HashMap<String, Board> cache = new HashMap<>();
     private final AtomicBoolean indexPending = new AtomicBoolean();
-    private final AtomicBoolean warmScheduled = new AtomicBoolean();
     /** Unsaved blank page at the end of each page list, keyed by {@link #listKey}. */
     private final HashMap<String, Board> trailingBlanks = new HashMap<>();
     /** Newest unwritten snapshot per board; present from {@link #saveInk} until the writer commits it. */
@@ -239,126 +237,31 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Ink of pages not yet in memory is read and decoded without the lock,
-     * so a large list never blocks the notebook list, saves or other loads.
-     * Only pages that keep changing under it (two rounds) decode under the lock.
-     *
-     * <p>When an ink log exists (on-disk {@code .zdl} <em>or</em> a
-     * {@code notebook_logs} row), the ink log is the source of truth: this
-     * returns an empty list until {@link #ensureSheet} has installed a Ready
-     * {@link InkSheetStore.OpenSheet}. Room board rows must not be shown in that window — they
-     * lag paper extends and were the ~50→~23 collapse path.
+     * Ready projection only (greenfield L4). Empty until {@link #ensureSheet}
+     * installs a Ready sheet. Legacy BoardEntity rows are migration sources for
+     * first open — never a paint/list SoT.
      */
     @Override
     public List<Board> pages(String notebookId) {
         notebookReads.incrementAndGet();
-        String sheetId = NotebookPaper.sheetId(notebookId);
         synchronized (lock) {
-            List<Board> gated = logBackedPagesLocked(notebookId, sheetId);
-            if (gated != null) {
-                return gated;
-            }
-        }
-        List<Board> pages = null;
-        for (int round = 0; pages == null; round++) {
-            List<BoardEntity> uncached;
-            synchronized (lock) {
-                if (notebookId != null) {
-                    NotebookEntity notebook = dao.notebook(notebookId);
-                    if (notebook == null || notebook.deletedAt != null) {
-                        return new ArrayList<>();
-                    }
-                }
-                // A log may have appeared while we decoded; never fall through.
-                List<Board> gated = logBackedPagesLocked(notebookId, sheetId);
-                if (gated != null) {
-                    return gated;
-                }
-                ensureTrailingBlankLocked(notebookId);
-                List<BoardEntity> rows = rowsLocked(notebookId);
-                uncached = uncachedInkLocked(rows);
-                if (uncached.isEmpty() || round >= 2) {
-                    pages = toBoards(rows);
-                    Board blank = trailingBlanks.get(listKey(notebookId));
-                    if (blank != null) {
-                        pages.add(blank);
-                    }
-                    continue;
+            if (notebookId != null) {
+                NotebookEntity notebook = dao.notebook(notebookId);
+                if (notebook == null || notebook.deletedAt != null) {
+                    return new ArrayList<>();
                 }
             }
-            decodeIntoCache(uncached);
-        }
-        scheduleWarmCache();
-        return pages;
-    }
-
-    /**
-     * Log-backed open gate: Ready → project; log present but not Ready → [];
-     * {@code null} → legacy BoardEntity row path.
-     */
-    private List<Board> logBackedPagesLocked(String notebookId, String sheetId) {
-        InkSheetStore.OpenSheet sheet = sheetStore.get(sheetId);
-        if (sheet != null && sheet.ready) {
-            return projectLocked(notebookId, sheet.paper);
-        }
-        if (sheetStore.isLogBacked(sheetId)) {
+            InkSheetStore.OpenSheet sheet = sheetStore.get(NotebookPaper.sheetId(notebookId));
+            if (sheet != null && sheet.ready) {
+                return projectLocked(notebookId, sheet.paper);
+            }
             return new ArrayList<>();
         }
-        return null;
     }
 
     @Override
     public boolean isSheetReady(String notebookId) {
         return sheetStore.isSheetReady(notebookId);
-    }
-
-    private List<BoardEntity> uncachedInkLocked(List<BoardEntity> rows) {
-        ArrayList<BoardEntity> uncached = new ArrayList<>();
-        for (BoardEntity row : rows) {
-            if (row.inkHash != null && !cache.containsKey(row.id)) {
-                uncached.add(row);
-            }
-        }
-        return uncached;
-    }
-
-    /**
-     * Reads and decodes each row's ink without the lock, then caches it only
-     * if the row still has that ink and nothing cached the board meanwhile.
-     * Returns how many boards it cached.
-     */
-    private int decodeIntoCache(List<BoardEntity> rows) {
-        int cached = 0;
-        for (BoardEntity row : rows) {
-            synchronized (lock) {
-                if (cache.containsKey(row.id)) {
-                    continue;
-                }
-            }
-            byte[] bytes = readQuietly(row.id, false);
-            if (bytes == null) {
-                continue;
-            }
-            String hash = InkFileStore.sha256(bytes);
-            List<InkRenderer.InkStroke> strokes;
-            try {
-                strokes = InkCodec.decode(bytes);
-            } catch (IOException e) {
-                continue;
-            }
-            synchronized (lock) {
-                BoardEntity now = dao.board(row.id);
-                if (cache.containsKey(row.id) || now == null || now.deletedAt != null
-                        || !hash.equals(now.inkHash)) {
-                    continue;
-                }
-                Board board = new Board(row.id, now.createdAt);
-                board.strokes.addAll(strokes);
-                cache.put(row.id, board);
-                cached++;
-            }
-        }
-        return cached;
     }
 
     /**
@@ -513,41 +416,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private boolean isBlankLocked(BoardEntity row) {
         PendingInk pending = pendingInk.get(row.id);
         return pending != null ? pending.strokes.isEmpty() : row.inkHash == null;
-    }
-
-    /**
-     * After the first page list is read: decode live pages into cache so
-     * switching lists rarely waits on ink. One page per writer task so an ink
-     * save queued meanwhile writes after at most one page decode.
-     */
-    private void scheduleWarmCache() {
-        if (warmScheduled.compareAndSet(false, true)) {
-            writer.execute(this::warmCache);
-        }
-    }
-
-    private void warmCache() {
-        long started = SystemClock.uptimeMillis();
-        List<BoardEntity> rows;
-        synchronized (lock) {
-            rows = new ArrayList<>();
-            for (BoardEntity row : dao.liveBoardsForIndex()) {
-                if (row.inkHash != null && row.conflictOf == null) {
-                    rows.add(row);
-                }
-            }
-        }
-        warmNext(rows, 0, 0, started);
-    }
-
-    private void warmNext(List<BoardEntity> rows, int index, int decoded, long started) {
-        if (index >= rows.size()) {
-            LaunchLog.mark("ink cache warm: " + decoded + " of " + rows.size() + " inked pages decoded in "
-                    + (SystemClock.uptimeMillis() - started) + " ms");
-            return;
-        }
-        int now = decoded + decodeIntoCache(Collections.singletonList(rows.get(index)));
-        writer.execute(() -> warmNext(rows, index + 1, now, started));
     }
 
     @Override
@@ -980,6 +848,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void deleteNotebook(String notebookId) {
+        // Ready sheets: Move inked slices to Scratchpad before tombstoning.
+        // Legacy BoardEntity return still runs inside the lock below.
+        returnReadyPagesToScratchpad(notebookId);
         synchronized (lock) {
             NotebookEntity row = dao.notebook(notebookId);
             if (row == null || row.deletedAt != null) {
@@ -999,9 +870,36 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (blank != null) {
                 cache.remove(blank.id);
             }
+            sheetStore.invalidate(notebookId);
             trimTrailingBlanksLocked(null);
             ensureTrailingBlankLocked(null);
             scheduleIndex();
+        }
+    }
+
+    /**
+     * Before deleting a notebook, Move its Ready paper slices onto Scratchpad
+     * (same spine as the Move menu). No-op when height is unknown and no Ready
+     * sheet is open — legacy {@link #returnPagesToScratchpadLocked} still runs.
+     */
+    private void returnReadyPagesToScratchpad(String notebookId) {
+        if (notebookId == null) {
+            return;
+        }
+        int height = knownPageHeight > 0 ? knownPageHeight : 800;
+        int legacy = knownLegacyHeight > 0 ? knownLegacyHeight : height;
+        if (!ensureSheet(notebookId, height, legacy, knownShortPagesSince)) {
+            return;
+        }
+        ensureSheet(null, height, legacy, knownShortPagesSince);
+        ArrayList<String> inked = new ArrayList<>();
+        for (Board page : pages(notebookId)) {
+            if (!page.isBlank()) {
+                inked.add(page.id);
+            }
+        }
+        for (String id : inked) {
+            movePageToNotebook(id, null);
         }
     }
 
@@ -1969,14 +1867,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 mirror.writeInk(id, bytes);
             }
         }
-    }
-
-    private List<Board> toBoards(List<BoardEntity> rows) {
-        ArrayList<Board> result = new ArrayList<>(rows.size());
-        for (BoardEntity row : rows) {
-            result.add(load(row));
-        }
-        return result;
     }
 
     private Board load(BoardEntity row) {

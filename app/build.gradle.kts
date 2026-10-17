@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v117: PageInkView clearSelectionGc + requestGc leave-lasso spine.
-        versionCode = 119
-        versionName = "3.98"
+        // Tip v120: Ready-only pages() — delete BoardEntity fallthrough + warmCache.
+        versionCode = 120
+        versionName = "3.99"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

@@ -3,14 +3,13 @@ package com.zetteldraw.penpoc.data;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
 
 import com.zetteldraw.penpoc.Board;
-import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
 
 import org.junit.After;
@@ -25,6 +24,10 @@ import org.robolectric.annotation.Config;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Ready-path delete removes a paper slice and flushes the notebook log.
+ * Sync of the delete is the log outbox (not a BoardEntity tombstone).
+ */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
 public class PageDeleteTest {
@@ -39,6 +42,8 @@ public class PageDeleteTest {
     public void setUp() throws Exception {
         a = new Device("a", tmp.newFolder("a"), 1_800_000_000_000L);
         b = new Device("b", tmp.newFolder("b"), 1_800_000_500_000L);
+        a.ensureReady();
+        b.ensureReady();
     }
 
     @After
@@ -48,23 +53,24 @@ public class PageDeleteTest {
     }
 
     @Test
-    public void deleteTombstonesThePageAndTheTombstoneSyncs() {
+    public void deleteRemovesSliceAndLogSyncs() {
         Board first = drawnScratchpadPage(a, 10f);
         Board second = drawnScratchpadPage(a, 20f);
         relay(a, b);
+        b.ensureReady();
         assertEquals(3, b.repo.scratchpadPages().size());
 
         a.tick();
-        a.repo.deletePage(first.id);
-        BoardEntity row = a.db.dao().board(first.id);
-        assertNotNull("kept as a tombstone, not removed", row.deletedAt);
-        assertNull(row.inkHash);
-        assertEquals(OutboxEntry.DELETE, a.db.dao().outbox(OutboxEntry.BOARD, first.id).op);
+        String firstId = first.id;
+        a.repo.deletePage(firstId);
+        assertTrue(a.repo.scratchpadPages().get(0).paper.indexOfSliceId(firstId) < 0);
+        String sheetId = NotebookPaper.sheetId(null);
+        assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, sheetId));
         assertEquals(List.of(second.id), inkedIds(a.repo.scratchpadPages()));
 
         relay(a, b);
+        b.ensureReady();
         assertEquals(0, a.repo.outboxSize());
-        assertNotNull(b.db.dao().board(first.id).deletedAt);
         assertEquals(List.of(second.id), inkedIds(b.repo.scratchpadPages()));
     }
 
@@ -81,7 +87,6 @@ public class PageDeleteTest {
         pages = a.repo.scratchpadPages();
         assertEquals(2, pages.size());
         assertTrue(pages.get(1).isBlank());
-        assertNotNull(a.db.dao().board(page.id).deletedAt);
 
         Board trailing = pages.get(1);
         a.repo.deletePage(trailing.id);
@@ -93,6 +98,8 @@ public class PageDeleteTest {
     @Test
     public void deletingTheOnlyInkedPageLeavesOneBlankPage() {
         Board only = drawnScratchpadPage(a, 10f);
+        // Mint a fresh trailing blank so delete does not recycle the adopted id.
+        assertEquals(2, a.repo.scratchpadPages().size());
         a.repo.deletePage(only.id);
         List<Board> pages = a.repo.scratchpadPages();
         assertEquals(1, pages.size());
@@ -104,6 +111,7 @@ public class PageDeleteTest {
     public void notebookPagesDeleteWithoutTouchingTheScratchpad() {
         Board page = drawnScratchpadPage(a, 10f);
         BoardRepository.NotebookInfo notebook = a.repo.createNotebook("gone");
+        a.ensureReady(notebook.id());
         a.repo.movePageToNotebook(page.id, notebook.id());
         Board next = a.repo.notebookPages(notebook.id()).get(1);
         TestInk.draw(next, 30f);
@@ -117,10 +125,13 @@ public class PageDeleteTest {
         assertEquals("the notebook keeps its trailing blank", 2, pages.size());
         assertTrue(pages.get(1).isBlank());
         assertEquals(1, a.repo.scratchpadPages().size());
-        assertEquals(OutboxEntry.DELETE, a.db.dao().outbox(OutboxEntry.BOARD, page.id).op);
+        assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(notebook.id())));
     }
 
     private static Board drawnScratchpadPage(Device d, float y) {
+        if (!d.repo.isSheetReady(null)) {
+            d.ensureReady();
+        }
         List<Board> pages = d.repo.scratchpadPages();
         Board page = pages.get(pages.size() - 1);
         TestInk.draw(page, y);
@@ -129,7 +140,7 @@ public class PageDeleteTest {
         return page;
     }
 
-    /** Push {@code from}'s outbox and pull it into {@code to}, as the server would relay it. */
+    /** Push {@code from}'s outbox and pull it into {@code to}, including notebook logs. */
     private void relay(Device from, Device to) {
         SyncStore.PushBatch batch = from.repo.pendingPush(100);
         SyncStore.PullPage page = new SyncStore.PullPage();
@@ -140,11 +151,11 @@ public class PageDeleteTest {
             page.notebooks.add(copy);
             results.add(new SyncStore.PushResult(OutboxEntry.NOTEBOOK, n.id, SyncStore.PushResult.APPLIED, copy.rev));
         }
-        for (BoardEntity board : batch.boards) {
-            BoardEntity copy = board.copy();
+        for (NotebookLogEntity log : batch.logs) {
+            NotebookLogEntity copy = log.copy();
             copy.rev = ++rev;
-            page.boards.add(copy);
-            results.add(new SyncStore.PushResult(OutboxEntry.BOARD, board.id, SyncStore.PushResult.APPLIED, copy.rev));
+            page.logs.add(copy);
+            results.add(new SyncStore.PushResult(OutboxEntry.LOG, log.id, SyncStore.PushResult.APPLIED, copy.rev));
         }
         page.blobs.putAll(batch.blobs);
         page.cursor = rev;

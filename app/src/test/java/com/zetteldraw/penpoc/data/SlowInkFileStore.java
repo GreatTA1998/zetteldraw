@@ -11,6 +11,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * A disk that stalls: while held, every ink save staged by the writer thread
  * blocks until {@link #release()} (or a safety timeout, so a regression
  * fails instead of hanging the build). Pull staging is not slowed.
+ *
+ * <p>Stalls both legacy {@code .zdi} {@link #stage} and Ready {@code .zdl}
+ * {@link #appendLog} / {@code zdl} stage paths.
  */
 public final class SlowInkFileStore extends InkFileStore {
     public static final long SAFETY_TIMEOUT_MS = 5_000;
@@ -25,19 +28,31 @@ public final class SlowInkFileStore extends InkFileStore {
 
     @Override
     public File stage(String boardId, String tag, byte[] bytes) throws IOException {
-        if ("zdi".equals(tag)) {
-            stages.incrementAndGet();
-            CountDownLatch gate = open;
-            if (gate.getCount() > 0) {
-                stalled.release();
-            }
-            try {
-                gate.await(SAFETY_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+        if ("zdi".equals(tag) || "zdl".equals(tag)) {
+            stallOnce();
         }
         return super.stage(boardId, tag, bytes);
+    }
+
+    @Override
+    public void appendLog(String sheetId, byte[] suffix) throws IOException {
+        if (suffix != null && suffix.length > 0) {
+            stallOnce();
+        }
+        super.appendLog(sheetId, suffix);
+    }
+
+    private void stallOnce() {
+        stages.incrementAndGet();
+        CountDownLatch gate = open;
+        if (gate.getCount() > 0) {
+            stalled.release();
+        }
+        try {
+            gate.await(SAFETY_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     public void hold() {

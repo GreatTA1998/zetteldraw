@@ -19,8 +19,27 @@ final class TestInk {
         return InkRenderer.strokeFrom(list);
     }
 
+    /** Ready paper adopts the board id on first ink; legacy pages mutate {@code strokes}. */
     static void draw(Board board, float x0) {
-        board.strokes.add(stroke(x0, 50f, 12));
+        float y0 = board.paper != null ? board.paperOrigin + 50f : 50f;
+        InkRenderer.InkStroke s = stroke(x0, y0, 12);
+        if (board.paper != null) {
+            board.paper.appendStroke(s, board.id);
+        } else {
+            board.strokes.add(s);
+        }
+    }
+
+    /** Strokes for this page: Ready slices use paper.touching; legacy uses {@code strokes}. */
+    static List<InkRenderer.InkStroke> strokesOf(Board board) {
+        if (board.paper != null) {
+            int index = board.paper.indexOfSliceId(board.id);
+            if (index < 0) {
+                index = board.sliceIndex;
+            }
+            return board.paper.touching(index);
+        }
+        return board.strokes;
     }
 
     static void assertSameInk(List<InkRenderer.InkStroke> expected, List<InkRenderer.InkStroke> actual) {

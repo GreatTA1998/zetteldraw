@@ -64,6 +64,11 @@ public class LegacyMigrationTest {
         // s1, s2, orphan (scratchpad) + c1, c2, j1Wiped (notebooks); the trailing blank is dropped.
         assertEquals(6, imported);
 
+        // pages() is Ready-only: migrate BoardEntity rows into .zdl on first ensure.
+        assertTrue(device.ensureReady());
+        assertTrue(device.ensureReady(Notebook.COMEDY.uuid));
+        assertTrue(device.ensureReady(Notebook.JOURNAL.uuid));
+
         List<Board> scratch = device.repo.scratchpadPages();
         assertEquals(s1, scratch.get(0).id);
         assertEquals(s2, scratch.get(1).id);
@@ -84,11 +89,13 @@ public class LegacyMigrationTest {
 
         assertFalse(new File(filesDir, LegacyBoardImporter.FILE_NAME).exists());
         assertTrue(new File(filesDir, LegacyBoardImporter.FILE_NAME + LegacyBoardImporter.MIGRATED_SUFFIX).exists());
-        assertEquals("every imported board is queued for the first push",
-                4 + 6, device.db.dao().outboxCount());
+        // 4 notebook seeds stay unqueued; 6 imported boards queue; ensure may add LOG rows.
+        assertTrue("imported boards queued for first push, was " + device.db.dao().outboxCount(),
+                device.db.dao().outboxCount() >= 6);
 
         device.reopen();
         assertEquals(-1, LegacyBoardImporter.importIfPresent(filesDir, device.repo));
+        assertTrue(device.ensureReady());
         assertEquals(s1, device.repo.scratchpadPages().get(0).id);
         assertPoints(device.repo.scratchpadPages().get(0), 3);
     }
@@ -99,6 +106,8 @@ public class LegacyMigrationTest {
         LegacyBoardImporter.importIfPresent(filesDir, device.repo);
         writeLegacyJson();
         assertEquals(0, LegacyBoardImporter.importIfPresent(filesDir, device.repo));
+        assertTrue(device.ensureReady());
+        assertTrue(device.ensureReady(Notebook.COMEDY.uuid));
         assertEquals(4, device.repo.scratchpadPages().size());
         assertEquals(3, device.repo.notebookPages(Notebook.COMEDY.uuid).size());
     }
@@ -111,8 +120,9 @@ public class LegacyMigrationTest {
     }
 
     private void assertPoints(Board board, int points) {
-        assertEquals(1, board.strokes.size());
-        List<TouchPoint> p = board.strokes.get(0).points;
+        List<com.zetteldraw.penpoc.InkRenderer.InkStroke> strokes = TestInk.strokesOf(board);
+        assertEquals(1, strokes.size());
+        List<TouchPoint> p = strokes.get(0).points;
         assertEquals(points, p.size());
         assertEquals(10f, p.get(0).x, 0f);
         assertEquals(0.5f, p.get(0).pressure, 1e-6f);

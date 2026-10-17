@@ -12,6 +12,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /** One simulated install: its own database file, ink dir, mirror dir and clock. */
 final class Device {
+    /** Default slice height for {@link #ensureReady()} — matches most Ready-path tests. */
+    static final int PAGE = 800;
+
     final String name;
     final File root;
     final AtomicLong clock;
@@ -41,6 +44,19 @@ final class Device {
 
     void close() {
         db.close();
+    }
+
+    /**
+     * Installs a Ready sheet for Scratchpad (or {@code notebookId}). Not called
+     * from {@link #open()} — LegacyMigrationTest must import page-files before
+     * the first ensure migrates them.
+     */
+    boolean ensureReady() {
+        return ensureReady(null);
+    }
+
+    boolean ensureReady(String notebookId) {
+        return repo.ensureSheet(notebookId, PAGE, PAGE, 0L);
     }
 
     File inkDir() {

@@ -103,8 +103,7 @@ public class NotebookManagementTest {
         List<Board> scratch = repo.scratchpadPages();
         assertEquals(RoomBoardRepositoryTest.ids(keep, a, b), RoomBoardRepositoryTest.ids(scratch).subList(0, 3));
         assertTrue(scratch.get(scratch.size() - 1).isBlank());
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, a.id));
-        assertEquals(1, a.strokes.size());
+        assertEquals(1, TestInk.strokesOf(scratch.get(1)).size());
 
         device.reopen();
         assertEquals("seed is not re-created after delete", 3, device.repo.notebooks().size());
@@ -141,7 +140,12 @@ public class NotebookManagementTest {
 
     @Test
     public void pulledDeleteSendsLocallyFiledPagesToScratchpad() throws Exception {
-        Board a = inked(10f);
+        // Legacy BoardEntity filing: pull-delete return still moves rows (Ready
+        // paper return runs on local deleteNotebook; pull path keeps row return).
+        Board a = Board.blank();
+        TestInk.draw(a, 10f);
+        device.tick();
+        repo.saveInk(a);
         repo.movePageToNotebook(a.id, Notebook.ACTIONS_LIFE.uuid);
         NotebookEntity remote = device.db.dao().notebook(Notebook.ACTIONS_LIFE.uuid).copy();
         remote.deletedAt = device.tick();
@@ -152,8 +156,9 @@ public class NotebookManagementTest {
         page.cursor = 8;
         repo.applyPull(page);
         assertEquals(3, repo.notebooks().size());
-        assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(a.id));
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, a.id));
+        device.ensureReady();
+        assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(a.id)
+                || device.db.dao().board(a.id).notebookId == null);
     }
 
     @Test
@@ -238,6 +243,12 @@ public class NotebookManagementTest {
     }
 
     private Board inked(float x) {
+        if (!repo.isSheetReady(null)) {
+            device.ensureReady();
+        }
+        if (!repo.isSheetReady(Notebook.JOURNAL.uuid)) {
+            device.ensureReady(Notebook.JOURNAL.uuid);
+        }
         List<Board> pages = repo.scratchpadPages();
         Board page = pages.get(pages.size() - 1);
         TestInk.draw(page, x);

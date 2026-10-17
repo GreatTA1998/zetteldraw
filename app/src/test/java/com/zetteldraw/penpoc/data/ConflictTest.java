@@ -46,7 +46,9 @@ public class ConflictTest {
     public void setUp() throws Exception {
         device = new Device("a", tmp.newFolder("a"), 10_000_000L);
         repo = device.repo;
-        page = repo.scratchpadPages().get(0);
+        // BoardEntity conflict shelf still seeds via legacy page-file path
+        // (no ensure — Ready migration would absorb the row into .zdl).
+        page = Board.blank();
         TestInk.draw(page, 10f);
         repo.saveInk(page);
     }

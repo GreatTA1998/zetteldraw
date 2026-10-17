@@ -139,11 +139,12 @@ public class CanvasActivitySmokeTest {
     public void pageMenuWipesAndDeletesWithConfirmAndKeepsTheTrailingBlank() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
+        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
         Board first = repo.scratchpadPages().get(0);
-        first.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, 20f));
+        first.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
         repo.saveInk(first);
         Board second = repo.scratchpadPages().get(1);
-        second.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, 40f));
+        second.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, second.paperOrigin + 40f), second.id);
         repo.saveInk(second);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
@@ -373,14 +374,16 @@ public class CanvasActivitySmokeTest {
     public void lassoDragMovesStrokesThenUndoAndRedo() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
+        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
         Board page = repo.scratchpadPages().get(0);
-        page.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, 200f));
-        page.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(500f, 700f));
+        page.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
+        page.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(500f, page.paperOrigin + 700f), page.id);
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("lasso");
+        assertTrue(repo.ensureSheet(notebook.id(), 800, 800, 0L));
         repo.movePageToNotebook(page.id, notebook.id());
-        InkRenderer.InkStroke original = page.strokes.get(0);
-        InkRenderer.InkStroke other = page.strokes.get(1);
+        InkRenderer.InkStroke original = page.paper.strokes().get(0);
+        InkRenderer.InkStroke other = page.paper.strokes().get(1);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -481,12 +484,14 @@ public class CanvasActivitySmokeTest {
     public void lassoLongPressPastesAtHoldPoint() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
+        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
         Board page = repo.scratchpadPages().get(0);
-        page.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, 200f));
+        page.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("longpress-paste");
+        assertTrue(repo.ensureSheet(notebook.id(), 800, 800, 0L));
         repo.movePageToNotebook(page.id, notebook.id());
-        InkRenderer.InkStroke original = page.strokes.get(0);
+        InkRenderer.InkStroke original = page.paper.strokes().get(0);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();

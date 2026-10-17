@@ -44,7 +44,8 @@ public class EnsureUnsyncedQueuedTest {
 
     @Test
     public void requeuesInkedRevZeroBoardMissingFromOutbox() throws Exception {
-        Board page = repo.scratchpadPages().get(0);
+        // Legacy board-row path: ensureUnsyncedQueued heals BoardEntity outbox gaps.
+        Board page = Board.blank();
         TestInk.draw(page, 7f);
         device.tick();
         repo.saveInk(page);

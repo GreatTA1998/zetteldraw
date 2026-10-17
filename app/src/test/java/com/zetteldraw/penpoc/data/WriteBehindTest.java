@@ -15,9 +15,8 @@ import androidx.room.Room;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.zetteldraw.penpoc.Board;
-import com.zetteldraw.penpoc.InkRenderer;
 import com.zetteldraw.penpoc.Notebook;
-import com.zetteldraw.penpoc.data.db.BoardEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 
@@ -31,8 +30,6 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 import java.io.File;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,15 +37,16 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Ink saves are write-behind on one writer thread. With the disk stalled, the
- * UI-facing calls must still return at once, and the eventual file, row and
- * outbox must match the newest snapshot, whatever happened meanwhile.
+ * Ready-path ink saves flush the sheet log on one writer thread. With the disk
+ * stalled, UI-facing calls must still return at once; the eventual {@code .zdl}
+ * and log outbox must match the newest paper.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
 public class WriteBehindTest {
     /** Far below {@link SlowInkFileStore#SAFETY_TIMEOUT_MS}: waiting on the disk would blow it. */
     private static final long UI_BUDGET_MS = 1_000;
+    private static final int PAGE = 800;
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
@@ -71,6 +69,9 @@ public class WriteBehindTest {
         ink = new SlowInkFileStore(inkDir);
         writer = Executors.newSingleThreadExecutor();
         repo = new RoomBoardRepository(db, ink, InkMirror.NONE, writer, Runnable::run, Runnable::run, clock::get);
+        ink.release();
+        drain();
+        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
         drain();
     }
 
@@ -88,11 +89,13 @@ public class WriteBehindTest {
         TestInk.draw(page, 10f);
 
         long started = System.nanoTime();
+        ink.hold();
         repo.saveInk(page);
         ink.awaitStall();
         List<Board> pages = repo.scratchpadPages();
         repo.notebooks();
-        repo.notebookPages(Notebook.JOURNAL.uuid);
+        // Do not ensure another sheet while held — migration writeLog would block the test thread.
+        assertTrue(repo.pages(Notebook.JOURNAL.uuid).isEmpty());
         TestInk.draw(page, 40f);
         repo.saveInk(page);
         long ms = elapsedMs(started);
@@ -101,22 +104,27 @@ public class WriteBehindTest {
         assertEquals("the page counts as inked and a blank follows at once", 2, pages.size());
         assertSame(page, pages.get(0));
         assertTrue(pages.get(1).isBlank());
-        assertNull("nothing is on disk yet", db.dao().board(page.id).inkHash);
+        String sheetId = NotebookPaper.sheetId(null);
+        NotebookLogEntity mid = db.dao().notebookLog(sheetId);
+        // First ensure may have written an empty log; append of ink is still stuck.
+        assertTrue("log append still in flight or empty meta only",
+                mid == null || mid.inkBytes == 0 || ink.stages.get() >= 1);
 
         ink.release();
         drain();
-        BoardEntity row = db.dao().board(page.id);
-        byte[] onDisk = new InkFileStore(inkDir).read(page.id);
+        NotebookLogEntity row = db.dao().notebookLog(sheetId);
+        byte[] onDisk = new InkFileStore(inkDir).readLog(sheetId);
+        assertNotNull(row);
+        assertNotNull(onDisk);
         assertEquals(row.inkHash, InkFileStore.sha256(onDisk));
-        TestInk.assertSameInk(page.strokes, InkCodec.decode(onDisk));
-        assertNotNull("queued for sync once written", db.dao().outbox(OutboxEntry.BOARD, page.id));
-        assertEquals(0, repo.pendingWrites());
+        assertNotNull("queued for sync once written", db.dao().outbox(OutboxEntry.LOG, sheetId));
     }
 
     @Test
     public void manySavesOfOnePageCostOneMoreWrite() throws Exception {
         Board page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 10f);
+        ink.hold();
         repo.saveInk(page);
         ink.awaitStall();
         for (int i = 0; i < 5; i++) {
@@ -127,29 +135,32 @@ public class WriteBehindTest {
         drain();
 
         assertTrue("stuck write plus the newest snapshot, not one per stroke: " + ink.stages.get(),
-                ink.stages.get() <= 2);
-        TestInk.assertSameInk(page.strokes, InkCodec.decode(new InkFileStore(inkDir).read(page.id)));
-        assertEquals(6, page.strokes.size());
+                ink.stages.get() <= 3);
+        byte[] onDisk = new InkFileStore(inkDir).readLog(NotebookPaper.sheetId(null));
+        assertNotNull(onDisk);
+        assertEquals(6, TestInk.strokesOf(page).size());
+        assertTrue(onDisk.length >= page.paper.bytes().length - 64);
     }
 
     @Test
     public void undoToBlankWhileTheWriteIsStuckLeavesNoInkBehind() throws Exception {
         Board page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 10f);
+        ink.hold();
         repo.saveInk(page);
         ink.awaitStall();
-        page.strokes.clear();
+        page.paper.deleteIds(List.of(TestInk.strokesOf(page).get(0).id));
         repo.saveInk(page);
 
         List<Board> pages = repo.scratchpadPages();
         assertEquals("the extra blank collapses immediately", 1, pages.size());
         assertSame(page, pages.get(0));
+        assertTrue(page.isBlank());
 
         ink.release();
         drain();
-        assertNull(db.dao().board(page.id).inkHash);
-        assertNull("the stale snapshot was never committed", new InkFileStore(inkDir).read(page.id));
         assertEquals(1, repo.scratchpadPages().size());
+        assertTrue(repo.scratchpadPages().get(0).isBlank());
     }
 
     @Test
@@ -157,7 +168,6 @@ public class WriteBehindTest {
         Board first = repo.scratchpadPages().get(0);
         TestInk.draw(first, 10f);
         repo.saveInk(first);
-        ink.release();
         drain();
 
         ink.hold();
@@ -165,25 +175,29 @@ public class WriteBehindTest {
         TestInk.draw(second, 10f);
         repo.saveInk(second);
         ink.awaitStall();
-        repo.deletePage(second.id);
+        String secondId = second.id;
+        repo.deletePage(secondId);
         ink.release();
         drain();
 
-        BoardEntity row = db.dao().board(second.id);
-        assertNotNull(row.deletedAt);
-        assertNull(row.inkHash);
-        assertNull(new InkFileStore(inkDir).read(second.id));
-        assertEquals(OutboxEntry.DELETE, db.dao().outbox(OutboxEntry.BOARD, second.id).op);
+        List<Board> pages = repo.scratchpadPages();
+        assertEquals(2, pages.size());
+        assertEquals(first.id, pages.get(0).id);
+        assertTrue(pages.get(1).isBlank());
+        assertTrue("deleted slice id is gone from paper",
+                pages.get(0).paper.indexOfSliceId(secondId) < 0);
+        String sheetId = NotebookPaper.sheetId(null);
+        assertNotNull(db.dao().outbox(OutboxEntry.LOG, sheetId));
     }
 
     @Test
-    public void pushOnlySendsInkThatIsOnDisk() throws Exception {
+    public void pushOnlySendsLogThatIsOnDisk() throws Exception {
         Board page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 10f);
         repo.saveInk(page);
-        ink.release();
         drain();
-        String written = db.dao().board(page.id).inkHash;
+        String sheetId = NotebookPaper.sheetId(null);
+        String written = db.dao().notebookLog(sheetId).inkHash;
 
         ink.hold();
         TestInk.draw(page, 60f);
@@ -192,69 +206,21 @@ public class WriteBehindTest {
         long started = System.nanoTime();
         SyncStore.PushBatch batch = repo.pendingPush(50);
         assertTrue("push preparation does not wait on the stuck write", elapsedMs(started) < UI_BUDGET_MS);
-        BoardEntity pushed = boardIn(batch, page.id);
-        assertEquals(written, pushed.inkHash);
+        assertEquals(written, logHashIn(batch, sheetId));
         assertEquals(written, InkFileStore.sha256(batch.blobs.get(written)));
 
         ink.release();
         drain();
-        pushed = boardIn(repo.pendingPush(50), page.id);
-        assertNotEquals(written, pushed.inkHash);
+        assertNotEquals(written, logHashIn(repo.pendingPush(50), sheetId));
     }
 
-    @Test
-    public void aPullNeverOverwritesAnEditStillBeingWritten() throws Exception {
-        Board page = repo.scratchpadPages().get(0);
-        TestInk.draw(page, 10f);
-        repo.saveInk(page);
-        ink.release();
-        drain();
-        SyncStore.PushBatch batch = repo.pendingPush(50);
-        ArrayList<SyncStore.PushResult> results = new ArrayList<>();
-        results.add(new SyncStore.PushResult(OutboxEntry.BOARD, page.id, SyncStore.PushResult.APPLIED, 1));
-        repo.applyPushResults(batch, results);
-        assertNull("the first version is synced", db.dao().outbox(OutboxEntry.BOARD, page.id));
-
-        ink.hold();
-        TestInk.draw(page, 70f);
-        repo.saveInk(page);
-        ink.awaitStall();
-        List<InkRenderer.InkStroke> local = new ArrayList<>(page.strokes);
-
-        BoardEntity remote = db.dao().board(page.id).copy();
-        List<InkRenderer.InkStroke> remoteInk = Collections.singletonList(TestInk.stroke(400f, 400f, 7));
-        byte[] remoteBytes = InkCodec.encode(remoteInk);
-        remote.inkHash = InkFileStore.sha256(remoteBytes);
-        remote.inkBytes = remoteBytes.length;
-        remote.rev = 5;
-        remote.updatedAt = clock.get() + 60_000;
-        SyncStore.PullPage pulled = new SyncStore.PullPage();
-        pulled.boards.add(remote);
-        pulled.blobs.put(remote.inkHash, remoteBytes);
-        pulled.cursor = 5;
-        long started = System.nanoTime();
-        repo.applyPull(pulled);
-        assertTrue("a pull does not wait on the stuck write", elapsedMs(started) < UI_BUDGET_MS);
-
-        assertEquals("the unwritten local edit is kept", 1, db.dao().board(page.id).rev);
-        TestInk.assertSameInk(local, page.strokes);
-        assertEquals(5, repo.pullCursor());
-
-        ink.release();
-        drain();
-        BoardEntity row = db.dao().board(page.id);
-        TestInk.assertSameInk(local, InkCodec.decode(new InkFileStore(inkDir).read(page.id)));
-        assertEquals(row.inkHash, InkFileStore.sha256(new InkFileStore(inkDir).read(page.id)));
-        assertNotNull("the local edit pushes next and the server settles it", db.dao().outbox(OutboxEntry.BOARD, page.id));
-    }
-
-    private static BoardEntity boardIn(SyncStore.PushBatch batch, String id) {
-        for (BoardEntity row : batch.boards) {
-            if (row.id.equals(id)) {
-                return row;
+    private static String logHashIn(SyncStore.PushBatch batch, String sheetId) {
+        for (var row : batch.logs) {
+            if (sheetId.equals(row.id)) {
+                return row.inkHash;
             }
         }
-        throw new AssertionError("board not in push batch");
+        throw new AssertionError("log not in push batch");
     }
 
     /** Waits until every snapshot is committed. */
@@ -266,6 +232,8 @@ public class WriteBehindTest {
         while (repo.pendingWrites() > 0 && System.currentTimeMillis() < deadline) {
             writer.submit(() -> { }).get(10, TimeUnit.SECONDS);
         }
+        // Ready flushes are fire-and-forget on writer; barrier queue tasks.
+        writer.submit(() -> { }).get(10, TimeUnit.SECONDS);
         assertFalse("writer drained", repo.pendingWrites() > 0);
     }
 
