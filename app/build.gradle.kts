@@ -45,8 +45,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Tip v114: NotebookPaper cut/applyTear + openGap/closeGap one spine.
-        versionCode = 114
-        versionName = "3.93"
+        versionCode = 115
+        versionName = "3.94"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
