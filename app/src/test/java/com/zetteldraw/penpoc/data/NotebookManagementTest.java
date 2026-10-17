@@ -11,7 +11,9 @@ import android.app.Application;
 
 import com.zetteldraw.penpoc.Board;
 import com.zetteldraw.penpoc.Notebook;
+import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
 
 import org.junit.After;
@@ -164,6 +166,60 @@ public class NotebookManagementTest {
         assertTrue(RoomBoardRepositoryTest.ids(scratch).contains(a.id));
         Board landed = scratch.get(RoomBoardRepositoryTest.ids(scratch).indexOf(a.id));
         assertEquals(1, TestInk.strokesOf(landed).size());
+    }
+
+    @Test
+    public void deleteUnmigratedNotebookMigratesThenReturnsViaReady() throws Exception {
+        // Proof: Ready ensure + Move returns unmigrated .zdi without BoardEntity reseat.
+        // Scratchpad is already Ready (tip state) so legacy reseat would be invisible.
+        assertTrue(device.ensureReady());
+        BoardRepository.NotebookInfo book = repo.createNotebook("legacy-book");
+        Board page = Board.blank();
+        TestInk.draw(page, 42f);
+        repo.persistBoardEntityInk(page);
+        BoardEntity row = device.db.dao().board(page.id);
+        assertNotNull(row);
+        row.notebookId = book.id();
+        device.db.dao().upsertBoard(row);
+        assertFalse(repo.isSheetReady(book.id()));
+        assertFalse(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
+
+        repo.deleteNotebook(book.id());
+
+        assertNotNull(device.db.dao().notebook(book.id()).deletedAt);
+        assertTrue(repo.notebookPages(book.id()).isEmpty());
+        List<Board> scratch = repo.scratchpadPages();
+        assertTrue(RoomBoardRepositoryTest.ids(scratch).contains(page.id));
+        Board landed = scratch.get(RoomBoardRepositoryTest.ids(scratch).indexOf(page.id));
+        assertEquals(1, TestInk.strokesOf(landed).size());
+    }
+
+    @Test
+    public void deleteRefusesWhenEnsureFailsWithInkedBoardEntity() throws Exception {
+        // Put-back: missing .zdl + meta row blocks ensure; do not tombstone and strand ink.
+        assertTrue(device.ensureReady());
+        BoardRepository.NotebookInfo book = repo.createNotebook("corrupt-book");
+        Board page = Board.blank();
+        TestInk.draw(page, 7f);
+        repo.persistBoardEntityInk(page);
+        BoardEntity row = device.db.dao().board(page.id);
+        row.notebookId = book.id();
+        device.db.dao().upsertBoard(row);
+        NotebookLogEntity meta = new NotebookLogEntity();
+        meta.id = NotebookPaper.sheetId(book.id());
+        meta.notebookId = book.id();
+        meta.inkHash = "dead";
+        meta.inkBytes = 1;
+        meta.sliceHeight = Device.PAGE;
+        meta.createdAt = device.tick();
+        meta.updatedAt = meta.createdAt;
+        device.db.dao().upsertNotebookLog(meta);
+        assertFalse(repo.ensureSheet(book.id(), Device.PAGE, Device.PAGE, 0L));
+
+        repo.deleteNotebook(book.id());
+
+        assertNull(device.db.dao().notebook(book.id()).deletedAt);
+        assertEquals(book.id(), device.db.dao().board(page.id).notebookId);
     }
 
     @Test

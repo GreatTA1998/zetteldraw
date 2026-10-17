@@ -779,8 +779,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void deleteNotebook(String notebookId) {
-        // One return spine with pull-delete: Ready Move first, then legacy rows.
-        returnReadyPagesToScratchpad(notebookId);
+        // One return spine with pull-delete: Ready migrate + Move only.
+        // BoardEntity reseat is gone — Ready-only Scratchpad ignores it anyway.
+        if (!returnReadyPagesToScratchpad(notebookId)) {
+            LaunchLog.mark("deleteNotebook refused: pages not returned " + notebookId);
+            return;
+        }
         synchronized (lock) {
             NotebookEntity row = dao.notebook(notebookId);
             if (row == null || row.deletedAt != null) {
@@ -793,7 +797,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             db.runInTransaction(() -> {
                 dao.upsertNotebook(row);
                 queueLocked(OutboxEntry.NOTEBOOK, row.id, OutboxEntry.DELETE);
-                returnPagesToScratchpadLocked(notebookId);
                 promoteChildrenLocked(notebookId, promoteTo);
             });
             forgetDeletedNotebookUiLocked(notebookId);
@@ -805,17 +808,29 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
      * Move Ready paper slices onto Scratchpad (same spine as the Move menu)
      * before a notebook tombstone — local delete or winning remote pull-delete.
-     * No-op when ensure fails; legacy {@link #returnPagesToScratchpadLocked}
-     * still runs under the lock.
+     * Ensures first so unmigrated {@code .zdi} become Ready slices via
+     * {@link #migrationSourcesForSheet}. Returns false when ensure fails while
+     * inked BoardEntity rows remain (local delete refuses; pull still tombstones).
      */
-    private void returnReadyPagesToScratchpad(String notebookId) {
+    private boolean returnReadyPagesToScratchpad(String notebookId) {
         if (notebookId == null) {
-            return;
+            return true;
         }
         int height = knownPageHeight > 0 ? knownPageHeight : 800;
         int legacy = knownLegacyHeight > 0 ? knownLegacyHeight : height;
         if (!ensureSheet(notebookId, height, legacy, knownShortPagesSince)) {
-            return;
+            // Put-back (~10%): blank-only / empty may delete; inked BoardEntity
+            // left behind would be invisible on Ready-only Scratchpad.
+            synchronized (lock) {
+                for (BoardEntity row : dao.notebookBoards(notebookId)) {
+                    if (row.inkHash != null && row.deletedAt == null) {
+                        LaunchLog.mark("returnReady refused: ensure failed with inked BoardEntity "
+                                + notebookId);
+                        return false;
+                    }
+                }
+            }
+            return true;
         }
         ensureSheet(null, height, legacy, knownShortPagesSince);
         // Refresh Scratchpad trailing blank before Moves (adopted blank may still
@@ -828,8 +843,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
         }
         for (String id : inked) {
-            movePageToNotebook(id, null);
+            if (!movePageToNotebook(id, null)) {
+                LaunchLog.mark("returnReady Move failed " + id + " from " + notebookId);
+                return false;
+            }
         }
+        return true;
     }
 
     /**
@@ -1134,7 +1153,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         ink.stage(remote.id, "pull", bytes), bytes, strokes));
             }
             // Same Ready return as local deleteNotebook — before tombstone so
-            // pages() still sees the sheet. BoardEntity return alone is not SoT.
+            // pages() still sees the sheet. Ensure-fail with inked BoardEntity
+            // is logged; remote LWW tombstone still applies (no BoardEntity reseat).
             for (NotebookEntity remote : page.notebooks) {
                 if (remoteNotebookDeleteWins(remote)) {
                     returnReadyPagesToScratchpad(remote.id);
@@ -1257,9 +1277,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                             metaPull.applyRemoteNotebook(remote);
                             NotebookEntity now = dao.notebook(remote.id);
                             if (now != null && now.deletedAt != null) {
-                                // Ready slices already Moved in applyPull; legacy rows +
-                                // children + UI forget match local deleteNotebook.
-                                returnPagesToScratchpadLocked(remote.id);
+                                // Ready slices already Moved in applyPull; children +
+                                // UI forget match local deleteNotebook.
                                 promoteChildrenLocked(remote.id, now.parentId);
                                 forgetDeletedNotebookUiLocked(remote.id);
                             }
@@ -1554,21 +1573,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             row.updatedAt = clock.getAsLong();
             saveNotebookQueued(row);
             return true;
-        }
-    }
-
-    /** Moves the notebook's live pages to the end of the scratchpad, keeping their order. */
-    private void returnPagesToScratchpadLocked(String notebookId) {
-        List<BoardEntity> pages = dao.notebookBoards(notebookId);
-        String last = dao.lastScratchpadPosition();
-        long now = clock.getAsLong();
-        for (BoardEntity page : pages) {
-            last = Positions.after(last);
-            page.notebookId = null;
-            page.position = last;
-            page.updatedAt = now;
-            dao.upsertBoard(page);
-            queueLocked(OutboxEntry.BOARD, page.id, OutboxEntry.UPSERT);
         }
     }
 
