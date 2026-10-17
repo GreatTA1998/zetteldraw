@@ -514,20 +514,7 @@ public final class NotebookPaper {
 
     /** Insert an empty slice at {@code index} and shift ink at/below it down. */
     private void openGap(int index, int height, String id) {
-        float top = origin(index);
-        for (int i = 0; i < strokes.size(); i++) {
-            InkRenderer.InkStroke stroke = strokes.get(i);
-            boolean atOrBelow = false;
-            for (TouchPoint point : stroke.points) {
-                if (point.y >= top - 0.01f) {
-                    atOrBelow = true;
-                    break;
-                }
-            }
-            if (atOrBelow) {
-                strokes.set(i, shiftY(stroke, height));
-            }
-        }
+        shiftStrokesFrom(origin(index) - 0.01f, height);
         heights.add(index, height);
         sliceIds.add(index, id);
     }
@@ -597,7 +584,7 @@ public final class NotebookPaper {
         int height = heights.get(slice);
         float oldOrigin = origin(slice);
         Set<String> takenIds = new HashSet<>();
-        Tear cut = cut(slice, false);
+        Tear cut = cut(slice, null);
         for (InkRenderer.InkStroke piece : cut.taken) {
             if (piece != null && piece.id != null) {
                 takenIds.add(piece.id);
@@ -667,7 +654,7 @@ public final class NotebookPaper {
             float oldOrigin = origin(source);
             int height = heights.get(source);
             String id = sliceIds.get(source);
-            Tear cut = cut(source, false);
+            Tear cut = cut(source, null);
             closeGap(source);
             if (insertAt < 0) {
                 insertAt = 0;
@@ -703,9 +690,8 @@ public final class NotebookPaper {
     }
 
     private Tear tear(int slice, int kind) {
-        boolean wipe = kind == TEAR_WIPE;
-        Tear cut = cut(slice, wipe);
-        if (!wipe) {
+        Tear cut = cut(slice, null);
+        if (kind != TEAR_WIPE) {
             closeGap(slice);
         }
         rememberTear(slice, kind, cut);
@@ -730,80 +716,95 @@ public final class NotebookPaper {
     }
 
     /**
-     * Cut every stroke against the slice. Outside pieces stay. The first
-     * outside piece in draw order keeps the id. Every other piece gets a new
-     * id. This is the only place a new id is born.
+     * Cut every stroke against the slice — one geometry spine for live tear
+     * and log replay. Outside pieces stay. The first outside piece in draw
+     * order keeps the id. Every other piece gets a new id: minted when
+     * {@code recordedNewIds} is null (live), else consumed from that list
+     * (replay). This is the only place a new id is born.
+     *
+     * <p>Taken strokes leave the paper either way; live also fills
+     * {@link Tear#taken}/{@link Tear#stayed} for Move/Reorder callers.
      */
-    private Tear cut(int slice, boolean wipe) {
+    private Tear cut(int slice, List<String> recordedNewIds) {
         float top = origin(slice);
         float bottom = top + heights.get(slice);
+        boolean live = recordedNewIds == null;
         Tear result = new Tear();
+        int cursor = 0;
         ArrayList<InkRenderer.InkStroke> next = new ArrayList<>();
         for (InkRenderer.InkStroke stroke : strokes) {
             if (stroke.bounds.bottom < top || stroke.bounds.top >= bottom) {
                 next.add(stroke);
                 continue;
             }
-            boolean whollyInside = true;
-            for (TouchPoint point : stroke.points) {
-                if (point.y < top || point.y >= bottom) {
-                    whollyInside = false;
-                    break;
+            if (whollyInside(stroke, top, bottom)) {
+                if (live) {
+                    result.taken.add(stroke);
                 }
-            }
-            if (whollyInside) {
-                result.taken.add(stroke);
                 continue;
             }
             List<Piece> pieces = split(stroke, top, bottom);
             boolean keptId = false;
             for (Piece piece : pieces) {
-                boolean inside = piece.inside;
                 String id;
-                if (!inside && !keptId) {
+                if (!piece.inside && !keptId) {
                     id = stroke.id;
                     keptId = true;
-                } else {
+                } else if (live) {
                     id = UUID.randomUUID().toString();
                     result.newIds.add(id);
+                } else {
+                    id = cursor < recordedNewIds.size()
+                            ? recordedNewIds.get(cursor++)
+                            : UUID.randomUUID().toString();
                 }
                 InkRenderer.InkStroke born = InkRenderer.strokeWithWidths(
                         id, piece.points, piece.widths, stroke.color);
-                if (inside) {
-                    result.taken.add(born);
+                if (piece.inside) {
+                    if (live) {
+                        result.taken.add(born);
+                    }
                 } else {
                     next.add(born);
-                    result.stayed.add(born);
+                    if (live) {
+                        result.stayed.add(born);
+                    }
                 }
             }
         }
         strokes.clear();
         strokes.addAll(next);
-        if (!wipe) {
-            // taken strokes leave with the slice; they are not left on the paper
-        }
         return result;
     }
 
+    /** True when every point of {@code stroke} lies in {@code [top, bottom)}. */
+    private static boolean whollyInside(InkRenderer.InkStroke stroke, float top, float bottom) {
+        for (TouchPoint point : stroke.points) {
+            if (point.y < top || point.y >= bottom) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void closeGap(int slice) {
-        float top = origin(slice);
         float height = heights.get(slice);
-        float bottom = top + height;
+        shiftStrokesFrom(origin(slice) + height - 0.01f, -height);
+        heights.remove(slice);
+        sliceIds.remove(slice);
+    }
+
+    /** Shift every stroke that touches at/below {@code y} by {@code dy}. */
+    private void shiftStrokesFrom(float y, float dy) {
         for (int i = 0; i < strokes.size(); i++) {
             InkRenderer.InkStroke stroke = strokes.get(i);
-            boolean below = false;
             for (TouchPoint point : stroke.points) {
-                if (point.y >= bottom - 0.01f) {
-                    below = true;
+                if (point.y >= y) {
+                    strokes.set(i, shiftY(stroke, dy));
                     break;
                 }
             }
-            if (below) {
-                strokes.set(i, shiftY(stroke, -height));
-            }
         }
-        heights.remove(slice);
-        sliceIds.remove(slice);
     }
 
     private void trimTail() {
@@ -877,46 +878,9 @@ public final class NotebookPaper {
         }
     }
 
-    /** Replay path: the new ids are the ones the original tear wrote down. */
+    /** Replay path: same cut geometry; new ids are the ones the original tear wrote down. */
     private void applyTear(int slice, int kind, List<String> newIds) {
-        float top = origin(slice);
-        float bottom = top + heights.get(slice);
-        int cursor = 0;
-        ArrayList<InkRenderer.InkStroke> next = new ArrayList<>();
-        for (InkRenderer.InkStroke stroke : strokes) {
-            if (stroke.bounds.bottom < top || stroke.bounds.top >= bottom) {
-                next.add(stroke);
-                continue;
-            }
-            boolean whollyInside = true;
-            for (TouchPoint point : stroke.points) {
-                if (point.y < top || point.y >= bottom) {
-                    whollyInside = false;
-                    break;
-                }
-            }
-            if (whollyInside) {
-                continue;
-            }
-            List<Piece> pieces = split(stroke, top, bottom);
-            boolean keptId = false;
-            for (Piece piece : pieces) {
-                String id;
-                if (!piece.inside && !keptId) {
-                    id = stroke.id;
-                    keptId = true;
-                } else {
-                    id = cursor < newIds.size() ? newIds.get(cursor++) : UUID.randomUUID().toString();
-                }
-                InkRenderer.InkStroke born = InkRenderer.strokeWithWidths(
-                        id, piece.points, piece.widths, stroke.color);
-                if (!piece.inside) {
-                    next.add(born);
-                }
-            }
-        }
-        strokes.clear();
-        strokes.addAll(next);
+        cut(slice, newIds);
         if (kind != TEAR_WIPE) {
             closeGap(slice);
         }
