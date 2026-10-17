@@ -20,7 +20,11 @@ public interface SyncStore {
      */
     int INLINE_BLOB_MAX_BYTES = 256 * 1024;
 
-    /** Next outbox rows to push, with the ink blobs they reference. */
+    /**
+     * Next outbox rows to push, with the ink blobs they reference.
+     * Never includes BOARD ink — Ready {@code .zdl} / LOG is ink push SoT;
+     * historical BOARD outbox rows are dropped without upload.
+     */
     PushBatch pendingPush(int limit);
 
     void applyPushResults(PushBatch batch, List<PushResult> results);

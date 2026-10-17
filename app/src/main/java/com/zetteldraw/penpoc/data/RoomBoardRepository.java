@@ -56,8 +56,9 @@ import java.util.function.LongSupplier;
  * {@link InkSheetStore#flushSheetOrFalse}. There is no BoardEntity {@code .zdi}
  * write-behind or board conflict shelf. {@link #importLegacy} writes Ready
  * {@code .zdl} from in-memory SourcePages once pageHeight is known — never
- * {@code .zdi} / BOARD outbox. Historical BOARD pull still stages migration
- * {@code .zdi} via {@link MetaPullApply}; {@link #migrationSourcesForSheet} +
+ * {@code .zdi} / BOARD outbox. Tip never pushes BOARD ink ({@link #pendingPush}
+ * drops BOARD outbox). Historical BOARD pull still stages migration {@code .zdi}
+ * via {@link MetaPullApply}; {@link #migrationSourcesForSheet} +
  * {@link #retireBoardEntityInkLocked} clear that residue on first ensure.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
@@ -789,12 +790,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     @Override
     public PushBatch pendingPush(int limit) {
         PushBatch batch = new PushBatch();
-        ArrayList<BoardEntity> boards = new ArrayList<>();
         ArrayList<NotebookLogEntity> logs = new ArrayList<>();
         synchronized (lock) {
             for (OutboxEntry entry : dao.outboxBatch(limit)) {
                 // One pick spine: load row or drop stale outbox; remember queuedAt early
-                // (attach may still drop log/board after disk stage).
+                // (attach may still drop log after disk stage).
                 if (OutboxEntry.NOTEBOOK.equals(entry.entity)) {
                     takeQueued(entry, dao::notebook, batch.notebooks::add, batch);
                 } else if (OutboxEntry.LOG.equals(entry.entity)) {
@@ -802,34 +802,23 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 } else if (OutboxEntry.LINK.equals(entry.entity)) {
                     takeQueued(entry, dao::pageLink, batch.links::add, batch);
                 } else if (OutboxEntry.BOARD.equals(entry.entity)) {
-                    BoardEntity board = dao.board(entry.id);
-                    // Ready owns ink — drop stale BOARD outbox duals (do not push .zdi).
-                    if (board != null && notebookLogBackedLocked(board.notebookId)) {
-                        dao.deleteOutbox(entry.entity, entry.id);
-                        continue;
-                    }
-                    takeQueued(entry, dao::board, boards::add, batch);
+                    // Tip never pushes BOARD .zdi — Ready LOG is ink push SoT.
+                    // Historical residue waits for open/Prepare (ensureReadyInkForBackup).
+                    dao.deleteOutbox(entry.entity, entry.id);
                 } else {
                     dao.deleteOutbox(entry.entity, entry.id);
                 }
             }
         }
-        // At most one large on-disk blob per batch (Boox heap). Log + board share stage/attach.
+        // At most one large on-disk blob per batch (Boox heap).
         boolean[] haveLarge = {false};
         HashMap<String, byte[]> smallBlobs = new HashMap<>();
         HashMap<String, File> largeBlobs = new HashMap<>();
-        ArrayList<BoardEntity> boardsKept = new ArrayList<>();
         ArrayList<NotebookLogEntity> logsKept = new ArrayList<>();
         for (NotebookLogEntity row : logs) {
             if (stagePushBlob(row.id, row.inkHash, row.deletedAt, ink.logFile(row.id),
                     haveLarge, smallBlobs, largeBlobs, id -> readQuietly(id, true))) {
                 logsKept.add(row);
-            }
-        }
-        for (BoardEntity row : boards) {
-            if (stagePushBlob(row.id, row.inkHash, row.deletedAt, ink.fileFor(row.id),
-                    haveLarge, smallBlobs, largeBlobs, id -> readQuietly(id, false))) {
-                boardsKept.add(row);
             }
         }
         synchronized (lock) {
@@ -847,22 +836,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     continue;
                 }
                 batch.logs.add(row);
-            }
-            for (BoardEntity seen : boardsKept) {
-                BoardEntity row = dao.board(seen.id);
-                if (row == null || !sameInkOutbox(seen.inkHash, seen.deletedAt, seen.updatedAt, seen.rev,
-                        row.inkHash, row.deletedAt, row.updatedAt, row.rev)) {
-                    continue;
-                }
-                if (!attachPushBlob(row.id, row.inkHash, smallBlobs, largeBlobs, batch, (hash, bytes) -> {
-                    // Crash between file commit and row update: file is newer.
-                    row.inkHash = hash;
-                    row.inkBytes = bytes;
-                    dao.upsertBoard(row);
-                })) {
-                    continue;
-                }
-                batch.boards.add(row);
             }
         }
         return batch;
@@ -883,7 +856,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         batch.queuedAt.put(entry.entity + ":" + entry.id, entry.queuedAt);
     }
 
-    /** Hash-checked pull blob for board or log; null = no body / not in page. */
+    /** Hash-checked pull blob; null = no body / not in page. */
     private static byte[] verifiedPullBytes(PullPage page, String inkHash, Long deletedAt,
                                             String id, String kind) throws IOException {
         if (inkHash == null || deletedAt != null) {
@@ -952,7 +925,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    /** Outbox re-read unchanged: same ink meta fields for board or log. */
+    /** Outbox re-read unchanged: same ink meta fields for log (or legacy board attach). */
     private static boolean sameInkOutbox(String aHash, Long aDeleted, long aUpdated, long aRev,
                                          String bHash, Long bDeleted, long bUpdated, long bRev) {
         return Objects.equals(aHash, bHash) && Objects.equals(aDeleted, bDeleted)
