@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v137: Documents .zdi mirror gone — Ready .zdl mirror only.
-        versionCode = 137
-        versionName = "4.16"
+        // Tip v140: BOARD ink off /sync wire — push rejected; pull emits [].
+        versionCode = 140
+        versionName = "4.19"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

@@ -35,14 +35,20 @@ function blob(text: string) {
   return { hash: createHash("sha256").update(bytes).digest("hex"), b64: bytes.toString("base64"), bytes };
 }
 
-function boardRow(id: string, notebookId: string | null, ink: ReturnType<typeof blob> | null, updatedAt: number, baseRev: number) {
+function logRow(
+  id: string,
+  notebookId: string | null,
+  ink: ReturnType<typeof blob> | null,
+  updatedAt: number,
+  baseRev: number,
+  sliceHeight = 800,
+) {
   return {
     id,
     notebook_id: notebookId,
-    position: "a0",
     ink_hash: ink?.hash ?? null,
     ink_bytes: ink?.bytes.length ?? 0,
-    thumb_hash: null,
+    slice_height: sliceHeight,
     conflict_of: null,
     created_at: 1_700_000_000_000,
     updated_at: updatedAt,
@@ -52,21 +58,23 @@ function boardRow(id: string, notebookId: string | null, ink: ReturnType<typeof 
 }
 
 async function pullAll(since: number) {
-  const boards: any[] = [];
+  const logs: any[] = [];
   const notebooks: any[] = [];
+  const boards: any[] = [];
   const blobs: Record<string, string> = {};
   let cursor = since;
   for (;;) {
     const res = await call("GET", `/sync/pull?since=${cursor}&limit=2`);
     expect(res.status).toBe(200);
-    boards.push(...res.json.boards);
+    logs.push(...res.json.logs);
     notebooks.push(...res.json.notebooks);
+    boards.push(...(res.json.boards ?? []));
     Object.assign(blobs, res.json.blobs);
     expect(res.json.cursor).toBeGreaterThanOrEqual(cursor);
     cursor = res.json.cursor;
     if (!res.json.has_more) break;
   }
-  return { boards, notebooks, blobs, cursor };
+  return { logs, notebooks, boards, blobs, cursor };
 }
 
 beforeAll(async () => {
@@ -76,8 +84,8 @@ beforeAll(async () => {
 
 describe("sync round trip", () => {
   const notebookId = randomUUID();
-  const boardId = randomUUID();
-  const v1 = blob(`ink v1 ${boardId}`);
+  const logId = randomUUID();
+  const v1 = blob(`ink v1 ${logId}`);
   let startCursor = 0;
   let rev1 = 0;
 
@@ -88,7 +96,34 @@ describe("sync round trip", () => {
     expect(wrong.json.server_schema).toBe(schema);
   });
 
-  it("pushes a notebook and a board with its ink blob", async () => {
+  it("rejects BOARD push (Ready LOG is cloud ink ingress)", async () => {
+    const res = await call("POST", "/sync/push", {
+      schema_version: schema,
+      device_id: "device-a",
+      notebooks: [],
+      boards: [
+        {
+          id: randomUUID(),
+          notebook_id: null,
+          position: "a0",
+          ink_hash: null,
+          ink_bytes: 0,
+          thumb_hash: null,
+          conflict_of: null,
+          created_at: 1,
+          updated_at: 1,
+          deleted_at: null,
+          base_rev: 0,
+        },
+      ],
+      logs: [],
+      links: [],
+      blobs: {},
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("pushes a notebook and a Ready log with its ink blob", async () => {
     startCursor = (await pullAll(0)).cursor;
     const res = await call("POST", "/sync/push", {
       schema_version: schema,
@@ -96,64 +131,69 @@ describe("sync round trip", () => {
       notebooks: [
         { id: notebookId, title: "comedy", position: "a0", created_at: 1, updated_at: 1, deleted_at: null, base_rev: 0 },
       ],
-      boards: [boardRow(boardId, notebookId, v1, 1_000, 0)],
+      boards: [],
+      logs: [logRow(logId, notebookId, v1, 1_000, 0)],
+      links: [],
       blobs: { [v1.hash]: v1.b64 },
     });
     expect(res.status).toBe(200);
     expect(res.json.results).toHaveLength(2);
     for (const r of res.json.results) expect(r.status).toBe("applied");
-    rev1 = res.json.results.find((r: any) => r.entity === "board").rev;
+    rev1 = res.json.results.find((r: any) => r.entity === "log").rev;
     expect(rev1).toBeGreaterThan(startCursor);
     expect(await storage.has(v1.hash)).toBe(true);
     expect((await storage.get(v1.hash)).equals(v1.bytes)).toBe(true);
   });
 
-  it("pulls both rows back with the ink inline", async () => {
+  it("pulls notebook + log (boards always empty on pull)", async () => {
     const page = await pullAll(startCursor);
-    const b = page.boards.find((x) => x.id === boardId);
-    expect(b).toMatchObject({ notebook_id: notebookId, ink_hash: v1.hash, rev: rev1, conflict_of: null });
+    expect(page.boards).toEqual([]);
+    const log = page.logs.find((x) => x.id === logId);
+    expect(log).toMatchObject({ notebook_id: notebookId, ink_hash: v1.hash, rev: rev1, conflict_of: null });
     expect(page.notebooks.find((x) => x.id === notebookId)?.title).toBe("comedy");
     expect(Buffer.from(page.blobs[v1.hash], "base64").equals(v1.bytes)).toBe(true);
   });
 
-  it("a stale, newer edit from another device wins; the old ink survives as a hidden copy", async () => {
-    const v2 = blob(`ink v2 ${boardId}`);
+  it("a stale, newer log edit from another device wins; the old ink survives as a hidden copy", async () => {
+    const v2 = blob(`ink v2 ${logId} longer-enough`);
     const before = (await pullAll(0)).cursor;
     const res = await call("POST", "/sync/push", {
       schema_version: schema,
       device_id: "device-b",
       notebooks: [],
-      boards: [boardRow(boardId, notebookId, v2, 2_000, 0)],
+      boards: [],
+      logs: [logRow(logId, notebookId, v2, 2_000, 0)],
+      links: [],
       blobs: { [v2.hash]: v2.b64 },
     });
     expect(res.json.results[0].status).toBe("conflict_won");
     const page = await pullAll(before);
-    expect(page.boards.find((x) => x.id === boardId)?.ink_hash).toBe(v2.hash);
-    const copy = page.boards.find((x) => x.conflict_of === boardId);
+    expect(page.logs.find((x) => x.id === logId)?.ink_hash).toBe(v2.hash);
+    const copy = page.logs.find((x) => x.conflict_of === logId);
     expect(copy?.ink_hash).toBe(v1.hash);
     expect(page.blobs[v1.hash]).toBeDefined();
   });
 
-  it("a stale, older edit loses but is kept as a copy, and the winner is re-sent", async () => {
-    const v3 = blob(`ink v3 ${boardId}`);
+  it("a stale, older log edit loses but is kept as a copy, and the winner is re-sent", async () => {
+    const v3 = blob(`ink v3 ${logId} also-long-enough`);
     const before = (await pullAll(0)).cursor;
     const res = await call("POST", "/sync/push", {
       schema_version: schema,
       device_id: "device-a",
       notebooks: [],
-      boards: [boardRow(boardId, notebookId, v3, 1_500, rev1)],
+      boards: [],
+      logs: [logRow(logId, notebookId, v3, 1_500, rev1)],
+      links: [],
       blobs: { [v3.hash]: v3.b64 },
     });
     expect(res.json.results[0].status).toBe("conflict_lost");
     const page = await pullAll(before);
-    expect(page.boards.find((x) => x.id === boardId)?.updated_at).toBe(2_000);
-    expect(page.boards.some((x) => x.conflict_of === boardId && x.ink_hash === v3.hash)).toBe(true);
+    expect(page.logs.find((x) => x.id === logId)?.updated_at).toBe(2_000);
+    expect(page.logs.some((x) => x.conflict_of === logId && x.ink_hash === v3.hash)).toBe(true);
   });
 
-  it("carries notebook create, rename and delete (tombstone) with its pages moved to the scratchpad", async () => {
+  it("carries notebook create, rename and delete (tombstone)", async () => {
     const nbId = randomUUID();
-    const pageId = randomUUID();
-    const ink = blob(`notebook page ${pageId}`);
     const notebook = (title: string, updated: number, baseRev: number, deletedAt: number | null = null) => ({
       id: nbId,
       title,
@@ -169,17 +209,22 @@ describe("sync round trip", () => {
       schema_version: schema,
       device_id: "device-a",
       notebooks: [notebook("ideas", 10, 0)],
-      boards: [boardRow(pageId, nbId, ink, 10, 0)],
-      blobs: { [ink.hash]: ink.b64 },
+      boards: [],
+      logs: [],
+      links: [],
+      blobs: {},
     });
-    expect(created.json.results.map((r: any) => r.status)).toEqual(["applied", "applied"]);
+    expect(created.json.results.map((r: any) => r.status)).toEqual(["applied"]);
     const nbRev = created.json.results[0].rev;
-    const pageRev = created.json.results[1].rev;
 
     const renamed = await call("POST", "/sync/push", {
       schema_version: schema,
       device_id: "device-b",
       notebooks: [notebook("ideas, sorted", 20, nbRev)],
+      boards: [],
+      logs: [],
+      links: [],
+      blobs: {},
     });
     expect(renamed.json.results[0].status).toBe("applied");
     const renamedRev = renamed.json.results[0].rev;
@@ -189,23 +234,27 @@ describe("sync round trip", () => {
       expect.objectContaining({ title: "ideas, sorted", rev: renamedRev, deleted_at: null }),
     ]);
 
-    // The deleting device sends the tombstone plus its pages re-filed into the scratchpad.
     const deleted = await call("POST", "/sync/push", {
       schema_version: schema,
       device_id: "device-a",
       notebooks: [notebook("ideas, sorted", 30, renamedRev, 30)],
-      boards: [{ ...boardRow(pageId, null, ink, 30, pageRev), position: "a5" }],
+      boards: [],
+      logs: [],
+      links: [],
+      blobs: {},
     });
-    expect(deleted.json.results.map((r: any) => r.status)).toEqual(["applied", "applied"]);
+    expect(deleted.json.results.map((r: any) => r.status)).toEqual(["applied"]);
     page = await pullAll(renamedRev);
     expect(page.notebooks.find((n) => n.id === nbId)).toMatchObject({ deleted_at: 30 });
-    expect(page.boards.find((b) => b.id === pageId)).toMatchObject({ notebook_id: null, ink_hash: ink.hash });
 
-    // A stale rename from a device that missed the delete loses to the newer tombstone.
     const stale = await call("POST", "/sync/push", {
       schema_version: schema,
       device_id: "device-c",
       notebooks: [notebook("resurrected?", 25, nbRev)],
+      boards: [],
+      logs: [],
+      links: [],
+      blobs: {},
     });
     expect(stale.json.results[0].status).toBe("conflict_lost");
     page = await pullAll(before);
@@ -213,18 +262,23 @@ describe("sync round trip", () => {
     expect(latest).toMatchObject({ deleted_at: 30, title: "ideas, sorted" });
   });
 
-  it("reports missing blobs and rejects blobs that do not match their hash", async () => {
+  it("reports missing blobs on logs and rejects blobs that do not match their hash", async () => {
     const ghost = blob(`never uploaded ${randomUUID()}`);
     const missing = await call("POST", "/sync/push", {
       schema_version: schema,
       device_id: "device-a",
-      boards: [boardRow(randomUUID(), null, ghost, 1, 0)],
+      boards: [],
+      logs: [logRow(randomUUID(), null, ghost, 1, 0)],
+      links: [],
+      blobs: {},
     });
     expect(missing.json.results[0].status).toBe("missing_blob");
     const bad = await call("POST", "/sync/push", {
       schema_version: schema,
       device_id: "device-a",
       boards: [],
+      logs: [],
+      links: [],
       blobs: { [ghost.hash]: Buffer.from("tampered").toString("base64") },
     });
     expect(bad.status).toBe(400);
