@@ -32,9 +32,10 @@ public interface BoardRepository {
     }
 
     /**
-     * Persist the page's current strokes: takes an immutable snapshot now and
-     * writes it in the background, newest snapshot per page wins. Never blocks
-     * on ink encoding or file writes. No-op on disk when nothing changed.
+     * Persist ink write-behind. Ready pages ({@code paper != null}) flush the
+     * sheet log; unmigrated pages snapshot {@link Board#strokes} to page files.
+     * Never blocks on encoding or file I/O. Log-backed notebooks refuse the
+     * BoardEntity path when paper is missing.
      */
     void saveInk(Board page);
 

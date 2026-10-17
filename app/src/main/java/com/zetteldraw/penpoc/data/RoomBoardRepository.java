@@ -53,11 +53,10 @@ import java.util.function.LongSupplier;
  * projection, <em>one</em> Move/Reorder spine ({@link #placePageBefore}), and pull
  * orchestration.
  *
- * <p>Ink saves are write-behind. {@link #saveInk} takes an immutable snapshot
- * of the page's strokes and returns; one serialized writer thread encodes it,
- * writes and fsyncs a staged file without the lock, then commits (rename +
- * one small transaction) under the lock. Saves of the same page coalesce, so
- * a slow disk costs one write per page, not one per stroke.
+ * <p>Ink saves are write-behind. Ready pages ({@code page.paper != null}) flush
+ * the sheet log via {@link InkSheetStore#flushSheetOrFalse}. Unmigrated pages
+ * still snapshot into {@code pendingInk} / {@code .zdi}. Log-backed notebooks
+ * never take the BoardEntity path — dual SoT after Ready is refused.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
@@ -265,9 +264,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Snapshots the strokes and returns; the writer thread persists the
-     * snapshot. Blankness, the trailing blank page and sync decisions all see
-     * the snapshot immediately through {@link #isBlankLocked}.
+     * Ready: queue {@link InkSheetStore#flushSheetOrFalse} (paper is SoT).
+     * Unmigrated: snapshot {@link Board#strokes} into BoardEntity {@code .zdi}
+     * write-behind. Log-backed notebooks with {@code paper == null} are refused
+     * — UI + Move/tear must hold paper; never invent a second ink SoT.
      */
     @Override
     public void saveInk(Board page) {
@@ -280,6 +280,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         List<InkRenderer.InkStroke> snapshot = Collections.unmodifiableList(new ArrayList<>(page.strokes));
         synchronized (lock) {
+            String sheetId = sheetIdForSaveLocked(page);
+            if (sheetId != null && sheetStore.isLogBacked(sheetId)) {
+                LaunchLog.mark("saveInk refused BoardEntity write-behind; already log-backed "
+                        + sheetId);
+                return;
+            }
             BoardEntity row = dao.board(page.id);
             if (row == null) {
                 if (snapshot.isEmpty()) {
@@ -313,6 +319,27 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             ensureTrailingBlankLocked(row.notebookId);
         }
+    }
+
+    /**
+     * Sheet id for a paper-null save: explicit {@link Board#sheetId}, else the
+     * board row's notebook, else an open Ready sheet that already owns the slice.
+     */
+    private String sheetIdForSaveLocked(Board page) {
+        if (page.sheetId != null) {
+            return page.sheetId;
+        }
+        BoardEntity row = dao.board(page.id);
+        if (row != null) {
+            return NotebookPaper.sheetId(row.notebookId);
+        }
+        for (Map.Entry<String, InkSheetStore.OpenSheet> entry : sheetStore.entrySet()) {
+            InkSheetStore.OpenSheet open = entry.getValue();
+            if (open.ready && open.paper != null && open.paper.indexOfSliceId(page.id) >= 0) {
+                return entry.getKey();
+            }
+        }
+        return null;
     }
 
     /** Boards with a snapshot not yet on disk. */

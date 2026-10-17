@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v123: Ready conflict shelf (shelve losing local .zdl before LWW replace).
-        versionCode = 123
-        versionName = "4.02"
+        // Tip v124: Ready-only writers (refuse BoardEntity .zdi when notebook_logs live).
+        versionCode = 124
+        versionName = "4.03"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
