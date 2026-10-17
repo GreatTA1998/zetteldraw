@@ -2,12 +2,19 @@ package com.zetteldraw.penpoc.data;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
 
 import com.zetteldraw.penpoc.Board;
+import com.zetteldraw.penpoc.InkRenderer;
+import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
+import com.zetteldraw.penpoc.data.db.OutboxEntry;
+
+import java.util.Collections;
+import java.util.List;
 
 import org.junit.After;
 import org.junit.Before;
@@ -19,8 +26,8 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 /**
- * Tip v86 architecture: live writer never adopts remote ink over local;
- * shorter remote never overwrites longer local disk.
+ * One live SoT: live writer never adopts remote ink over local (Ready LOG or
+ * unmigrated BOARD residue). Shorter remote never overwrites longer local disk.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
@@ -92,6 +99,40 @@ public class LiveWriterInkPolicyTest {
 
         assertEquals(longer.length, repo.localInkLogBytes(sheetId));
         assertTrue(repo.scratchpadPages().size() > 20);
+    }
+
+    @Test
+    public void livePushOnlyKeepsUnmigratedBoardResidue() throws Exception {
+        // Pull never adopts BOARD (live or catch-up); residue waits for Prepare.
+        Board page = Board.blank();
+        TestInk.draw(page, 10f);
+        device.seedUnmigrated(page);
+        BoardEntity local = device.db.dao().board(page.id);
+        assertNotNull(local);
+        String localHash = local.inkHash;
+        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+
+        List<InkRenderer.InkStroke> remoteInk =
+                Collections.singletonList(TestInk.stroke(500f, 600f, 9));
+        byte[] remoteBytes = InkCodec.encode(remoteInk);
+        BoardEntity remote = local.copy();
+        remote.inkHash = InkFileStore.sha256(remoteBytes);
+        remote.inkBytes = remoteBytes.length;
+        remote.rev = local.rev + 10;
+        remote.updatedAt = local.updatedAt + 5_000;
+
+        repo.setInkPullPolicy(SyncStore.InkPullPolicy.LIVE_PUSH_ONLY);
+        SyncStore.PullPage pulled = new SyncStore.PullPage();
+        pulled.boards.add(remote);
+        pulled.blobs.put(remote.inkHash, remoteBytes);
+        pulled.cursor = remote.rev;
+        repo.applyPull(pulled);
+
+        BoardEntity after = device.db.dao().board(page.id);
+        assertEquals("pull must not adopt remote BOARD over local .zdi", localHash, after.inkHash);
+        assertEquals(local.rev, after.rev);
+        TestInk.assertSameInk(page.strokes,
+                InkCodec.decode(new InkFileStore(device.inkDir()).read(page.id)));
     }
 
     private int seedDense(int inkedSlices) throws Exception {

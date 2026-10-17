@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 
 import com.zetteldraw.penpoc.data.SyncStore;
+import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.PageLinkEntity;
 
@@ -55,6 +56,22 @@ public class SyncProtocolTest {
         assertEquals(0, body.getJSONObject("blobs").length());
         assertEquals(SyncStore.INLINE_BLOB_MAX_BYTES, SyncProtocol.INLINE_BLOB_MAX_BYTES);
         assertEquals(256 * 1024, SyncStore.INLINE_BLOB_MAX_BYTES);
+    }
+
+    @Test
+    public void pushBodyNeverSerializesBoardInk() throws Exception {
+        // Tip never pushes BOARD (v136+); boardJson serializer is gone.
+        BoardEntity board = new BoardEntity();
+        board.id = "dddddddd-4444-4444-8444-444444444444";
+        board.position = "a0";
+        board.inkHash = "deadbeef";
+        board.inkBytes = 12L;
+        board.createdAt = 1L;
+        board.updatedAt = 2L;
+        SyncStore.PushBatch batch = new SyncStore.PushBatch();
+        batch.boards.add(board);
+        JSONObject body = SyncProtocol.pushBody(batch, 4, "device-a");
+        assertEquals(0, body.getJSONArray("boards").length());
     }
 
     @Test
