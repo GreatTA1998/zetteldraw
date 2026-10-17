@@ -152,17 +152,25 @@ final class SyncProtocol {
         return link;
     }
 
-    private static JSONObject logJson(NotebookLogEntity log) throws JSONException {
+    /** Shared ink-row JSON fields for board + log push bodies. */
+    private static JSONObject inkJson(
+            String id, String notebookId, String inkHash, long inkBytes, String conflictOf,
+            long createdAt, long updatedAt, Long deletedAt) throws JSONException {
         return new JSONObject()
-                .put("id", log.id)
-                .put("notebook_id", orNull(log.notebookId))
-                .put("ink_hash", orNull(log.inkHash))
-                .put("ink_bytes", log.inkBytes)
-                .put("slice_height", log.sliceHeight)
-                .put("conflict_of", orNull(log.conflictOf))
-                .put("created_at", log.createdAt)
-                .put("updated_at", log.updatedAt)
-                .put("deleted_at", orNull(log.deletedAt));
+                .put("id", id)
+                .put("notebook_id", orNull(notebookId))
+                .put("ink_hash", orNull(inkHash))
+                .put("ink_bytes", inkBytes)
+                .put("conflict_of", orNull(conflictOf))
+                .put("created_at", createdAt)
+                .put("updated_at", updatedAt)
+                .put("deleted_at", orNull(deletedAt));
+    }
+
+    private static JSONObject logJson(NotebookLogEntity log) throws JSONException {
+        return inkJson(log.id, log.notebookId, log.inkHash, log.inkBytes, log.conflictOf,
+                log.createdAt, log.updatedAt, log.deletedAt)
+                .put("slice_height", log.sliceHeight);
     }
 
     /** Pull row or log-heads row → entity (missing deleted_at / conflict_of ⇒ null). */
@@ -182,17 +190,10 @@ final class SyncProtocol {
     }
 
     private static JSONObject boardJson(BoardEntity b) throws JSONException {
-        return new JSONObject()
-                .put("id", b.id)
-                .put("notebook_id", orNull(b.notebookId))
+        return inkJson(b.id, b.notebookId, b.inkHash, b.inkBytes, b.conflictOf,
+                b.createdAt, b.updatedAt, b.deletedAt)
                 .put("position", b.position)
-                .put("ink_hash", orNull(b.inkHash))
-                .put("ink_bytes", b.inkBytes)
-                .put("thumb_hash", orNull(b.thumbHash))
-                .put("conflict_of", orNull(b.conflictOf))
-                .put("created_at", b.createdAt)
-                .put("updated_at", b.updatedAt)
-                .put("deleted_at", orNull(b.deletedAt));
+                .put("thumb_hash", orNull(b.thumbHash));
     }
 
     private static Object orNull(Object value) {

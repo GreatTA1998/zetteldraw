@@ -143,23 +143,11 @@ public interface SyncStore {
         }
     }
 
-    final class PushResult {
+    record PushResult(String entity, String id, String status, long rev) {
         public static final String APPLIED = "applied";
         public static final String CONFLICT_WON = "conflict_won";
         public static final String CONFLICT_LOST = "conflict_lost";
         public static final String MISSING_BLOB = "missing_blob";
-
-        public final String entity;
-        public final String id;
-        public final String status;
-        public final long rev;
-
-        public PushResult(String entity, String id, String status, long rev) {
-            this.entity = entity;
-            this.id = id;
-            this.status = status;
-            this.rev = rev;
-        }
     }
 
     final class PullPage {

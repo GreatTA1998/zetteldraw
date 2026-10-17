@@ -3266,19 +3266,18 @@ public final class CanvasActivity extends Activity {
      * Sound is down-only so it never double-fires with the click/long-click.
      */
     private void onTap(View view, View.OnClickListener listener) {
-        view.setSoundEffectsEnabled(false);
         attachDownClick(view);
         view.setOnClickListener(listener);
     }
 
     private void onLongTap(View view, View.OnLongClickListener listener) {
-        view.setSoundEffectsEnabled(false);
         attachDownClick(view);
         view.setOnLongClickListener(listener);
     }
 
-    /** Play once when the finger/stylus contacts the control; do not consume the event. */
+    /** Soft click on press; disable framework click sound so it never double-fires. */
     private static void attachDownClick(View view) {
+        view.setSoundEffectsEnabled(false);
         view.setOnTouchListener((v, event) -> {
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 UiClick.play(v.getContext());

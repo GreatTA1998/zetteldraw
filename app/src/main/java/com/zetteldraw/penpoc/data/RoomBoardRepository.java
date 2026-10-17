@@ -1179,19 +1179,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             db.runInTransaction(() -> {
                 for (PushResult result : results) {
-                    Long queuedAt = batch.queuedAt.get(result.entity + ":" + result.id);
+                    Long queuedAt = batch.queuedAt.get(result.entity() + ":" + result.id());
                     if (queuedAt == null) {
                         continue;
                     }
-                    switch (result.status) {
+                    switch (result.status()) {
                         case PushResult.APPLIED:
                         case PushResult.CONFLICT_WON:
-                            setRevLocked(result.entity, result.id, result.rev);
+                            setRevLocked(result.entity(), result.id(), result.rev());
                             // fall through — drop outbox when unchanged (won or lost)
                         case PushResult.CONFLICT_LOST:
                             // CONFLICT_LOST: server kept its row and shelved ours;
                             // next pull brings both down.
-                            dao.deleteOutboxIfUnchanged(result.entity, result.id, queuedAt);
+                            dao.deleteOutboxIfUnchanged(result.entity(), result.id(), queuedAt);
                             break;
                         default:
                             break;

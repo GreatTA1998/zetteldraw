@@ -50,81 +50,48 @@ public final class InkLogApply {
     /**
      * Inputs measured by the repository (Ready paper or disk replay). Negative
      * slice counts mean "unknown / missing local log".
+     * {@code allowAdoptRemote} is false while this device is the live writer.
      */
-    public static final class Facts {
-        public final boolean remoteIsConflictCopy;
-        public final boolean remoteDeleted;
-        public final boolean hasRemoteBody;
-        /** False while this device is the live writer (push-only ink). */
-        public final boolean allowAdoptRemote;
-        public final int localSlices;
-        public final int remoteSlices;
-        public final long localBytes;
-        public final long remoteBytes;
-        public final Long localRev;
-        public final long remoteRev;
-        public final boolean holdFlush;
-        public final boolean unflushedLocal;
-        public final boolean pendingLocal;
-        public final long localUpdatedAt;
-        public final long remoteUpdatedAt;
-
-        public Facts(
-                boolean remoteIsConflictCopy,
-                boolean remoteDeleted,
-                boolean hasRemoteBody,
-                boolean allowAdoptRemote,
-                int localSlices,
-                int remoteSlices,
-                long localBytes,
-                long remoteBytes,
-                Long localRev,
-                long remoteRev,
-                boolean holdFlush,
-                boolean unflushedLocal,
-                boolean pendingLocal,
-                long localUpdatedAt,
-                long remoteUpdatedAt) {
-            this.remoteIsConflictCopy = remoteIsConflictCopy;
-            this.remoteDeleted = remoteDeleted;
-            this.hasRemoteBody = hasRemoteBody;
-            this.allowAdoptRemote = allowAdoptRemote;
-            this.localSlices = localSlices;
-            this.remoteSlices = remoteSlices;
-            this.localBytes = localBytes;
-            this.remoteBytes = remoteBytes;
-            this.localRev = localRev;
-            this.remoteRev = remoteRev;
-            this.holdFlush = holdFlush;
-            this.unflushedLocal = unflushedLocal;
-            this.pendingLocal = pendingLocal;
-            this.localUpdatedAt = localUpdatedAt;
-            this.remoteUpdatedAt = remoteUpdatedAt;
-        }
+    public record Facts(
+            boolean remoteIsConflictCopy,
+            boolean remoteDeleted,
+            boolean hasRemoteBody,
+            boolean allowAdoptRemote,
+            int localSlices,
+            int remoteSlices,
+            long localBytes,
+            long remoteBytes,
+            Long localRev,
+            long remoteRev,
+            boolean holdFlush,
+            boolean unflushedLocal,
+            boolean pendingLocal,
+            long localUpdatedAt,
+            long remoteUpdatedAt) {
     }
 
     public static Decision decide(Facts f) {
-        if (f.remoteIsConflictCopy) {
+        if (f.remoteIsConflictCopy()) {
             return Decision.SHELVE_CONFLICT_COPY;
         }
-        if (f.hasRemoteBody && !f.remoteDeleted) {
-            boolean remoteHasMoreBytes = f.remoteBytes > f.localBytes;
-            if (LogLength.remoteShortens(f.localSlices, f.remoteSlices) && !remoteHasMoreBytes) {
+        if (f.hasRemoteBody() && !f.remoteDeleted()) {
+            boolean remoteHasMoreBytes = f.remoteBytes() > f.localBytes();
+            if (LogLength.remoteShortens(f.localSlices(), f.remoteSlices()) && !remoteHasMoreBytes) {
                 return Decision.REFUSE_SHORTER;
             }
-            if (LogLength.remoteLengthens(f.localSlices, f.remoteSlices) || remoteHasMoreBytes) {
+            if (LogLength.remoteLengthens(f.localSlices(), f.remoteSlices()) || remoteHasMoreBytes) {
                 // Empty local is seed/fill, not clobber. Live push-only blocks
                 // only when local already has ink.
                 return refuseRemoteBody(f) ? Decision.KEEP_LIVE_LOCAL : Decision.ADOPT_LONGER;
             }
             return equalLengthDecision(f);
         }
-        if (f.localRev != null) {
+        if (f.localRev() != null) {
             Decision skip = equalLengthDecision(f);
             if (skip != Decision.LWW_REPLACE) {
                 return skip;
             }
-            if (!f.allowAdoptRemote) {
+            if (!f.allowAdoptRemote()) {
                 return Decision.KEEP_LIVE_LOCAL;
             }
         }
@@ -132,19 +99,19 @@ public final class InkLogApply {
     }
 
     private static Decision equalLengthDecision(Facts f) {
-        if (f.localRev != null && f.remoteRev <= f.localRev) {
+        if (f.localRev() != null && f.remoteRev() <= f.localRev()) {
             return Decision.SKIP_REV;
         }
-        if (f.holdFlush) {
+        if (f.holdFlush()) {
             return Decision.SKIP_HOLD_FLUSH;
         }
-        if (f.unflushedLocal) {
+        if (f.unflushedLocal()) {
             return Decision.SKIP_UNFLUSHED;
         }
-        if (f.pendingLocal && !Lww.remoteWins(f.localUpdatedAt, f.remoteUpdatedAt)) {
+        if (f.pendingLocal() && !Lww.remoteWins(f.localUpdatedAt(), f.remoteUpdatedAt())) {
             return Decision.SKIP_PENDING_NEWER;
         }
-        if (f.hasRemoteBody && !f.remoteDeleted) {
+        if (f.hasRemoteBody() && !f.remoteDeleted()) {
             return refuseRemoteBody(f) ? Decision.KEEP_LIVE_LOCAL : Decision.LWW_REPLACE;
         }
         return Decision.UPSERT_META_ONLY;
@@ -152,7 +119,7 @@ public final class InkLogApply {
 
     /** Live writer with local ink: cloud body must not replace the primary. */
     private static boolean refuseRemoteBody(Facts f) {
-        return !f.allowAdoptRemote && (f.localBytes > 0 || f.localSlices > 0);
+        return !f.allowAdoptRemote() && (f.localBytes() > 0 || f.localSlices() > 0);
     }
 
     /** True when this decision may replace the live primary log bytes. */

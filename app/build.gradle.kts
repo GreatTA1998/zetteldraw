@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v110: wipe/delete paperSlice spine; load/sync carriers as records.
-        versionCode = 110
-        versionName = "3.89"
+        // Tip v111: InkLogApply.Facts + PushResult records; push inkJson spine.
+        versionCode = 111
+        versionName = "3.90"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
