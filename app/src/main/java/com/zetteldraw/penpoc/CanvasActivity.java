@@ -67,7 +67,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Top bar: Scratchpad | top-level notebooks | +. A selected notebook with
@@ -161,8 +160,8 @@ public final class CanvasActivity extends Activity {
     private boolean scrolling;
     private boolean pagesLoaded;
     private int pendingScrollY = -1;
-    private static final long FIRST_LOAD_DEADLINE_MS = 1_000;
-    private static final long LOAD_DEADLINE_MAX_MS = 8_000;
+    /** Not-Ready / empty / failed open retries on this interval until shown or superseded. */
+    private static final long LOAD_RETRY_MS = 1_000;
     private static final String TAG = "zd-canvas";
     /** Times a drawing-area resize threw the page list away. Link must not move this. */
     static final java.util.concurrent.atomic.AtomicInteger pageReflows = new java.util.concurrent.atomic.AtomicInteger();
@@ -947,9 +946,9 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Loads the notebooks and one page list off the main thread. Nothing can
-     * leave it unshown: if the list is not up by the deadline the load runs
-     * again on a fresh thread, with a longer deadline each time, until it is.
+     * Thin open/load spine: ensure Ready off the main thread, then
+     * {@link #showReady}. Not-Ready / empty / fail retries until shown or
+     * superseded — no deadline/attempt state machine.
      * {@code keepScroll} null means restore a remembered scroll, else first-open
      * last page / last inked.
      */
@@ -959,107 +958,87 @@ public final class CanvasActivity extends Activity {
         if (holdPen) {
             inkView.hold(PageInkView.Hold.LOADING);
         }
-        runLoad(generation, id, keepScroll, 0);
+        requestReadyPages(generation, id, keepScroll, false);
     }
 
-    private void runLoad(int generation, String id, Integer keepScroll, int attempt) {
-        // 0 = not started, > 0 = reading since that uptime, -1 = finished (shown or failed).
-        AtomicLong reading = new AtomicLong();
-        armDeadline(generation, id, keepScroll, attempt, reading, attempt);
+    /**
+     * One ensure→pages→paint pass. Arms a single deferred retry so a dropped /
+     * stuck / not-Ready pass cannot leave the screen empty; {@code retry} uses a
+     * fresh thread so a stuck first loader cannot block recovery.
+     */
+    private void requestReadyPages(int generation, String id, Integer keepScroll, boolean retry) {
+        scheduleLoadRetry(generation, id, keepScroll);
         String notebook = notebookKey(id);
         String name = label(id);
-        Executor executor = attempt == 0 ? UiExecutors.loader : UiExecutors.retryLoader;
+        Executor executor = retry ? UiExecutors.retryLoader : UiExecutors.loader;
         boolean first = !firstListShown;
         try {
             executor.execute(() -> {
-            List<BoardRepository.NotebookInfo> notebooks;
-            List<Board> pages;
-            boolean ready;
-            long started = SystemClock.uptimeMillis();
-            reading.set(started);
-            try {
-                notebooks = repository.notebooks();
-                // Tabs don't wait for the page list.
-                main.post(() -> {
-                    if (generation == loadGeneration && !isDestroyed()) {
-                        rebuildNotebookTabs(notebooks);
-                    }
-                });
-                // Ready-gate: never call pages() for show while height is unknown
-                // (that used to return truncated Room rows, then show after layout).
-                if (pageHeight <= 0) {
-                    reading.set(-1);
-                    main.post(() -> onPagesLoaded(new Loaded(
-                            generation, id, keepScroll, notebooks, java.util.Collections.emptyList(), false)));
-                    return;
-                }
-                ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight, shortPagesSince);
-                if (!ready) {
-                    reading.set(-1);
-                    // Deleted notebook: ensureSheet fails; still post so UI can leave it.
-                    if (notebook != null && notebookByIdIn(notebooks, notebook) == null) {
-                        main.post(() -> onPagesLoaded(new Loaded(
+                List<BoardRepository.NotebookInfo> notebooks;
+                List<Board> pages;
+                boolean ready;
+                long started = SystemClock.uptimeMillis();
+                try {
+                    notebooks = repository.notebooks();
+                    // Tabs don't wait for the page list.
+                    main.post(() -> {
+                        if (generation == loadGeneration && !isDestroyed()) {
+                            rebuildNotebookTabs(notebooks);
+                        }
+                    });
+                    // Ready-gate: never call pages() for show while height is unknown
+                    // (that used to return truncated Room rows, then show after layout).
+                    if (pageHeight <= 0) {
+                        main.post(() -> finishLoad(new Loaded(
                                 generation, id, keepScroll, notebooks,
-                                java.util.Collections.emptyList(), true)));
+                                java.util.Collections.emptyList(), false)));
                         return;
                     }
-                    // Not Ready — do not show truncated Room rows; deadline retries.
-                    LaunchLog.mark("page list " + name + " sheet not ready (attempt " + (attempt + 1) + ")");
+                    ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight, shortPagesSince);
+                    if (!ready) {
+                        // Deleted notebook: ensureSheet fails; still post so UI can leave it.
+                        if (notebook != null && notebookByIdIn(notebooks, notebook) == null) {
+                            main.post(() -> finishLoad(new Loaded(
+                                    generation, id, keepScroll, notebooks,
+                                    java.util.Collections.emptyList(), true)));
+                            return;
+                        }
+                        // Not Ready — do not show truncated Room rows; armed retry.
+                        LaunchLog.mark("page list " + name + " sheet not ready");
+                        return;
+                    }
+                    pages = repository.pages(notebook);
+                    if (pages.isEmpty()) {
+                        LaunchLog.mark("page list " + name + " empty after Ready ensure");
+                        return;
+                    }
+                    if (first) {
+                        LaunchLog.mark("page list " + name + " read: " + pages.size() + " pages ("
+                                + inked(pages) + " inked), " + notebooks.size() + " notebooks in "
+                                + (SystemClock.uptimeMillis() - started) + " ms");
+                    }
+                } catch (RuntimeException e) {
+                    Log.e(TAG, "page list load failed; armed retry", e);
+                    LaunchLog.mark("page list load failed: " + e);
                     return;
                 }
-                pages = repository.pages(notebook);
-                if (pages.isEmpty()) {
-                    reading.set(-1);
-                    LaunchLog.mark("page list " + name + " empty after Ready ensure (attempt "
-                            + (attempt + 1) + ")");
-                    return;
-                }
-                if (first) {
-                    LaunchLog.mark("page list " + name + " read: " + pages.size() + " pages ("
-                            + inked(pages) + " inked), " + notebooks.size() + " notebooks in "
-                            + (SystemClock.uptimeMillis() - started) + " ms (attempt " + (attempt + 1) + ")");
-                }
-            } catch (RuntimeException e) {
-                reading.set(-1);
-                Log.e(TAG, "page list load failed; the deadline retries it", e);
-                LaunchLog.mark("page list load failed: " + e);
-                return;
-            }
-            reading.set(-1);
-            main.post(() -> onPagesLoaded(new Loaded(generation, id, keepScroll, notebooks, pages, true)));
+                main.post(() -> finishLoad(new Loaded(generation, id, keepScroll, notebooks, pages, true)));
             });
         } catch (RuntimeException e) {
-            Log.e(TAG, "page list load could not start; the deadline retries it", e);
+            Log.e(TAG, "page list load could not start; armed retry", e);
             LaunchLog.mark("page list load could not start: " + e);
         }
     }
 
-    /**
-     * If the list is not up by the deadline: an attempt still reading is
-     * left to finish (a second read would only compete with it for the CPU);
-     * one that failed, never started, or whose result was lost is run again.
-     */
-    private void armDeadline(int generation, String id, Integer keepScroll, int attempt, AtomicLong reading,
-                             int wait) {
-        long deadline = Math.min(LOAD_DEADLINE_MAX_MS, FIRST_LOAD_DEADLINE_MS << Math.min(wait, 4));
+    private void scheduleLoadRetry(int generation, String id, Integer keepScroll) {
         main.postDelayed(() -> {
             if (generation != loadGeneration || shownGeneration == generation || isDestroyed()) {
                 return;
             }
-            long since = reading.get();
-            long readFor = since > 0 ? SystemClock.uptimeMillis() - since : 0;
-            if (since > 0 && readFor < LOAD_DEADLINE_MAX_MS) {
-                LaunchLog.mark("page list " + label(id) + " still being read after " + readFor + " ms (attempt "
-                        + (attempt + 1) + ")");
-                armDeadline(generation, id, keepScroll, attempt, reading, wait + 1);
-                return;
-            }
-            String stall = "page list " + label(id) + " not shown " + deadline + " ms after load attempt "
-                    + (attempt + 1) + (since == 0 ? ", which never started" : "") + "; loading again";
-            Log.w("zd-stall", stall);
-            LaunchLog.mark(stall);
-            runLoad(generation, id, keepScroll, attempt + 1);
-        }, deadline);
+            LaunchLog.mark("page list " + label(id) + " not shown after " + LOAD_RETRY_MS
+                    + " ms; loading again");
+            requestReadyPages(generation, id, keepScroll, true);
+        }, LOAD_RETRY_MS);
     }
 
     private static int inked(List<Board> pages) {
@@ -1081,7 +1060,7 @@ public final class CanvasActivity extends Activity {
         return title.isEmpty() ? id : "'" + title + "'";
     }
 
-    private void onPagesLoaded(Loaded loaded) {
+    private void finishLoad(Loaded loaded) {
         if (loaded.generation() != loadGeneration || shownGeneration == loaded.generation() || isDestroyed()) {
             return;
         }

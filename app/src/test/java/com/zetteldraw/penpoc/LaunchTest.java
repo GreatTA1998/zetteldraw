@@ -119,7 +119,7 @@ public class LaunchTest {
     }
 
     @Test
-    public void aFirstLoadThatNeverReturnsIsLoadedAgainAfterTheDeadline() {
+    public void aFirstLoadThatNeverReturnsIsLoadedAgainOnRetry() {
         UiExecutors.loader = task -> { };
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();

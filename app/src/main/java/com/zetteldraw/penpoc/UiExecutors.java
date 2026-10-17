@@ -3,7 +3,7 @@ package com.zetteldraw.penpoc;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
-/** Background threads the UI hands work to: page-list loads, load retries, first-screen renders, the surface. */
+/** Background threads the UI hands work to: page-list open/load, load retries, first-screen renders, the surface. */
 final class UiExecutors {
     static volatile Executor loader = single("zd-load");
     /** A retry must not queue behind a load that is stuck, so each may get a fresh thread. */
