@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v120: Ready-only pages() — delete BoardEntity fallthrough + warmCache.
-        versionCode = 121
-        versionName = "4.00"
+        // Tip v122: pull-delete Ready return (same spine as local deleteNotebook).
+        versionCode = 122
+        versionName = "4.01"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

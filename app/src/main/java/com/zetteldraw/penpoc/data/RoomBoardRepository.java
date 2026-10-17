@@ -506,6 +506,13 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (!sameNotebook) {
                 // Reseat source boards so Move chrome / isBlank agree mid-reload.
                 syncAllSliceIndices(moving.paper);
+                // Adopted trailing blank keeps its id as the slice; drop it from
+                // the source list so Move-back cannot placePageBefore(id, id).
+                String sourceKey = listKey(notebookIdOfSheet(sourceSheetId));
+                Board sourceBlank = trailingBlanks.get(sourceKey);
+                if (sourceBlank != null && boardId.equals(sourceBlank.id)) {
+                    trailingBlanks.remove(sourceKey);
+                }
             }
             // One persist spine: hold → dest-first rewrite → release → (cross) flush.
             sheetStore.setPairFlushHeld(sourceSheetId, destSheetId, true);
@@ -848,8 +855,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void deleteNotebook(String notebookId) {
-        // Ready sheets: Move inked slices to Scratchpad before tombstoning.
-        // Legacy BoardEntity return still runs inside the lock below.
+        // One return spine with pull-delete: Ready Move first, then legacy rows.
         returnReadyPagesToScratchpad(notebookId);
         synchronized (lock) {
             NotebookEntity row = dao.notebook(notebookId);
@@ -866,11 +872,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 returnPagesToScratchpadLocked(notebookId);
                 promoteChildrenLocked(notebookId, promoteTo);
             });
-            Board blank = trailingBlanks.remove(listKey(notebookId));
-            if (blank != null) {
-                cache.remove(blank.id);
-            }
-            sheetStore.invalidate(notebookId);
+            forgetDeletedNotebookUiLocked(notebookId);
             trimTrailingBlanksLocked(null);
             ensureTrailingBlankLocked(null);
             scheduleIndex();
@@ -878,9 +880,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Before deleting a notebook, Move its Ready paper slices onto Scratchpad
-     * (same spine as the Move menu). No-op when height is unknown and no Ready
-     * sheet is open — legacy {@link #returnPagesToScratchpadLocked} still runs.
+     * Move Ready paper slices onto Scratchpad (same spine as the Move menu)
+     * before a notebook tombstone — local delete or winning remote pull-delete.
+     * No-op when ensure fails; legacy {@link #returnPagesToScratchpadLocked}
+     * still runs under the lock.
      */
     private void returnReadyPagesToScratchpad(String notebookId) {
         if (notebookId == null) {
@@ -892,6 +895,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return;
         }
         ensureSheet(null, height, legacy, knownShortPagesSince);
+        // Refresh Scratchpad trailing blank before Moves (adopted blank may still
+        // sit in trailingBlanks after the page was filed elsewhere).
+        pages(null);
         ArrayList<String> inked = new ArrayList<>();
         for (Board page : pages(notebookId)) {
             if (!page.isBlank()) {
@@ -901,6 +907,38 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         for (String id : inked) {
             movePageToNotebook(id, null);
         }
+    }
+
+    /**
+     * Whether a pulled notebook tombstone would win LWW (same gate as
+     * {@link MetaPullApply#applyRemoteNotebook}). Ready-return runs before the
+     * locked apply — {@link #pages} refuses deleted notebooks.
+     */
+    private boolean remoteNotebookDeleteWins(NotebookEntity remote) {
+        if (remote == null || remote.id == null || remote.deletedAt == null) {
+            return false;
+        }
+        synchronized (lock) {
+            NotebookEntity local = dao.notebook(remote.id);
+            if (local != null && local.deletedAt != null) {
+                return false;
+            }
+            if (local != null && (remote.rev <= local.rev
+                    || (pendingLocked(OutboxEntry.NOTEBOOK, remote.id)
+                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)))) {
+                return false;
+            }
+            return true;
+        }
+    }
+
+    /** Drop trailing-blank cache + Ready sheet after a notebook is tombstoned. */
+    private void forgetDeletedNotebookUiLocked(String notebookId) {
+        Board blank = trailingBlanks.remove(listKey(notebookId));
+        if (blank != null) {
+            cache.remove(blank.id);
+        }
+        sheetStore.invalidate(notebookId);
     }
 
     // endregion
@@ -1172,6 +1210,13 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 staged.put(remote.id, new MetaPullApply.Staged(
                         ink.stage(remote.id, "pull", bytes), bytes, strokes));
             }
+            // Same Ready return as local deleteNotebook — before tombstone so
+            // pages() still sees the sheet. BoardEntity return alone is not SoT.
+            for (NotebookEntity remote : page.notebooks) {
+                if (remoteNotebookDeleteWins(remote)) {
+                    returnReadyPagesToScratchpad(remote.id);
+                }
+            }
             applyPullLocked(page, staged, stagedLogs, refreshed, editsSeen, boardsSeen);
         } finally {
             for (MetaPullApply.Staged s : staged.values()) {
@@ -1289,12 +1334,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                             metaPull.applyRemoteNotebook(remote);
                             NotebookEntity now = dao.notebook(remote.id);
                             if (now != null && now.deletedAt != null) {
-                                // Pages still filed here (e.g. moved in on this device after the
-                                // other device deleted it) go back to the scratchpad.
-                                // Children still pointing here are promoted, including one whose
-                                // own row was not in this pull page.
+                                // Ready slices already Moved in applyPull; legacy rows +
+                                // children + UI forget match local deleteNotebook.
                                 returnPagesToScratchpadLocked(remote.id);
                                 promoteChildrenLocked(remote.id, now.parentId);
+                                forgetDeletedNotebookUiLocked(remote.id);
                             }
                         }
                         for (BoardEntity remote : page.boards) {
@@ -2065,9 +2109,13 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         String key = listKey(notebookId);
         if (needBlank) {
             Board blank = trailingBlanks.get(key);
-            // First ink adopts the trailing blank's id as a real slice. That
-            // board stays as the slice; mint a fresh blank for the new tail.
-            if (blank != null && sliceIds.contains(blank.id)) {
+            // Trailing blank must not be a live slice (here or after Move onto
+            // another sheet). First ink adopts its id; Move must not leave that
+            // id as this list's blank or placePageBefore(id, id) no-ops.
+            if (blank != null && (sliceIds.contains(blank.id)
+                    || (blank.paper != null && blank.paper != paper)
+                    || (blank.paper != null && blank.paper.indexOfSliceId(blank.id) >= 0)
+                    || !blank.isBlank())) {
                 trailingBlanks.remove(key);
                 blank = null;
             }

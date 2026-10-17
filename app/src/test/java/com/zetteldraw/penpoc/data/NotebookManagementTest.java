@@ -140,13 +140,15 @@ public class NotebookManagementTest {
 
     @Test
     public void pulledDeleteSendsLocallyFiledPagesToScratchpad() throws Exception {
-        // Legacy BoardEntity filing: pull-delete return still moves rows (Ready
-        // paper return runs on local deleteNotebook; pull path keeps row return).
-        Board a = Board.blank();
-        TestInk.draw(a, 10f);
-        device.tick();
-        repo.saveInk(a);
-        repo.movePageToNotebook(a.id, Notebook.ACTIONS_LIFE.uuid);
+        // Ready SoT: pull-delete must Move inked slices like local deleteNotebook
+        // (BoardEntity notebookId=null alone is not enough after Ready-only pages).
+        // Empty Scratchpad dest (only trailing blank) is the hard case — adopted
+        // blank id must not remain as trailingBlanks after filing away.
+        device.ensureReady();
+        device.ensureReady(Notebook.ACTIONS_LIFE.uuid);
+        Board a = inked(10f);
+        assertTrue(repo.movePageToNotebook(a.id, Notebook.ACTIONS_LIFE.uuid));
+        assertTrue(RoomBoardRepositoryTest.ids(repo.notebookPages(Notebook.ACTIONS_LIFE.uuid)).contains(a.id));
         NotebookEntity remote = device.db.dao().notebook(Notebook.ACTIONS_LIFE.uuid).copy();
         remote.deletedAt = device.tick();
         remote.updatedAt = remote.deletedAt;
@@ -156,9 +158,12 @@ public class NotebookManagementTest {
         page.cursor = 8;
         repo.applyPull(page);
         assertEquals(3, repo.notebooks().size());
-        device.ensureReady();
-        assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(a.id)
-                || device.db.dao().board(a.id).notebookId == null);
+        assertTrue(repo.notebookPages(Notebook.ACTIONS_LIFE.uuid).isEmpty());
+        assertFalse(repo.isSheetReady(Notebook.ACTIONS_LIFE.uuid));
+        List<Board> scratch = repo.scratchpadPages();
+        assertTrue(RoomBoardRepositoryTest.ids(scratch).contains(a.id));
+        Board landed = scratch.get(RoomBoardRepositoryTest.ids(scratch).indexOf(a.id));
+        assertEquals(1, TestInk.strokesOf(landed).size());
     }
 
     @Test
