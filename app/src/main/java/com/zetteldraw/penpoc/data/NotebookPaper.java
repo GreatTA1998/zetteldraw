@@ -377,12 +377,7 @@ public final class NotebookPaper {
         if (stroke == null || stroke.points.isEmpty()) {
             return;
         }
-        float bottom = maxY(stroke);
-        while (bottom >= origin(heights.size())) {
-            String id = adoptId != null ? adoptId : UUID.randomUUID().toString();
-            adoptId = null;
-            extend(id, sliceHeight);
-        }
+        growTo(maxY(stroke), adoptId);
         strokes.add(stroke);
         noteStroke(stroke);
         append(record(OP_APPEND, strokePayload(stroke)));
@@ -436,11 +431,7 @@ public final class NotebookPaper {
         if (!any) {
             return;
         }
-        while (bottom >= origin(heights.size())) {
-            String id = adoptId != null ? adoptId : UUID.randomUUID().toString();
-            adoptId = null;
-            extend(id, sliceHeight);
-        }
+        growTo(bottom, adoptId);
         ArrayList<String> moved = new ArrayList<>();
         for (int i = 0; i < strokes.size(); i++) {
             InkRenderer.InkStroke stroke = strokes.get(i);
@@ -784,6 +775,15 @@ public final class NotebookPaper {
         while (!heights.isEmpty() && touching(heights.size() - 1).isEmpty()) {
             heights.remove(heights.size() - 1);
             sliceIds.remove(sliceIds.size() - 1);
+        }
+    }
+
+    /** Extend slices until {@code bottom} fits; first new slice may keep {@code adoptId}. */
+    private void growTo(float bottom, String adoptId) {
+        while (bottom >= origin(heights.size())) {
+            String id = adoptId != null ? adoptId : UUID.randomUUID().toString();
+            adoptId = null;
+            extend(id, sliceHeight);
         }
     }
 
