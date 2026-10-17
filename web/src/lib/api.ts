@@ -112,6 +112,7 @@ export interface BackupStatus {
   ok: boolean;
   ready_for_device_restore: boolean;
   notebooks: number;
+  /** Board ink with no covering Ready notebook_log (restore-critical). */
   boards_with_ink: number;
   logs_with_ink: number;
   missing: Array<{ table: "boards" | "notebook_logs"; id: string; ink_hash: string }>;

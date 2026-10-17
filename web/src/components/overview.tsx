@@ -252,8 +252,8 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
               </AlertTitle>
               <AlertDescription>
                 {backupRes.data.note}{" "}
-                {backupRes.data.logs_with_ink} notebook log(s), {backupRes.data.boards_with_ink} page
-                blob(s)
+                {backupRes.data.logs_with_ink} notebook log(s),{" "}
+                {backupRes.data.boards_with_ink} uncovered page blob(s)
                 {backupRes.data.missing.length > 0
                   ? `; ${backupRes.data.missing.length} missing from storage.`
                   : "."}{" "}

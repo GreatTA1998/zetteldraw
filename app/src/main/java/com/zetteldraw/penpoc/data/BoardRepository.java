@@ -50,6 +50,18 @@ public interface BoardRepository {
     boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince);
 
     /**
+     * Migrate every notebook that still has BoardEntity {@code .zdi} ink onto
+     * Ready {@code .zdl} when {@code pageHeight} is known. Used before Prepare
+     * transfer / Settings sync so unopened notebooks push LOG instead of BOARD.
+     *
+     * @return how many notebooks were migrated (or already Ready after ensure)
+     */
+    default int ensureReadyInkForBackup(int pageHeight, int legacyPageHeight,
+                                        long shortPagesSince) {
+        return 0;
+    }
+
+    /**
      * True when {@link #pages} for this notebook projects from a fully installed
      * ink-log sheet (not the legacy Room board-row fallback).
      */

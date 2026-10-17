@@ -407,14 +407,19 @@ export interface BackupMissing {
 }
 
 /**
- * Whether every owned live ink blob is present in object storage.
+ * Whether every restore-critical owned ink blob is present in object storage.
  * Notebook list / page thumbs on the web can look fine while a notebook_log
  * (the Boox source of truth after v20) is missing from S3 — this check catches that.
+ *
+ * Board page blobs covered by a live Ready {@code notebook_logs} row for the
+ * same notebook are migration residue, not Hand-off restore SoT — they do not
+ * block {@link BackupStatus#ready_for_device_restore}.
  */
 export interface BackupStatus {
   ok: boolean;
   ready_for_device_restore: boolean;
   notebooks: number;
+  /** Live board ink rows with no covering Ready notebook_log (restore-critical). */
   boards_with_ink: number;
   logs_with_ink: number;
   missing: BackupMissing[];
@@ -434,6 +439,14 @@ export async function backupStatus(
     scope.kind === "user"
       ? ownedByUser("notebook_logs" as OwnerTable, "l", 1)
       : `NOT EXISTS (SELECT 1 FROM row_owners o WHERE o.table_name = 'notebook_logs' AND o.row_id = l.id)`;
+  // Same notebook_id (null = Scratchpad) — Ready .zdl covers BoardEntity .zdi residue.
+  const boardCoveredByLog = `EXISTS (
+      SELECT 1 FROM notebook_logs l
+      WHERE l.deleted_at IS NULL AND l.conflict_of IS NULL AND l.ink_hash IS NOT NULL
+        AND ${logOwn}
+        AND ((b.notebook_id IS NULL AND l.notebook_id IS NULL)
+             OR (b.notebook_id IS NOT NULL AND l.notebook_id = b.notebook_id))
+    )`;
 
   const notebooks = await pool.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM notebooks n WHERE n.deleted_at IS NULL AND ${nOwn}`,
@@ -441,7 +454,8 @@ export async function backupStatus(
   );
   const boards = await pool.query<{ id: string; ink_hash: string }>(
     `SELECT b.id, b.ink_hash FROM boards b
-     WHERE ${LIVE} AND ${bOwn} AND b.ink_hash IS NOT NULL`,
+     WHERE ${LIVE} AND ${bOwn} AND b.ink_hash IS NOT NULL
+       AND NOT ${boardCoveredByLog}`,
     params,
   );
   const logs = await pool.query<{ id: string; ink_hash: string }>(
@@ -471,8 +485,8 @@ export async function backupStatus(
     logs_with_ink: logs.rows.length,
     missing,
     note: ok
-      ? "All owned ink blobs are in object storage. A fresh signed-in device can pull them."
-      : "Some ink hashes are in Postgres but missing from object storage. Do not uninstall the Boox until sync re-uploads them.",
+      ? "All restore-critical ink blobs are in object storage. Ready notebook logs cover migrated page residue. A fresh signed-in device can pull them."
+      : "Some restore-critical ink hashes are in Postgres but missing from object storage. Do not uninstall the Boox until sync re-uploads them.",
   };
 }
 

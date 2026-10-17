@@ -1,6 +1,8 @@
 package com.zetteldraw.penpoc.data;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
@@ -79,6 +81,37 @@ public class EnsureUnsyncedQueuedTest {
         // ensureUnsyncedQueued is a no-op when everything is already queued.
         assertEquals(0, repo.ensureUnsyncedQueued());
         assertTrue(repo.outboxSize() > 0);
+    }
+
+    @Test
+    public void skipsBoardQueueWhenNotebookLogBacked() throws Exception {
+        Board page = Board.blank();
+        TestInk.draw(page, 9f);
+        device.seedUnmigrated(page);
+        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+        assertTrue(device.ensureReady());
+        // Residue path: re-queue must not revive BOARD after Ready owns ink.
+        assertEquals(0, repo.ensureUnsyncedQueued());
+        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+        assertNotNull(device.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(null)));
+    }
+
+    @Test
+    public void ensureReadyInkForBackupMigratesUnopenedBeforeQueue() throws Exception {
+        Board page = Board.blank();
+        TestInk.draw(page, 12f);
+        device.seedUnmigrated(page);
+        assertNull(device.db.dao().notebookLog(NotebookPaper.sheetId(null)));
+        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+
+        assertEquals(1, repo.ensureReadyInkForBackup(Device.PAGE, Device.PAGE, 0L));
+        assertNotNull(device.db.dao().notebookLog(NotebookPaper.sheetId(null)));
+        assertNull(device.db.dao().board(page.id).inkHash);
+        // Migrate queues LOG and retires BOARD outbox — ensureUnsynced must not revive BOARD.
+        assertNotNull(device.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(null)));
+        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+        assertEquals(0, repo.ensureUnsyncedQueued());
+        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
     }
 
     @Test

@@ -171,9 +171,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             cache.remove(boardId);
         }
         @Override public boolean notebookLogBacked(String notebookId) {
-            String sheetId = NotebookPaper.sheetId(notebookId);
-            return dao.notebookLog(sheetId) != null || ink.hasLog(sheetId);
+            return notebookLogBackedLocked(notebookId);
         }
+    }
+
+    /** Caller holds {@link #lock}. Ready {@code .zdl} / notebook_logs owns ink. */
+    private boolean notebookLogBackedLocked(String notebookId) {
+        String sheetId = NotebookPaper.sheetId(notebookId);
+        return dao.notebookLog(sheetId) != null || ink.hasLog(sheetId);
     }
 
     /** Bridge for {@link InkSheetStore} — keeps Room/outbox/mirror in this class. */
@@ -814,6 +819,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 } else if (OutboxEntry.LINK.equals(entry.entity)) {
                     takeQueued(entry, dao::pageLink, batch.links::add, batch);
                 } else if (OutboxEntry.BOARD.equals(entry.entity)) {
+                    BoardEntity board = dao.board(entry.id);
+                    // Ready owns ink — drop stale BOARD outbox duals (do not push .zdi).
+                    if (board != null && notebookLogBackedLocked(board.notebookId)) {
+                        dao.deleteOutbox(entry.entity, entry.id);
+                        continue;
+                    }
                     takeQueued(entry, dao::board, boards::add, batch);
                 } else {
                     dao.deleteOutbox(entry.entity, entry.id);
@@ -1259,6 +1270,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     if (row.rev != 0 || row.conflictOf != null || row.inkHash == null) {
                         continue;
                     }
+                    // Ready .zdl owns ink — never push new BOARD bodies for log-backed notebooks.
+                    if (notebookLogBackedLocked(row.notebookId)) {
+                        dao.deleteOutbox(OutboxEntry.BOARD, row.id);
+                        continue;
+                    }
                     if (queueIfAbsent(OutboxEntry.BOARD, row.id)) {
                         added[0]++;
                     }
@@ -1280,6 +1296,42 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             return added[0];
         }
+    }
+
+    /**
+     * Before Prepare / Settings sync: migrate unopened BoardEntity ink onto Ready
+     * so {@link #ensureUnsyncedQueued} queues LOG instead of BOARD.
+     */
+    @Override
+    public int ensureReadyInkForBackup(int pageHeight, int legacyPageHeight,
+                                       long shortPagesSince) {
+        if (pageHeight <= 0) {
+            return 0;
+        }
+        HashSet<String> notebookKeys = new HashSet<>();
+        synchronized (lock) {
+            for (BoardEntity row : dao.liveBoardsForIndex()) {
+                if (row.inkHash == null || row.conflictOf != null) {
+                    continue;
+                }
+                if (notebookLogBackedLocked(row.notebookId)) {
+                    continue;
+                }
+                // null Scratchpad → "" key (HashSet disallows null).
+                notebookKeys.add(row.notebookId == null ? "" : row.notebookId);
+            }
+        }
+        int ready = 0;
+        for (String key : notebookKeys) {
+            String notebookId = key.isEmpty() ? null : key;
+            if (ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince)) {
+                ready++;
+            }
+        }
+        if (ready > 0) {
+            LaunchLog.mark("ensureReadyInkForBackup Ready " + ready + " notebook(s)");
+        }
+        return ready;
     }
 
     @Override

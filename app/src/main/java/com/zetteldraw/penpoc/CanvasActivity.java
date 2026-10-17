@@ -2402,7 +2402,7 @@ public final class CanvasActivity extends Activity {
                         }
                         showHint(msg + "\n" + getString(R.string.settings_restore_started), true);
                         // Local-only ink (not untouched seeds) → outbox; first sync pulls cloud first.
-                        ZettelData.repository(CanvasActivity.this).ensureUnsyncedQueued();
+                        queueLocalInkForSync();
                         SyncScheduler.syncNow(CanvasActivity.this);
                     }
 
@@ -2427,7 +2427,7 @@ public final class CanvasActivity extends Activity {
             onTap(toggle, v -> {
                 SyncConfig.setSyncOn(this, !config.syncOn());
                 if (!config.syncOn()) {
-                    ZettelData.repository(this).ensureUnsyncedQueued();
+                    queueLocalInkForSync();
                     SyncScheduler.syncNow(this);
                 }
                 dismissOverlay();
@@ -2442,7 +2442,7 @@ public final class CanvasActivity extends Activity {
                 Button syncNow = tinyButton(getString(R.string.settings_sync_now), 15);
                 styleButton(syncNow, true);
                 onTap(syncNow, v -> {
-                    ZettelData.repository(this).ensureUnsyncedQueued();
+                    queueLocalInkForSync();
                     SyncScheduler.syncNow(this);
                     showHint(getString(R.string.settings_sync_started), true);
                     dismissOverlay();
@@ -2534,6 +2534,19 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
+     * When layout height is known, migrate unopened BoardEntity ink onto Ready
+     * {@code .zdl}, then queue never-pushed rows. Stops new BOARD bodies when
+     * the Ready path covers the notebook.
+     */
+    private void queueLocalInkForSync() {
+        RoomBoardRepository repo = ZettelData.repository(this);
+        if (pageHeight > 0) {
+            repo.ensureReadyInkForBackup(pageHeight, legacyPageHeight, shortPagesSince);
+        }
+        repo.ensureUnsyncedQueued();
+    }
+
+    /**
      * Why Prepare transfer is disabled, or {@code null} when it may run.
      * Sign-In is required: prepare posts with the Google bearer and only the
      * live writer may ack.
@@ -2576,7 +2589,8 @@ public final class CanvasActivity extends Activity {
             try {
                 SyncConfig cfg = SyncConfig.load(CanvasActivity.this);
                 com.zetteldraw.penpoc.data.SyncStore store = ZettelData.repository(CanvasActivity.this);
-                store.ensureUnsyncedQueued();
+                // Migrate unopened .zdi → Ready before queue so Prepare pushes LOG, not BOARD.
+                queueLocalInkForSync();
                 SyncClient client = new SyncClient(cfg, ZettelDatabase.SCHEMA_VERSION);
                 SyncEngine engine = new SyncEngine(
                         store, client, cfg, ZettelDatabase.SCHEMA_VERSION, System::currentTimeMillis);
