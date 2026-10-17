@@ -2,6 +2,8 @@ package com.zetteldraw.penpoc.data;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
@@ -89,9 +91,16 @@ public class LegacyMigrationTest {
 
         assertFalse(new File(filesDir, LegacyBoardImporter.FILE_NAME).exists());
         assertTrue(new File(filesDir, LegacyBoardImporter.FILE_NAME + LegacyBoardImporter.MIGRATED_SUFFIX).exists());
-        // 4 notebook seeds stay unqueued; 6 imported boards queue; ensure may add LOG rows.
-        assertTrue("imported boards queued for first push, was " + device.db.dao().outboxCount(),
-                device.db.dao().outboxCount() >= 6);
+        // Ready retire clears BoardEntity .zdi + BOARD outbox; LOG outbox remains.
+        assertFalse("scratch page-file must retire after Ready",
+                new File(device.inkDir(), s1 + ".zdi").exists());
+        assertFalse(new File(device.inkDir(), c1 + ".zdi").exists());
+        assertNull(device.db.dao().board(s1).inkHash);
+        assertTrue("Ready LOG outbox after migrate+retire, was " + device.db.dao().outboxCount(),
+                device.db.dao().outboxCount() >= 1);
+        assertNotNull(device.db.dao().outbox(
+                com.zetteldraw.penpoc.data.db.OutboxEntry.LOG,
+                NotebookPaper.sheetId(null)));
 
         device.reopen();
         assertEquals(-1, LegacyBoardImporter.importIfPresent(filesDir, device.repo));

@@ -21,7 +21,9 @@ import java.util.UUID;
  * {@link Lww}, not peer merge.
  *
  * <p>Caller holds the repository lock and runs inside the pull transaction.
- * Board ink still bypasses {@link InkLogApply} (legacy {@code .zdi} pages).
+ * Board ink still bypasses {@link InkLogApply} for <em>unmigrated</em> notebooks
+ * only — once {@link Deps#notebookLogBacked} is true, {@link #applyRemoteBoard}
+ * is a no-op (Ready {@code .zdl} owns ink).
  *
  * @see Lww
  * @see docs/ink-sot-rewrite.md
@@ -46,6 +48,12 @@ public final class MetaPullApply {
         void mirrorInk(String boardId, byte[] bytes);
 
         void removeCachedBoard(String boardId);
+
+        /**
+         * True when this notebook already has a Ready {@code notebook_logs} /
+         * on-disk {@code .zdl} primary — BoardEntity {@code .zdi} must not apply.
+         */
+        boolean notebookLogBacked(String notebookId);
     }
 
     private final Deps deps;
@@ -79,6 +87,10 @@ public final class MetaPullApply {
     public void applyRemoteBoard(BoardEntity remote, Map<String, Staged> staged,
                                  Map<String, List<InkRenderer.InkStroke>> refreshed,
                                  List<Runnable> mirrorOps) throws IOException {
+        if (deps.notebookLogBacked(remote.notebookId)) {
+            // Ready owns ink — do not recreate .zdi / BoardEntity conflict shelf.
+            return;
+        }
         ZettelDao dao = deps.dao();
         BoardEntity local = dao.board(remote.id);
         if (local != null) {

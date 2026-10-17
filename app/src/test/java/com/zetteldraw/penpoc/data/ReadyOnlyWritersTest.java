@@ -134,7 +134,8 @@ public class ReadyOnlyWritersTest {
     }
 
     @Test
-    public void persistBoardEntityInkStillSeedsConflictShelf() throws Exception {
+    public void persistBoardEntityInkStillSeedsUnmigratedConflictShelf() throws Exception {
+        // Unmigrated only — after ensureSheet, Ready retires .zdi (see BoardEntityInkRetireTest).
         Board page = Board.blank();
         TestInk.draw(page, 7f);
         repo.persistBoardEntityInk(page);

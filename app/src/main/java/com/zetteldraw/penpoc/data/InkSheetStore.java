@@ -62,6 +62,12 @@ public final class InkSheetStore {
         List<NotebookPaper.SourcePage> migrationSources(
                 String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince);
 
+        /**
+         * After Ready {@code .zdl} install: clear BoardEntity {@code .zdi} ink for
+         * this notebook so page files are migration residue only — not a second SoT.
+         */
+        void retireBoardEntityInk(String notebookId);
+
         /** After remote/local paper install: point cached boards at the new paper. */
         void bindPaperToBoards(String sheetId, NotebookPaper paper);
 
@@ -256,6 +262,8 @@ public final class InkSheetStore {
             if (queue && bytes != null) {
                 deps.mirrorLog(sheetId, bytes);
             }
+            // Ready owns ink — drop page-file dual left by importer / old tips.
+            deps.retireBoardEntityInk(notebookId);
         }
     }
 
@@ -407,6 +415,9 @@ public final class InkSheetStore {
         }
         open.ready = true;
         deps.bindPaperToBoards(remote.id, paper);
+        // Catch-up log install: same retire as local ensure (boards may have
+        // landed in an earlier pull before this tip reordered logs-first).
+        deps.retireBoardEntityInk(remote.notebookId);
     }
 
     private int localReadySliceCountLocked(String sheetId, OpenSheet open) {

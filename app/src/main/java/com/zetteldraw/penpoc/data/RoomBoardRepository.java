@@ -179,6 +179,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         @Override public void removeCachedBoard(String boardId) {
             cache.remove(boardId);
         }
+        @Override public boolean notebookLogBacked(String notebookId) {
+            String sheetId = NotebookPaper.sheetId(notebookId);
+            return dao.notebookLog(sheetId) != null || ink.hasLog(sheetId);
+        }
     }
 
     /** Bridge for {@link InkSheetStore} — keeps Room/outbox/mirror in this class. */
@@ -207,6 +211,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         public List<NotebookPaper.SourcePage> migrationSources(
                 String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
             return migrationSourcesForSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
+        }
+        @Override
+        public void retireBoardEntityInk(String notebookId) {
+            retireBoardEntityInkLocked(notebookId);
         }
         @Override
         public void bindPaperToBoards(String sheetId, NotebookPaper paper) {
@@ -1283,11 +1291,14 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                                 forgetDeletedNotebookUiLocked(remote.id);
                             }
                         }
-                        for (BoardEntity remote : page.boards) {
-                            metaPull.applyRemoteBoard(remote, staged, refreshed, mirrorOps);
-                        }
+                        // Logs before boards: Ready .zdl SoT installs first so
+                        // MetaPullApply can no-op board ink on log-backed notebooks
+                        // in the same pull page (no transient .zdi dual).
                         for (NotebookLogEntity remote : page.logs) {
                             sheetStore.applyRemoteLogLocked(remote, stagedLogs, mirrorOps);
+                        }
+                        for (BoardEntity remote : page.boards) {
+                            metaPull.applyRemoteBoard(remote, staged, refreshed, mirrorOps);
                         }
                         for (PageLinkEntity remote : page.links) {
                             metaPull.applyRemoteLink(remote);
@@ -1927,8 +1938,57 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
+     * Ready {@code .zdl} is SoT — clear BoardEntity page-file ink so first-time
+     * migrate residue cannot remain a second ink SoT / MetaPullApply shelf seed.
+     * Keeps BoardEntity rows (identity / blank slots) but drops {@code .zdi},
+     * inkHash, and BOARD outbox. Conflict copies are left for Hand-off history.
+     * Caller holds {@link #lock}.
+     */
+    private void retireBoardEntityInkLocked(String notebookId) {
+        List<BoardEntity> rows = rowsLocked(notebookId);
+        if (rows.isEmpty()) {
+            return;
+        }
+        boolean touched = false;
+        for (BoardEntity row : rows) {
+            if (row.conflictOf != null) {
+                continue;
+            }
+            boolean hadFile = ink.fileFor(row.id).exists();
+            boolean hadHash = row.inkHash != null;
+            boolean hadOutbox = dao.outbox(OutboxEntry.BOARD, row.id) != null;
+            if (!hadFile && !hadHash && !hadOutbox) {
+                continue;
+            }
+            if (hadFile) {
+                ink.delete(row.id);
+                mirrorInk(row.id, null);
+            }
+            row.inkHash = null;
+            row.inkBytes = 0;
+            if (hadHash) {
+                row.updatedAt = clock.getAsLong();
+            }
+            BoardEntity toSave = row;
+            db.runInTransaction(() -> {
+                if (hadHash || hadFile) {
+                    dao.upsertBoard(toSave);
+                }
+                dao.deleteOutbox(OutboxEntry.BOARD, toSave.id);
+            });
+            touched = true;
+        }
+        if (touched) {
+            LaunchLog.mark("retired BoardEntity ink for "
+                    + (notebookId == null ? "scratchpad" : notebookId));
+            scheduleIndex();
+        }
+    }
+
+    /**
      * Legacy page-file sources for first-time {@code .zdl} migration. Null aborts
-     * migration (decode failure). Empty list is a blank notebook.
+     * migration (decode failure). Empty list is a blank notebook. After Ready
+     * install, {@link #retireBoardEntityInkLocked} clears these page files.
      */
     private List<NotebookPaper.SourcePage> migrationSourcesForSheet(
             String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
