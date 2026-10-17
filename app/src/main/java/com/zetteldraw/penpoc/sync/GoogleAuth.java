@@ -61,7 +61,7 @@ public final class GoogleAuth {
             callback.onError("Google client id is not set in this build. Set -Pzetteldraw.googleWebClientId.");
             return;
         }
-        String serverUrl = SyncConfig.load(activity).serverUrl;
+        String serverUrl = SyncConfig.load(activity).serverUrl();
         if (serverUrl.isEmpty()) {
             serverUrl = BuildConfig.SYNC_URL;
         }

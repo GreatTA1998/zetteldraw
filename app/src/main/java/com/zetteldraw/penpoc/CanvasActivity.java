@@ -2351,7 +2351,7 @@ public final class CanvasActivity extends Activity {
         TextView account = panelText(
                 config.hasGoogleAccount()
                         ? getString(R.string.settings_signed_in_as,
-                        config.googleEmail.isEmpty() ? config.googleSub : config.googleEmail)
+                        config.googleEmail().isEmpty() ? config.googleSub() : config.googleEmail())
                         : getString(R.string.settings_not_signed_in),
                 13);
         box.addView(account);
@@ -2432,14 +2432,14 @@ public final class CanvasActivity extends Activity {
             box.addView(signIn, signLp);
         } else {
             Button toggle = tinyButton(
-                    config.syncOn
+                    config.syncOn()
                             ? getString(R.string.settings_sync_off).replace(" — notes stay on this device", "")
                             : getString(R.string.settings_enable_sync),
                     15);
             styleButton(toggle, true);
             onTap(toggle, v -> {
-                SyncConfig.setSyncOn(this, !config.syncOn);
-                if (!config.syncOn) {
+                SyncConfig.setSyncOn(this, !config.syncOn());
+                if (!config.syncOn()) {
                     ZettelData.repository(this).ensureUnsyncedQueued();
                     SyncScheduler.syncNow(this);
                 }

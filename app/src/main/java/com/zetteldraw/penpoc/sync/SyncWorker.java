@@ -96,7 +96,7 @@ public final class SyncWorker extends Worker {
         int lines = LaunchLog.lineCount();
         try {
             client.uploadDeviceLog(new JSONObject()
-                    .put("device_id", config.deviceId)
+                    .put("device_id", config.deviceId())
                     .put("app_version", BuildConfig.VERSION_CODE)
                     .put("launch", launch)
                     .put("text", LaunchLog.all()));

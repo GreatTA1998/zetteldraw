@@ -142,7 +142,7 @@ public final class SyncEngine {
                 throw new IOException("Sync still has " + store.outboxSize()
                         + " change(s) waiting. Wait until caught up, then Prepare transfer again.");
             }
-            client.prepareTransfer(config.deviceId, deviceLabel());
+            client.prepareTransfer(config.deviceId(), deviceLabel());
             return result;
         } finally {
             GATE.unlock();
@@ -151,12 +151,12 @@ public final class SyncEngine {
 
     /** Google accounts must hold the live-writer lease before any push. */
     private boolean claimLiveWriter(Result result) throws IOException {
-        if (config.accessToken == null || config.accessToken.isEmpty()) {
+        if (config.accessToken().isEmpty()) {
             // Legacy device-token sync: server skips the lease.
             return true;
         }
         try {
-            client.claimWriter(config.deviceId, deviceLabel());
+            client.claimWriter(config.deviceId(), deviceLabel());
             return true;
         } catch (SyncClient.NotLiveWriter e) {
             result.blockedAsNonWriter = true;
@@ -180,10 +180,10 @@ public final class SyncEngine {
             List<SyncStore.PushResult> results;
             try {
                 for (Map.Entry<String, File> e : batch.blobFiles.entrySet()) {
-                    client.putBlob(e.getKey(), e.getValue(), config.deviceId);
+                    client.putBlob(e.getKey(), e.getValue(), config.deviceId());
                 }
                 results = SyncProtocol.pushResults(
-                        client.push(SyncProtocol.pushBody(batch, schemaVersion, config.deviceId)));
+                        client.push(SyncProtocol.pushBody(batch, schemaVersion, config.deviceId())));
             } catch (JSONException e) {
                 throw new IOException("bad push response", e);
             } catch (SyncClient.NotLiveWriter e) {

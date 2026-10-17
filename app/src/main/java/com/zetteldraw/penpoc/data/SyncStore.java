@@ -120,7 +120,11 @@ public interface SyncStore {
         return inkPullPolicy() == InkPullPolicy.CATCH_UP;
     }
 
-    final class PushBatch {
+    /**
+     * Shared notebook/board/log/link + small-blob bags for push and pull.
+     * Push adds large-file maps; pull adds cursor paging.
+     */
+    class EntityBag {
         public final List<NotebookEntity> notebooks = new ArrayList<>();
         public final List<BoardEntity> boards = new ArrayList<>();
         /** One ink log per notebook. A push sends the whole log, never a torn stroke. */
@@ -129,18 +133,21 @@ public interface SyncStore {
         public final List<PageLinkEntity> links = new ArrayList<>();
         /**
          * sha256 hex → ink file bytes for small blobs inlined as Base64 in push JSON.
-         * Large logs go in {@link #blobFiles} instead so Prepare transfer never Base64s
-         * a multi-megabyte Scratchpad into the heap.
+         * Large logs go in {@link PushBatch#blobFiles} instead so Prepare transfer never
+         * Base64s a multi-megabyte Scratchpad into the heap.
          */
         public final Map<String, byte[]> blobs = new HashMap<>();
-        /** sha256 hex → on-disk ink file for raw PUT /sync/blob/:hash (no Base64). */
-        public final Map<String, File> blobFiles = new HashMap<>();
-        /** "entity:id" → outbox queued_at snapshot. */
-        final Map<String, Long> queuedAt = new HashMap<>();
 
         public boolean isEmpty() {
             return notebooks.isEmpty() && boards.isEmpty() && logs.isEmpty() && links.isEmpty();
         }
+    }
+
+    final class PushBatch extends EntityBag {
+        /** sha256 hex → on-disk ink file for raw PUT /sync/blob/:hash (no Base64). */
+        public final Map<String, File> blobFiles = new HashMap<>();
+        /** "entity:id" → outbox queued_at snapshot. */
+        final Map<String, Long> queuedAt = new HashMap<>();
     }
 
     record PushResult(String entity, String id, String status, long rev) {
@@ -150,17 +157,8 @@ public interface SyncStore {
         public static final String MISSING_BLOB = "missing_blob";
     }
 
-    final class PullPage {
-        public final List<NotebookEntity> notebooks = new ArrayList<>();
-        public final List<BoardEntity> boards = new ArrayList<>();
-        public final List<NotebookLogEntity> logs = new ArrayList<>();
-        public final List<PageLinkEntity> links = new ArrayList<>();
-        public final Map<String, byte[]> blobs = new HashMap<>();
+    final class PullPage extends EntityBag {
         public long cursor;
         public boolean hasMore;
-
-        public boolean isEmpty() {
-            return notebooks.isEmpty() && boards.isEmpty() && logs.isEmpty() && links.isEmpty();
-        }
     }
 }

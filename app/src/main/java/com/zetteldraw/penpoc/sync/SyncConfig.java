@@ -12,7 +12,17 @@ import java.util.UUID;
  * Empty URL or sync-off means no network writes. Values in SharedPreferences
  * override build-time defaults from {@code -Pzetteldraw.syncUrl} / token / Google client id.
  */
-public final class SyncConfig {
+public record SyncConfig(
+        String serverUrl,
+        /** Legacy DEVICE_TOKENS bearer; used only when {@link #accessToken} is empty. */
+        String deviceToken,
+        /** Bearer from {@code POST /auth/google} (preferred). */
+        String accessToken,
+        String googleEmail,
+        String googleSub,
+        /** User toggle: sync when signed in. */
+        boolean syncOn,
+        String deviceId) {
     private static final String PREFS = "zetteldraw_sync";
     private static final String KEY_URL = "server_url";
     private static final String KEY_TOKEN = "device_token";
@@ -25,16 +35,13 @@ public final class SyncConfig {
     /** Last app versionCode that ran {@code queueNestedNotebooksForUpload}. */
     private static final String KEY_NESTING_REPAIR_CODE = "nesting_repair_code";
 
-    public final String serverUrl;
-    /** Legacy DEVICE_TOKENS bearer; used only when {@link #accessToken} is empty. */
-    public final String deviceToken;
-    /** Bearer from {@code POST /auth/google} (preferred). */
-    public final String accessToken;
-    public final String googleEmail;
-    public final String googleSub;
-    /** User toggle: sync when signed in. */
-    public final boolean syncOn;
-    public final String deviceId;
+    public SyncConfig {
+        serverUrl = trimSlash(serverUrl);
+        deviceToken = deviceToken == null ? "" : deviceToken;
+        accessToken = accessToken == null ? "" : accessToken;
+        googleEmail = googleEmail == null ? "" : googleEmail;
+        googleSub = googleSub == null ? "" : googleSub;
+    }
 
     /** Test / legacy helper: device-token sync with sync on when URL+token are set. */
     public SyncConfig(String serverUrl, String deviceToken, String deviceId) {
@@ -46,23 +53,6 @@ public final class SyncConfig {
                 "",
                 serverUrl != null && !serverUrl.isEmpty() && deviceToken != null && !deviceToken.isEmpty(),
                 deviceId);
-    }
-
-    public SyncConfig(
-            String serverUrl,
-            String deviceToken,
-            String accessToken,
-            String googleEmail,
-            String googleSub,
-            boolean syncOn,
-            String deviceId) {
-        this.serverUrl = trimSlash(serverUrl);
-        this.deviceToken = deviceToken == null ? "" : deviceToken;
-        this.accessToken = accessToken == null ? "" : accessToken;
-        this.googleEmail = googleEmail == null ? "" : googleEmail;
-        this.googleSub = googleSub == null ? "" : googleSub;
-        this.syncOn = syncOn;
-        this.deviceId = deviceId;
     }
 
     public boolean signedIn() {

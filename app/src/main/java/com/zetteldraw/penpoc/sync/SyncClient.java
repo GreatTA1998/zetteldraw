@@ -230,7 +230,7 @@ public final class SyncClient {
 
     /** One bearer + schema connection spine for JSON and blob transport. */
     private HttpURLConnection open(String method, String path, int readTimeoutMs) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(config.serverUrl + path).openConnection();
+        HttpURLConnection conn = (HttpURLConnection) new URL(config.serverUrl() + path).openConnection();
         conn.setRequestMethod(method);
         conn.setConnectTimeout(CONNECT_TIMEOUT_MS);
         conn.setReadTimeout(readTimeoutMs);

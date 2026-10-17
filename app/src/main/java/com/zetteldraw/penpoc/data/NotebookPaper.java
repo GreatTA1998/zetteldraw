@@ -93,7 +93,7 @@ public final class NotebookPaper {
         int seen = 0;
         float origin = 0f;
         for (SourcePage page : pages) {
-            for (InkRenderer.InkStroke stroke : page.strokes) {
+            for (InkRenderer.InkStroke stroke : page.strokes()) {
                 InkRenderer.InkStroke got = paper.stroke(stroke.id);
                 if (got == null || got.points.size() != stroke.points.size()) {
                     return false;
@@ -107,7 +107,7 @@ public final class NotebookPaper {
                 }
                 seen++;
             }
-            origin += page.height;
+            origin += page.height();
         }
         return seen == paper.strokes().size() && paper.sliceCount() == pages.size();
     }
@@ -130,12 +130,12 @@ public final class NotebookPaper {
             Integer shared = null;
             boolean uniform = true;
             for (SourcePage page : pages) {
-                if (page == null || page.height <= 0) {
+                if (page == null || page.height() <= 0) {
                     throw new IllegalArgumentException("page height");
                 }
                 if (shared == null) {
-                    shared = page.height;
-                } else if (shared != page.height) {
+                    shared = page.height();
+                } else if (shared != page.height()) {
                     uniform = false;
                 }
             }
@@ -146,8 +146,8 @@ public final class NotebookPaper {
         NotebookPaper paper = new NotebookPaper(frozen, new byte[0]);
         if (pages != null) {
             for (SourcePage page : pages) {
-                paper.heights.add(page.height);
-                paper.sliceIds.add(page.id);
+                paper.heights.add(page.height());
+                paper.sliceIds.add(page.id());
             }
         }
         paper.log = paper.headerBytes();
@@ -156,10 +156,10 @@ public final class NotebookPaper {
         }
         float origin = 0f;
         for (SourcePage page : pages) {
-            for (InkRenderer.InkStroke stroke : page.strokes) {
+            for (InkRenderer.InkStroke stroke : page.strokes()) {
                 paper.appendStroke(shiftY(stroke, origin));
             }
-            origin += page.height;
+            origin += page.height();
         }
         return paper;
     }
@@ -1183,15 +1183,9 @@ public final class NotebookPaper {
     }
 
     /** One page file's ink, already in that page's own coordinates, and the height it was drawn at. */
-    public static final class SourcePage {
-        public final String id;
-        public final int height;
-        public final List<InkRenderer.InkStroke> strokes;
-
-        public SourcePage(String id, int height, List<InkRenderer.InkStroke> strokes) {
-            this.id = id;
-            this.height = height;
-            this.strokes = strokes == null ? List.of() : strokes;
+    public record SourcePage(String id, int height, List<InkRenderer.InkStroke> strokes) {
+        public SourcePage {
+            strokes = strokes == null ? List.of() : strokes;
         }
     }
 
