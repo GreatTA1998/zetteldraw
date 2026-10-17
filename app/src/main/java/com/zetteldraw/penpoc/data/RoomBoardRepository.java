@@ -85,7 +85,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private final Object lock = new Object();
     private final HashMap<String, Board> cache = new HashMap<>();
     private final AtomicBoolean indexPending = new AtomicBoolean();
-    /** Unsaved blank page at the end of each page list, keyed by {@link #listKey}. */
+    /**
+     * Unsaved trailing blank per list ({@link #listKey}), owned by Ready
+     * {@link #projectLocked} — never seeded from BoardEntity inkHash walks.
+     */
     private final HashMap<String, Board> trailingBlanks = new HashMap<>();
     /** Count of local saves per board, never reset; a pull refresh skips boards edited since it decided. */
     private final ConcurrentHashMap<String, Long> localEdits = new ConcurrentHashMap<>();
@@ -139,7 +142,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             lastQueuedAt = dao.maxQueuedAt();
             db.runInTransaction(this::seedNotebooks);
-            ensureTrailingBlankLocked(null);
+            // Trailing blank is Ready/projectLocked-owned — no BoardEntity seed blank.
             int inked = 0;
             List<BoardEntity> live = dao.liveBoardsForIndex();
             for (BoardEntity row : live) {
@@ -323,10 +326,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 dao.upsertBoard(toSave);
                 queueLocked(OutboxEntry.BOARD, toSave.id, OutboxEntry.UPSERT);
             });
-            if (snapshot.isEmpty()) {
-                trimTrailingBlanksLocked(row.notebookId);
-            }
-            ensureTrailingBlankLocked(row.notebookId);
+            // No BoardEntity trailing-blank bookkeeping — Ready projection owns blanks.
             scheduleIndex();
         }
     }
@@ -334,20 +334,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /** Always 0 — BoardEntity write-behind queue is gone; Ready flushes are fire-and-forget. */
     int pendingWrites() {
         return 0;
-    }
-
-    /** The stored blank that ends its list; the unsaved trailing blank has no row at all. */
-    private boolean isTrailingBlankLocked(BoardEntity row) {
-        if (!isBlankLocked(row) || trailingBlanks.containsKey(listKey(row.notebookId))) {
-            return false;
-        }
-        List<BoardEntity> rows = rowsLocked(row.notebookId);
-        return !rows.isEmpty() && rows.get(rows.size() - 1).id.equals(row.id);
-    }
-
-    /** A blank board has no ink on disk. */
-    private boolean isBlankLocked(BoardEntity row) {
-        return row.inkHash == null;
     }
 
     @Override
@@ -609,9 +595,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 dao.upsertBoard(toSave);
                 queueLocked(OutboxEntry.BOARD, toSave.id, OutboxEntry.UPSERT);
             });
-            trimTrailingBlanksLocked(source);
-            ensureTrailingBlankLocked(source);
-            ensureTrailingBlankLocked(notebookId);
             scheduleIndex();
             return true;
         }
@@ -642,14 +625,21 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             if (delete) {
                 BoardEntity row = dao.board(boardId);
-                if (row == null || row.deletedAt != null || row.conflictOf != null
-                        || isTrailingBlankLocked(row)) {
+                if (row == null || row.deletedAt != null || row.conflictOf != null) {
                     return;
+                }
+                // Refuse deleting the sole stored trailing blank of an unmigrated
+                // list (migrationSources strips one inkHash-null tail). Ready
+                // deletes never reach here — paperSliceActionLocked returns first.
+                if (row.inkHash == null) {
+                    List<BoardEntity> rows = rowsLocked(row.notebookId);
+                    if (!rows.isEmpty() && rows.get(rows.size() - 1).id.equals(row.id)
+                            && !trailingBlanks.containsKey(listKey(row.notebookId))) {
+                        return;
+                    }
                 }
                 tombstoneLocked(row);
                 tombstoneLinksTouchingLocked(row.id);
-                trimTrailingBlanksLocked(row.notebookId);
-                ensureTrailingBlankLocked(row.notebookId);
                 return;
             }
             BoardEntity row = dao.board(boardId);
@@ -665,8 +655,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             } catch (IOException e) {
                 Log.e(TAG, "legacy wipe failed " + boardId, e);
             }
-            trimTrailingBlanksLocked(row.notebookId);
-            ensureTrailingBlankLocked(row.notebookId);
         }
     }
 
@@ -809,8 +797,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 promoteChildrenLocked(notebookId, promoteTo);
             });
             forgetDeletedNotebookUiLocked(notebookId);
-            trimTrailingBlanksLocked(null);
-            ensureTrailingBlankLocked(null);
+            // Scratchpad trailing blank refreshed on next Ready pages(null).
             scheduleIndex();
         }
     }
@@ -1372,10 +1359,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     }
                 }
                 for (BoardEntity row : dao.liveBoardsForIndex()) {
+                    // inkHash-null rows are blanks / migration tails — not push bodies.
                     if (row.rev != 0 || row.conflictOf != null || row.inkHash == null) {
-                        continue;
-                    }
-                    if (isTrailingBlankLocked(row)) {
                         continue;
                     }
                     if (queueIfAbsent(OutboxEntry.BOARD, row.id)) {
@@ -1486,7 +1471,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 cache.remove(blank.id);
             }
             trailingBlanks.clear();
-            ensureTrailingBlankLocked(null);
+            // Ready projectLocked mints the Scratchpad blank on next pages().
             scheduleIndex();
             return rows.size();
         }
@@ -1645,50 +1630,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
         }
         return null;
-    }
-
-    private Board ensureTrailingBlankLocked(String notebookId) {
-        String key = listKey(notebookId);
-        Board blank = trailingBlanks.get(key);
-        if (blank != null) {
-            return blank;
-        }
-        List<BoardEntity> rows = rowsLocked(notebookId);
-        if (!rows.isEmpty() && isBlankLocked(rows.get(rows.size() - 1))) {
-            return load(rows.get(rows.size() - 1));
-        }
-        blank = Board.blank();
-        trailingBlanks.put(key, blank);
-        cache.put(blank.id, blank);
-        return blank;
-    }
-
-    /** Keep at most one blank page at the end of the list. */
-    private void trimTrailingBlanksLocked(String notebookId) {
-        String key = listKey(notebookId);
-        while (true) {
-            List<BoardEntity> rows = rowsLocked(notebookId);
-            Board blank = trailingBlanks.get(key);
-            int n = rows.size() + (blank != null ? 1 : 0);
-            if (n < 2) {
-                return;
-            }
-            boolean lastBlank = blank != null || isBlankLocked(rows.get(rows.size() - 1));
-            BoardEntity prev = blank != null ? rows.get(rows.size() - 1) : rows.get(rows.size() - 2);
-            if (!lastBlank || !isBlankLocked(prev)) {
-                return;
-            }
-            if (blank != null) {
-                String blankId = blank.id;
-                cache.remove(blank.id);
-                trailingBlanks.remove(key);
-                tombstoneLinksTouchingLocked(blankId);
-            } else {
-                BoardEntity dropped = rows.get(rows.size() - 1);
-                tombstoneLocked(dropped);
-                tombstoneLinksTouchingLocked(dropped.id);
-            }
-        }
     }
 
     private void tombstoneLocked(BoardEntity row) {
@@ -1990,7 +1931,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         List<BoardEntity> rows;
         synchronized (lock) {
             rows = new ArrayList<>(rowsLocked(notebookId));
-            if (!rows.isEmpty() && isBlankLocked(rows.get(rows.size() - 1))
+            // Strip one stored trailing blank (inkHash-null tail) so migration
+            // does not materialize an empty last slice — Ready owns the blank.
+            if (!rows.isEmpty() && rows.get(rows.size() - 1).inkHash == null
                     && !trailingBlanks.containsKey(listKey(notebookId))) {
                 rows.remove(rows.size() - 1);
             }
