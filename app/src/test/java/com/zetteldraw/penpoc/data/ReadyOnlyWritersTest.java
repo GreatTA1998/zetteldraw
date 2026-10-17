@@ -35,9 +35,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Production writers (UI + Move/tear) must hit {@code page.paper != null} →
- * {@code flushSheetOrFalse}. BoardEntity {@code .zdi} write-behind is only for
- * unmigrated notebooks — refuse it when a live {@code notebook_logs} primary
- * (or on-disk {@code .zdl}) already exists.
+ * {@code flushSheetOrFalse}. {@code saveInk} is Ready-only — paper-null is a
+ * no-op (no BoardEntity {@code .zdi} write-behind).
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
@@ -121,14 +120,25 @@ public class ReadyOnlyWritersTest {
     }
 
     @Test
-    public void unmigratedBoardEntityWriteBehindStillWorks() throws Exception {
-        // No ensureSheet: notebook_logs absent → legacy .zdi path (importer / tests).
+    public void paperNullSaveInkIsNoOpEvenWhenUnmigrated() throws Exception {
+        // No ensureSheet: saveInk must not invent BoardEntity .zdi write-behind.
         Board page = Board.blank();
         TestInk.draw(page, 7f);
         repo.saveInk(page);
         drain();
 
         assertEquals(0, repo.pendingWrites());
+        assertFalse(new File(inkDir, page.id + ".zdi").exists());
+        assertNull(db.dao().board(page.id));
+        assertNull(db.dao().outbox(OutboxEntry.BOARD, page.id));
+    }
+
+    @Test
+    public void persistBoardEntityInkStillSeedsConflictShelf() throws Exception {
+        Board page = Board.blank();
+        TestInk.draw(page, 7f);
+        repo.persistBoardEntityInk(page);
+
         assertTrue(new File(inkDir, page.id + ".zdi").exists());
         BoardEntity row = db.dao().board(page.id);
         assertNotNull(row);

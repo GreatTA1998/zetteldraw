@@ -48,7 +48,7 @@ public class EnsureUnsyncedQueuedTest {
         Board page = Board.blank();
         TestInk.draw(page, 7f);
         device.tick();
-        repo.saveInk(page);
+        repo.persistBoardEntityInk(page);
         assertTrue(repo.outboxSize() > 0);
 
         // Simulate a lost outbox row while the page stays local and never pushed.

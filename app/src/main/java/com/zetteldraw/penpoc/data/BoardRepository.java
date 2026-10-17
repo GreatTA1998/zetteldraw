@@ -33,9 +33,8 @@ public interface BoardRepository {
 
     /**
      * Persist ink write-behind. Ready pages ({@code paper != null}) flush the
-     * sheet log; unmigrated pages snapshot {@link Board#strokes} to page files.
-     * Never blocks on encoding or file I/O. Log-backed notebooks refuse the
-     * BoardEntity path when paper is missing.
+     * sheet log. Paper-null calls are a no-op — there is no BoardEntity
+     * {@code .zdi} write-behind. Never blocks on encoding or file I/O.
      */
     void saveInk(Board page);
 

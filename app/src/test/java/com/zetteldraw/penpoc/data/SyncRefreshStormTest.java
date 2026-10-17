@@ -117,7 +117,7 @@ public class SyncRefreshStormTest {
         // Legacy board-row pull refresh (board.strokes), not Ready paper projection.
         Board page = Board.blank();
         TestInk.draw(page, 10f);
-        repo.saveInk(page);
+        repo.persistBoardEntityInk(page);
         BoardEntity remote = db.dao().board(page.id).copy();
         List<InkRenderer.InkStroke> ink = Collections.singletonList(TestInk.stroke(300f, 300f, 5));
         byte[] bytes = InkCodec.encode(ink);

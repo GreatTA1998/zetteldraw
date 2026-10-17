@@ -64,11 +64,13 @@ public class SyncEndToEndTest {
 
     @Test
     public void notebooksPagesAndConflictsRoundTripBetweenTwoDevices() throws Exception {
-        // A: draw, create a notebook, file the page there.
-        Board page = a.repo.scratchpadPages().get(0);
+        // A: BoardEntity conflict shelf still needs a page-file seed (no Ready
+        // ensure — that would absorb the row into .zdl before the BoardEntity
+        // conflict half of this e2e). Production saveInk is Ready-only.
+        Board page = Board.blank();
         TestInk.draw(page, 42f);
         a.tick();
-        a.repo.saveInk(page);
+        a.repo.persistBoardEntityInk(page);
         String title = "e2e " + UUID.randomUUID().toString().substring(0, 8);
         BoardRepository.NotebookInfo notebook = a.repo.createNotebook(title);
         a.tick();
@@ -104,10 +106,10 @@ public class SyncEndToEndTest {
         // Both edit the page offline; B's edit is newer and wins, A's ink is kept as a hidden copy.
         page.strokes.add(TestInk.stroke(100f, 100f, 6));
         a.tick();
-        a.repo.saveInk(page);
+        a.repo.persistBoardEntityInk(page);
         back.strokes.add(TestInk.stroke(300f, 300f, 6));
         b.tick();
-        b.repo.saveInk(back);
+        b.repo.persistBoardEntityInk(back);
         String aHash = a.db.dao().board(page.id).inkHash;
         String bHash = b.db.dao().board(page.id).inkHash;
 

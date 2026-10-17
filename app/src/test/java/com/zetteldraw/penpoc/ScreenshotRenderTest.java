@@ -77,11 +77,12 @@ public class ScreenshotRenderTest {
     public void pageMenu() throws Exception {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
+        assertTrue(repo.ensureSheet(Notebook.JOURNAL.uuid, 800, 800, 0L));
         Board page = repo.pages(Notebook.JOURNAL.uuid).get(0);
-        page.strokes.add(TestStrokes.stroke(200f, 300f));
+        page.paper.appendStroke(TestStrokes.stroke(200f, page.paperOrigin + 300f), page.id);
         repo.saveInk(page);
         Board next = repo.pages(Notebook.JOURNAL.uuid).get(1);
-        next.strokes.add(TestStrokes.stroke(300f, 300f));
+        next.paper.appendStroke(TestStrokes.stroke(300f, next.paperOrigin + 300f), next.id);
         repo.saveInk(next);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();

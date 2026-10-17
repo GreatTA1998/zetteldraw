@@ -53,10 +53,10 @@ import java.util.function.LongSupplier;
  * projection, <em>one</em> Move/Reorder spine ({@link #placePageBefore}), and pull
  * orchestration.
  *
- * <p>Ink saves are write-behind. Ready pages ({@code page.paper != null}) flush
- * the sheet log via {@link InkSheetStore#flushSheetOrFalse}. Unmigrated pages
- * still snapshot into {@code pendingInk} / {@code .zdi}. Log-backed notebooks
- * never take the BoardEntity path — dual SoT after Ready is refused.
+ * <p>Ink saves are Ready-only write-behind: {@code page.paper != null} queues
+ * {@link InkSheetStore#flushSheetOrFalse}. There is no BoardEntity {@code .zdi}
+ * write-behind — unmigrated page files are migration sources / conflict shelf
+ * only ({@link #migrationSourcesForSheet}, {@link MetaPullApply}).
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
@@ -71,7 +71,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      */
     public static final AtomicInteger logReplays = new AtomicInteger();
     private static final String TAG = "zd-repo";
-    private static final long SLOW_WRITE_MS = 250;
     private static final byte[] MIRROR_DELETE = new byte[0];
 
     private final ZettelDatabase db;
@@ -88,8 +87,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private final AtomicBoolean indexPending = new AtomicBoolean();
     /** Unsaved blank page at the end of each page list, keyed by {@link #listKey}. */
     private final HashMap<String, Board> trailingBlanks = new HashMap<>();
-    /** Newest unwritten snapshot per board; present from {@link #saveInk} until the writer commits it. */
-    private final HashMap<String, PendingInk> pendingInk = new HashMap<>();
     /** Count of local saves per board, never reset; a pull refresh skips boards edited since it decided. */
     private final ConcurrentHashMap<String, Long> localEdits = new ConcurrentHashMap<>();
     private long lastQueuedAt;
@@ -167,7 +164,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return pendingLocked(entity, id);
         }
         @Override public boolean hasPendingInk(String boardId) {
-            return pendingInk.containsKey(boardId);
+            // BoardEntity write-behind is gone; in-flight .zdi snapshots no longer exist.
+            return false;
         }
         @Override public void queueBoardUpsert(String boardId) {
             queueLocked(OutboxEntry.BOARD, boardId, OutboxEntry.UPSERT);
@@ -264,28 +262,34 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Ready: queue {@link InkSheetStore#flushSheetOrFalse} (paper is SoT).
-     * Unmigrated: snapshot {@link Board#strokes} into BoardEntity {@code .zdi}
-     * write-behind. Log-backed notebooks with {@code paper == null} are refused
-     * — UI + Move/tear must hold paper; never invent a second ink SoT.
+     * Ready-only: queue {@link InkSheetStore#flushSheetOrFalse} when
+     * {@code page.paper != null}. Paper-null calls are a no-op (no BoardEntity
+     * {@code .zdi} write-behind) — UI + Move/tear already hold paper on open.
      */
     @Override
     public void saveInk(Board page) {
         if (page == null) {
             return;
         }
-        if (page.paper != null) {
-            writer.execute(() -> sheetStore.flushSheetOrFalse(page.sheetId));
+        if (page.paper == null) {
+            LaunchLog.mark("saveInk refused; not Ready (no BoardEntity write-behind)");
             return;
         }
-        List<InkRenderer.InkStroke> snapshot = Collections.unmodifiableList(new ArrayList<>(page.strokes));
+        writer.execute(() -> sheetStore.flushSheetOrFalse(page.sheetId));
+    }
+
+    /**
+     * Synchronous BoardEntity {@code .zdi} persist for importer-style seeds and
+     * conflict-shelf tests. Not a production writer — {@link #saveInk} is Ready
+     * flush only.
+     */
+    void persistBoardEntityInk(Board page) throws IOException {
+        if (page == null) {
+            return;
+        }
         synchronized (lock) {
-            String sheetId = sheetIdForSaveLocked(page);
-            if (sheetId != null && sheetStore.isLogBacked(sheetId)) {
-                LaunchLog.mark("saveInk refused BoardEntity write-behind; already log-backed "
-                        + sheetId);
-                return;
-            }
+            List<InkRenderer.InkStroke> snapshot =
+                    Collections.unmodifiableList(new ArrayList<>(page.strokes));
             BoardEntity row = dao.board(page.id);
             if (row == null) {
                 if (snapshot.isEmpty()) {
@@ -300,134 +304,36 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 row.notebookId = key == null ? null : notebookOfKey(key);
                 row.position = Positions.after(lastPositionLocked(row.notebookId));
                 row.createdAt = page.createdAt;
-                row.updatedAt = clock.getAsLong();
                 cache.put(page.id, page);
-                BoardEntity toInsert = row;
-                db.runInTransaction(() -> dao.upsertBoard(toInsert));
             } else if (row.deletedAt != null) {
                 return;
             }
-            localEdits.merge(page.id, 1L, Long::sum);
-            PendingInk previous = pendingInk.put(page.id, new PendingInk(snapshot, clock.getAsLong()));
-            if (previous == null || previous.failed) {
-                String id = page.id;
-                writer.execute(() -> flushInk(id));
+            byte[] bytes = snapshot.isEmpty() ? null : InkCodec.encode(snapshot);
+            String hash = bytes == null ? null : InkFileStore.sha256(bytes);
+            if (Objects.equals(row.inkHash, hash)) {
+                return;
             }
-            // Ink on the last page grows a new blank; emptying it (erase, undo) collapses the tail again.
+            writeInkLocked(page.id, bytes);
+            row.inkHash = hash;
+            row.inkBytes = bytes == null ? 0 : bytes.length;
+            row.updatedAt = clock.getAsLong();
+            localEdits.merge(page.id, 1L, Long::sum);
+            BoardEntity toSave = row;
+            db.runInTransaction(() -> {
+                dao.upsertBoard(toSave);
+                queueLocked(OutboxEntry.BOARD, toSave.id, OutboxEntry.UPSERT);
+            });
             if (snapshot.isEmpty()) {
                 trimTrailingBlanksLocked(row.notebookId);
             }
             ensureTrailingBlankLocked(row.notebookId);
+            scheduleIndex();
         }
     }
 
-    /**
-     * Sheet id for a paper-null save: explicit {@link Board#sheetId}, else the
-     * board row's notebook, else an open Ready sheet that already owns the slice.
-     */
-    private String sheetIdForSaveLocked(Board page) {
-        if (page.sheetId != null) {
-            return page.sheetId;
-        }
-        BoardEntity row = dao.board(page.id);
-        if (row != null) {
-            return NotebookPaper.sheetId(row.notebookId);
-        }
-        for (Map.Entry<String, InkSheetStore.OpenSheet> entry : sheetStore.entrySet()) {
-            InkSheetStore.OpenSheet open = entry.getValue();
-            if (open.ready && open.paper != null && open.paper.indexOfSliceId(page.id) >= 0) {
-                return entry.getKey();
-            }
-        }
-        return null;
-    }
-
-    /** Boards with a snapshot not yet on disk. */
+    /** Always 0 — BoardEntity write-behind queue is gone; Ready flushes are fire-and-forget. */
     int pendingWrites() {
-        synchronized (lock) {
-            return pendingInk.size();
-        }
-    }
-
-    /**
-     * Writer thread: persists the newest snapshot of one board. Encoding and
-     * the fsync'd staged write run without the lock; the commit re-checks that
-     * the snapshot is still the newest and the board still live.
-     */
-    private void flushInk(String id) {
-        PendingInk pending;
-        synchronized (lock) {
-            pending = pendingInk.get(id);
-            if (pending == null) {
-                return;
-            }
-        }
-        long started = System.nanoTime();
-        byte[] bytes = pending.strokes.isEmpty() ? null : InkCodec.encode(pending.strokes);
-        String hash = bytes == null ? null : InkFileStore.sha256(bytes);
-        File staged = null;
-        IOException failure = null;
-        try {
-            if (bytes != null) {
-                staged = ink.stage(id, "zdi", bytes);
-            }
-        } catch (IOException e) {
-            failure = e;
-        }
-        boolean again;
-        synchronized (lock) {
-            PendingInk current = pendingInk.get(id);
-            if (current != pending) {
-                ink.discard(staged);
-                again = current != null;
-            } else {
-                if (failure == null) {
-                    try {
-                        commitInkLocked(id, pending, bytes, hash, staged);
-                    } catch (IOException e) {
-                        failure = e;
-                    }
-                }
-                if (failure == null) {
-                    pendingInk.remove(id);
-                } else {
-                    Log.e(TAG, "ink write failed " + id + "; retried on the next save", failure);
-                    ink.discard(staged);
-                    pending.failed = true;
-                }
-                again = false;
-            }
-        }
-        long ms = (System.nanoTime() - started) / 1_000_000;
-        if (ms >= SLOW_WRITE_MS) {
-            Log.w(TAG, "slow ink write " + id + ": " + ms + " ms");
-        }
-        if (again) {
-            writer.execute(() -> flushInk(id));
-        }
-    }
-
-    private void commitInkLocked(String id, PendingInk pending, byte[] bytes, String hash, File staged)
-            throws IOException {
-        BoardEntity row = dao.board(id);
-        if (row == null || row.deletedAt != null || Objects.equals(row.inkHash, hash)) {
-            ink.discard(staged);
-            return;
-        }
-        if (bytes == null) {
-            ink.delete(id);
-        } else {
-            ink.commit(staged, id);
-        }
-        row.inkHash = hash;
-        row.inkBytes = bytes == null ? 0 : bytes.length;
-        row.updatedAt = Math.max(row.updatedAt, pending.editedAt);
-        db.runInTransaction(() -> {
-            dao.upsertBoard(row);
-            queueLocked(OutboxEntry.BOARD, row.id, OutboxEntry.UPSERT);
-        });
-        mirrorInk(id, bytes);
-        scheduleIndex();
+        return 0;
     }
 
     /** The stored blank that ends its list; the unsaved trailing blank has no row at all. */
@@ -439,10 +345,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return !rows.isEmpty() && rows.get(rows.size() - 1).id.equals(row.id);
     }
 
-    /** A blank board has no ink on disk and no unwritten strokes. */
+    /** A blank board has no ink on disk. */
     private boolean isBlankLocked(BoardEntity row) {
-        PendingInk pending = pendingInk.get(row.id);
-        return pending != null ? pending.strokes.isEmpty() : row.inkHash == null;
+        return row.inkHash == null;
     }
 
     @Override
@@ -755,7 +660,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 return;
             }
             board.strokes.clear();
-            saveInk(board);
+            try {
+                persistBoardEntityInk(board);
+            } catch (IOException e) {
+                Log.e(TAG, "legacy wipe failed " + boardId, e);
+            }
             trimTrailingBlanksLocked(row.notebookId);
             ensureTrailingBlankLocked(row.notebookId);
         }
@@ -1794,7 +1703,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         });
         ink.delete(row.id);
         cache.remove(row.id);
-        pendingInk.remove(row.id);
         mirrorInk(row.id, null);
         scheduleIndex();
     }
@@ -2170,17 +2078,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 mirror.writeLog(sheetId, bytes);
             }
         });
-    }
-
-    private static final class PendingInk {
-        final List<InkRenderer.InkStroke> strokes;
-        final long editedAt;
-        boolean failed;
-
-        PendingInk(List<InkRenderer.InkStroke> strokes, long editedAt) {
-            this.strokes = strokes;
-            this.editedAt = editedAt;
-        }
     }
 
     private static final class PullFailed extends RuntimeException {

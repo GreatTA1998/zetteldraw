@@ -55,9 +55,10 @@ public class ConflictTest {
         repo = device.repo;
         // BoardEntity conflict shelf still seeds via legacy page-file path
         // (no ensure — Ready migration would absorb the row into .zdl).
+        // saveInk is Ready-only; importer-style sync persist for shelf seeds.
         page = Board.blank();
         TestInk.draw(page, 10f);
-        repo.saveInk(page);
+        repo.persistBoardEntityInk(page);
     }
 
     @After
@@ -138,7 +139,7 @@ public class ConflictTest {
     }
 
     @Test
-    public void pushResultsAdvanceRevAndClearOutboxUnlessEditedMidFlight() {
+    public void pushResultsAdvanceRevAndClearOutboxUnlessEditedMidFlight() throws Exception {
         repo.queuePlaceholderSeedsForUpload();
         SyncStore.PushBatch batch = repo.pendingPush(50);
         assertEquals(4, batch.notebooks.size());
@@ -148,7 +149,7 @@ public class ConflictTest {
 
         TestInk.draw(page, 99f);
         device.tick();
-        repo.saveInk(page);
+        repo.persistBoardEntityInk(page);
 
         List<SyncStore.PushResult> results = new ArrayList<>();
         for (var n : batch.notebooks) {
