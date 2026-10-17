@@ -1435,9 +1435,17 @@ final class PageInkView extends FrameLayout {
         }
         removeCallbacks(dragFrame);
         boolean needFull = s.acrossPaper && spansMultipleSlices(s);
-        RectF dirty = touchedArea(s);
+        clearSelectionGc(needFull, touchedArea(s));
+    }
+
+    /** Resume pen, drop selection, GC-repaint (leave-lasso spine). */
+    private void clearSelectionGc(boolean needFull, RectF dirty) {
         scheduleResume();
         endSelection();
+        requestGc(needFull, dirty);
+    }
+
+    private void requestGc(boolean needFull, RectF dirty) {
         if (needFull) {
             requestFrame(true, null, UpdateMode.GC);
         } else {
@@ -1503,9 +1511,7 @@ final class PageInkView extends FrameLayout {
             NotebookPaper paper = s.page.paper;
             ArrayList<InkRenderer.InkStroke> removed = selectedStrokes(s);
             if (paper == null || removed.isEmpty()) {
-                scheduleResume();
-                endSelection();
-                requestFrame(true, null, UpdateMode.GC);
+                clearSelectionGc(true, null);
                 if (listener != null) {
                     listener.onLassoCancelled();
                 }
@@ -1513,13 +1519,7 @@ final class PageInkView extends FrameLayout {
             }
             paper.deleteIds(s.ids);
             invalidatePaperRegion(paper, new RectF(s.bounds));
-            scheduleResume();
-            endSelection();
-            if (needFull) {
-                requestFrame(true, null, UpdateMode.GC);
-            } else {
-                requestFrame(false, dirty, UpdateMode.GC);
-            }
+            clearSelectionGc(needFull, dirty);
             history.record(InkHistory.Edit.of(InkHistory.Part.paperRemoved(s.page, removed)));
             historyChanged();
             notifyChanged(s.page);
@@ -1537,7 +1537,7 @@ final class PageInkView extends FrameLayout {
             scheduleResume();
             endSelection();
             invalidatePage(s.page.id);
-            requestFrame(false, dirty, UpdateMode.GC);
+            requestGc(false, dirty);
             if (!removed.isEmpty()) {
                 history.record(InkHistory.Edit.of(InkHistory.Part.removed(s.page, removed)));
                 historyChanged();
@@ -1849,9 +1849,7 @@ final class PageInkView extends FrameLayout {
         NotebookPaper paper = s.page.paper;
         Set<String> ids = s.ids;
         if (paper == null) {
-            scheduleResume();
-            endSelection();
-            requestFrame(true, null, UpdateMode.GC);
+            clearSelectionGc(true, null);
             if (listener != null) {
                 listener.onLassoCancelled();
             }
@@ -1860,11 +1858,7 @@ final class PageInkView extends FrameLayout {
         if (dx == 0f && dy == 0f) {
             // Lift inside the box without moving: stay selected (Notes).
             reseatSelection(s, 0f, 0f);
-            if (needFull) {
-                requestFrame(true, null, UpdateMode.GC);
-            } else {
-                requestFrame(false, dirty, UpdateMode.GC);
-            }
+            requestGc(needFull, dirty);
             return;
         }
         // Translate while the sprite is still up, then reseat the selection at
@@ -1877,11 +1871,7 @@ final class PageInkView extends FrameLayout {
         invalidatePaperRegion(paper, touchedPaper);
         reseatSelection(s, dx, dy);
         // Multi-slice commits (origin or destination) repaint the whole surface.
-        if (needFull || spansMultipleSlices(s)) {
-            requestFrame(true, null, UpdateMode.GC);
-        } else {
-            requestFrame(false, dirty, UpdateMode.GC);
-        }
+        requestGc(needFull || spansMultipleSlices(s), dirty);
         history.record(InkHistory.Edit.of(InkHistory.Part.paperShifted(s.page, ids, dx, dy)));
         historyChanged();
         notifyChanged(s.page);
