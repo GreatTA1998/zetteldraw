@@ -25,7 +25,6 @@ import java.io.File;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,9 +56,10 @@ import java.util.function.LongSupplier;
  * write-behind or board conflict shelf. {@link #importLegacy} writes Ready
  * {@code .zdl} from in-memory SourcePages once pageHeight is known — never
  * {@code .zdi} / BOARD outbox. Tip never pushes BOARD ink ({@link #pendingPush}
- * drops BOARD outbox). Historical BOARD pull still stages migration {@code .zdi}
- * via {@link MetaPullApply}; {@link #migrationSourcesForSheet} +
- * {@link #retireBoardEntityInkLocked} clear that residue on first ensure.
+ * drops BOARD outbox). Historical BOARD pull still stages app-private migration
+ * {@code .zdi} via {@link MetaPullApply} (no Documents {@code .zdi} mirror);
+ * {@link #migrationSourcesForSheet} + {@link #retireBoardEntityInkLocked} clear
+ * that residue on first ensure.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
@@ -74,7 +74,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      */
     public static final AtomicInteger logReplays = new AtomicInteger();
     private static final String TAG = "zd-repo";
-    private static final byte[] MIRROR_DELETE = new byte[0];
 
     private final ZettelDatabase db;
     private final ZettelDao dao;
@@ -99,11 +98,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private int remoteBatchDepth;
     private boolean refreshChanged;
     private boolean refreshPosted;
-
-    private final Object mirrorLock = new Object();
-    /** Latest bytes per board still to mirror ({@link #MIRROR_DELETE} = delete); a slow mirror coalesces. */
-    private final LinkedHashMap<String, byte[]> mirrorQueue = new LinkedHashMap<>();
-    private boolean mirrorDraining;
 
     /**
      * Ink-log sheet SoT (Ready + remote apply + length + disk write). Move/tear
@@ -169,9 +163,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         @Override public InkFileStore ink() { return RoomBoardRepository.this.ink; }
         @Override public boolean pendingOutbox(String entity, String id) {
             return pendingLocked(entity, id);
-        }
-        @Override public void mirrorInk(String boardId, byte[] bytes) {
-            RoomBoardRepository.this.mirrorInk(boardId, bytes);
         }
         @Override public void removeCachedBoard(String boardId) {
             cache.remove(boardId);
@@ -1138,7 +1129,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                             sheetStore.applyRemoteLogLocked(remote, stagedLogs, mirrorOps);
                         }
                         for (BoardEntity remote : page.boards) {
-                            metaPull.applyRemoteBoard(remote, staged, mirrorOps);
+                            metaPull.applyRemoteBoard(remote, staged);
                         }
                         for (PageLinkEntity remote : page.links) {
                             metaPull.applyRemoteLink(remote);
@@ -1636,43 +1627,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return dao.outbox(entity, id) != null;
     }
 
-    /** Queues the Documents copy of one board; a newer call for the same board replaces an unsent one. */
-    private void mirrorInk(String boardId, byte[] bytes) {
-        boolean start;
-        synchronized (mirrorLock) {
-            mirrorQueue.remove(boardId);
-            mirrorQueue.put(boardId, bytes == null ? MIRROR_DELETE : bytes);
-            start = !mirrorDraining;
-            mirrorDraining = true;
-        }
-        if (start) {
-            mirrorExecutor.execute(this::drainMirror);
-        }
-    }
-
-    private void drainMirror() {
-        while (true) {
-            String id;
-            byte[] bytes;
-            synchronized (mirrorLock) {
-                Iterator<Map.Entry<String, byte[]>> it = mirrorQueue.entrySet().iterator();
-                if (!it.hasNext()) {
-                    mirrorDraining = false;
-                    return;
-                }
-                Map.Entry<String, byte[]> next = it.next();
-                id = next.getKey();
-                bytes = next.getValue();
-                it.remove();
-            }
-            if (bytes == MIRROR_DELETE) {
-                mirror.deleteInk(id);
-            } else {
-                mirror.writeInk(id, bytes);
-            }
-        }
-    }
-
     /** Null on IO failure — one quiet read for {@code .zdl} / {@code .zdi}. */
     private byte[] readQuietly(String id, boolean log) {
         try {
@@ -1808,7 +1762,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             if (hadFile) {
                 ink.delete(row.id);
-                mirrorInk(row.id, null);
             }
             row.inkHash = null;
             row.inkBytes = 0;

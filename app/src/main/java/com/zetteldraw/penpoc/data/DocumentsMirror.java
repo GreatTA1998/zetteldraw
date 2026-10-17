@@ -34,16 +34,6 @@ public final class DocumentsMirror implements InkMirror {
     }
 
     @Override
-    public void writeInk(String boardId, byte[] bytes) {
-        write(INK, boardId + ".zdi", "application/octet-stream", bytes);
-    }
-
-    @Override
-    public void deleteInk(String boardId) {
-        delete(INK, boardId + ".zdi");
-    }
-
-    @Override
     public void writeIndex(String json) {
         write(ROOT, "index.json", "application/json", json.getBytes(StandardCharsets.UTF_8));
     }

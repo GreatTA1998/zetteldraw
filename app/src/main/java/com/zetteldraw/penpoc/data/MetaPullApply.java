@@ -8,7 +8,6 @@ import com.zetteldraw.penpoc.data.db.ZettelDao;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -21,8 +20,8 @@ import java.util.Map;
  * Board ink still bypasses {@link InkLogApply} for <em>unmigrated</em> notebooks
  * only — once {@link Deps#notebookLogBacked} is true, {@link #applyRemoteBoard}
  * is a no-op (Ready {@code .zdl} owns ink). Unmigrated board pull writes
- * migration residue {@code .zdi} only — UI refresh is Ready listener reload,
- * not BoardEntity stroke swap.
+ * app-private migration residue {@code .zdi} only (no Documents mirror) —
+ * UI refresh is Ready listener reload, not BoardEntity stroke swap.
  *
  * @see Lww
  * @see docs/ink-sot-rewrite.md
@@ -39,8 +38,6 @@ public final class MetaPullApply {
         InkFileStore ink();
 
         boolean pendingOutbox(String entity, String id);
-
-        void mirrorInk(String boardId, byte[] bytes);
 
         void removeCachedBoard(String boardId);
 
@@ -80,11 +77,12 @@ public final class MetaPullApply {
     }
 
     /**
-     * Unmigrated BOARD-only residue for later {@code ensureSheet}. No UI stroke
+     * Unmigrated BOARD-only residue for later {@code ensureSheet}. Writes
+     * app-private {@code .zdi} only — no Documents mirror copy. No UI stroke
      * map — Ready catch-up reloads via remote listeners after {@code .zdl} install.
      */
-    public void applyRemoteBoard(BoardEntity remote, Map<String, Staged> staged,
-                                 List<Runnable> mirrorOps) throws IOException {
+    public void applyRemoteBoard(BoardEntity remote, Map<String, Staged> staged)
+            throws IOException {
         if (deps.notebookLogBacked(remote.notebookId)) {
             // Ready owns ink — do not recreate .zdi.
             return;
@@ -103,16 +101,12 @@ public final class MetaPullApply {
         }
         if (remote.deletedAt != null || remote.inkHash == null) {
             deps.ink().delete(remote.id);
-            String id = remote.id;
-            mirrorOps.add(() -> deps.mirrorInk(id, null));
         } else if (local == null || !remote.inkHash.equals(local.inkHash)) {
             Staged blob = staged.remove(remote.id);
             if (blob == null) {
                 throw new IOException("bad ink blob for " + remote.id);
             }
             deps.ink().commit(blob.file(), remote.id);
-            String id = remote.id;
-            mirrorOps.add(() -> deps.mirrorInk(id, blob.bytes()));
         }
         dao.upsertBoard(remote);
         dao.deleteOutbox(OutboxEntry.BOARD, remote.id);
