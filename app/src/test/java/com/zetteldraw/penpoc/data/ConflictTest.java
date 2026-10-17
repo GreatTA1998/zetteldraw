@@ -34,7 +34,7 @@ import java.util.List;
  *
  * <p>Ready path shelves losing local {@code .zdl} via {@link InkSheetStore}.
  * BoardEntity {@code .zdi} conflict shelf is deleted — unmigrated board pull
- * applies remote without shelving local page-file ink.
+ * writes migration residue without shelving local page-file ink or UI stroke swap.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)

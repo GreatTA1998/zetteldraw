@@ -52,9 +52,6 @@ public final class InkSheetStore {
 
         void mirrorLog(String sheetId, byte[] bytes);
 
-        /** Bump pull-refresh skip counter after a local sheet disk write. */
-        void noteLocalSheetEdit(String sheetId);
-
         /**
          * Legacy page-file sources when no {@code .zdl} exists yet. Empty list is
          * fine (blank notebook). Null means migration must abort.
@@ -77,8 +74,8 @@ public final class InkSheetStore {
 
     /**
      * Pulled log staged outside the lock (hash-checked + replayed once).
-     * Same idea as {@link MetaPullApply.Staged} for legacy board ink — apply
-     * under lock must not replay again.
+     * Same idea as {@link MetaPullApply.Staged} for unmigrated board residue —
+     * apply under lock must not replay again.
      */
     record StagedLog(byte[] bytes, NotebookPaper paper) {
     }
@@ -503,10 +500,9 @@ public final class InkSheetStore {
                 return true;
             }
             open.flushed = all.length;
-            // One post-write spine: meta via ensureNotebookLogMetaLocked, then mirror + local-edit.
+            // One post-write spine: meta via ensureNotebookLogMetaLocked, then mirror.
             ensureNotebookLogMetaLocked(open, all, true);
             deps.mirrorLog(sheetId, all);
-            deps.noteLocalSheetEdit(sheetId);
         }
         return true;
     }
@@ -588,7 +584,6 @@ public final class InkSheetStore {
             }
             ensureNotebookLogMetaLocked(open, all, true);
             deps.mirrorLog(sheetId, all);
-            deps.noteLocalSheetEdit(sheetId);
         }
         return true;
     }

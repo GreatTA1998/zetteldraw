@@ -31,7 +31,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -58,7 +57,8 @@ import java.util.function.LongSupplier;
  * write-behind or board conflict shelf. Unmigrated page files from
  * {@link #importLegacy} feed {@link #migrationSourcesForSheet} once; after Ready
  * install {@link #retireBoardEntityInkLocked} clears them.
- * {@link MetaPullApply} board LWW applies only while not log-backed.
+ * {@link MetaPullApply} board LWW writes migration {@code .zdi} only while not
+ * log-backed — pull UI refresh is listener reload, not BoardEntity stroke swap.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
@@ -92,13 +92,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * {@link #projectLocked} — never seeded from BoardEntity inkHash walks.
      */
     private final HashMap<String, Board> trailingBlanks = new HashMap<>();
-    /** Count of local saves per board, never reset; a pull refresh skips boards edited since it decided. */
-    private final ConcurrentHashMap<String, Long> localEdits = new ConcurrentHashMap<>();
     private long lastQueuedAt;
     private final CopyOnWriteArrayList<Runnable> remoteListeners = new CopyOnWriteArrayList<>();
     private final Object refreshLock = new Object();
-    /** Pulled strokes not yet put on screen, newest per board; delivered in one UI turn. */
-    private final LinkedHashMap<String, Refresh> pendingRefresh = new LinkedHashMap<>();
     private int remoteBatchDepth;
     private boolean refreshChanged;
     private boolean refreshPosted;
@@ -195,9 +191,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         @Override public void mirrorLog(String sheetId, byte[] bytes) {
             RoomBoardRepository.this.mirrorLog(sheetId, bytes);
-        }
-        @Override public void noteLocalSheetEdit(String sheetId) {
-            localEdits.merge(sheetId, 1L, Long::sum);
         }
         @Override public boolean allowRemoteInkAdopt() {
             return RoomBoardRepository.this.allowRemoteInkAdopt();
@@ -1059,14 +1052,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Blobs are verified, decoded and staged (fsync'd) before the lock is
-     * taken; under the lock each applied board only renames its staged file.
+     * Blobs are verified and staged (fsync'd) before the lock is taken; under
+     * the lock each applied board only renames its staged file. Log-backed
+     * notebooks skip board blob staging — Ready {@code .zdl} owns ink.
      */
     @Override
     public void applyPull(PullPage page) throws IOException {
-        HashMap<String, List<InkRenderer.InkStroke>> refreshed = new HashMap<>();
-        HashMap<String, Long> editsSeen = new HashMap<>();
-        HashMap<String, Board> boardsSeen = new HashMap<>();
         HashMap<String, MetaPullApply.Staged> staged = new HashMap<>();
         HashMap<String, InkSheetStore.StagedLog> stagedLogs = new HashMap<>();
         try {
@@ -1079,20 +1070,22 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 stagedLogs.put(remote.id, new InkSheetStore.StagedLog(bytes, NotebookPaper.replay(bytes)));
             }
             for (BoardEntity remote : page.boards) {
+                String sheetId = NotebookPaper.sheetId(remote.notebookId);
+                // Same-page logs install first under lock — do not stage doomed .zdi.
+                if (stagedLogs.containsKey(sheetId)) {
+                    continue;
+                }
+                synchronized (lock) {
+                    if (dao.notebookLog(sheetId) != null || ink.hasLog(sheetId)) {
+                        continue;
+                    }
+                }
                 byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink blob");
                 if (bytes == null) {
                     continue;
                 }
-                List<InkRenderer.InkStroke> strokes;
-                try {
-                    strokes = InkCodec.decode(bytes);
-                } catch (IOException e) {
-                    // Kept byte-for-byte (e.g. a newer ink format); it must not block the rest of the pull.
-                    Log.w(TAG, "undecodable ink for " + remote.id, e);
-                    strokes = new ArrayList<>();
-                }
                 staged.put(remote.id, new MetaPullApply.Staged(
-                        ink.stage(remote.id, "pull", bytes), bytes, strokes));
+                        ink.stage(remote.id, "pull", bytes), bytes));
             }
             // Same Ready return as local deleteNotebook — before tombstone so
             // pages() still sees the sheet. Ensure-fail with inked BoardEntity
@@ -1102,7 +1095,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     returnReadyPagesToScratchpad(remote.id);
                 }
             }
-            applyPullLocked(page, staged, stagedLogs, refreshed, editsSeen, boardsSeen);
+            applyPullLocked(page, staged, stagedLogs);
         } finally {
             for (MetaPullApply.Staged s : staged.values()) {
                 ink.discard(s.file());
@@ -1111,13 +1104,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         if (!page.isEmpty()) {
             boolean post;
             synchronized (refreshLock) {
-                for (Map.Entry<String, List<InkRenderer.InkStroke>> e : refreshed.entrySet()) {
-                    Board board = boardsSeen.get(e.getKey());
-                    if (board != null) {
-                        pendingRefresh.remove(e.getKey());
-                        pendingRefresh.put(e.getKey(), new Refresh(board, e.getValue(), editsSeen.get(e.getKey())));
-                    }
-                }
                 refreshChanged = true;
                 post = remoteBatchDepth == 0 && !refreshPosted;
                 refreshPosted |= post;
@@ -1163,28 +1149,16 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * UI thread, at most one queued at a time: swaps pulled strokes into the
-     * shared boards and tells each screen once. Takes no repository lock.
+     * UI thread, at most one queued at a time: tells each screen to reload.
+     * Ready ink lands via {@link InkSheetStore} under the pull lock; screens
+     * re-project with {@link #pages} — no BoardEntity stroke swap.
      */
     private void deliverRemoteChanges() {
-        ArrayList<Refresh> batch;
         synchronized (refreshLock) {
             refreshPosted = false;
             refreshChanged = false;
-            batch = new ArrayList<>(pendingRefresh.values());
-            pendingRefresh.clear();
         }
-        int swapped = 0;
-        for (Refresh r : batch) {
-            // A page drawn on since the pull decided keeps the local strokes; that save wins on push.
-            if (Objects.equals(localEdits.get(r.board().id), r.editsSeen())) {
-                r.board().strokes.clear();
-                r.board().strokes.addAll(r.strokes());
-                swapped++;
-            }
-        }
-        LaunchLog.mark("sync result on screen: " + swapped + " pages' ink replaced, " + remoteListeners.size()
-                + " screens refreshed");
+        LaunchLog.mark("sync result on screen: " + remoteListeners.size() + " screens refreshed");
         for (Runnable listener : remoteListeners) {
             listener.run();
         }
@@ -1202,13 +1176,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         remoteListeners.remove(listener);
     }
 
-    private record Refresh(Board board, List<InkRenderer.InkStroke> strokes, Long editsSeen) {
-    }
-
     private void applyPullLocked(PullPage page, Map<String, MetaPullApply.Staged> staged,
-                                 Map<String, InkSheetStore.StagedLog> stagedLogs,
-                                 Map<String, List<InkRenderer.InkStroke>> refreshed,
-                                 Map<String, Long> editsSeen, Map<String, Board> boardsSeen) throws IOException {
+                                 Map<String, InkSheetStore.StagedLog> stagedLogs) throws IOException {
         synchronized (lock) {
             // Omitted-blob policy lives in MetaPullApply / InkSheetStore (hash match ⇒ keep local).
             ArrayList<Runnable> mirrorOps = new ArrayList<>();
@@ -1232,7 +1201,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                             sheetStore.applyRemoteLogLocked(remote, stagedLogs, mirrorOps);
                         }
                         for (BoardEntity remote : page.boards) {
-                            metaPull.applyRemoteBoard(remote, staged, refreshed, mirrorOps);
+                            metaPull.applyRemoteBoard(remote, staged, mirrorOps);
                         }
                         for (PageLinkEntity remote : page.links) {
                             metaPull.applyRemoteLink(remote);
@@ -1252,13 +1221,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             for (Runnable op : mirrorOps) {
                 op.run();
-            }
-            for (String id : refreshed.keySet()) {
-                editsSeen.put(id, localEdits.get(id));
-                Board board = cache.get(id);
-                if (board != null) {
-                    boardsSeen.put(id, board);
-                }
             }
             if (!page.isEmpty()) {
                 scheduleIndex();
@@ -1567,10 +1529,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return notebookId == null ? dao.scratchpadBoards() : dao.notebookBoards(notebookId);
     }
 
-    private String lastPositionLocked(String notebookId) {
-        return notebookId == null ? dao.lastScratchpadPosition() : dao.lastNotebookBoardPosition(notebookId);
-    }
-
     /** Key of the list whose unsaved trailing blank is {@code boardId}, or null. */
     private String listOfBlankLocked(String boardId) {
         for (Map.Entry<String, Board> entry : trailingBlanks.entrySet()) {
@@ -1736,31 +1694,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 mirror.writeInk(id, bytes);
             }
         }
-    }
-
-    private Board load(BoardEntity row) {
-        Board cached = cache.get(row.id);
-        if (cached != null) {
-            return cached;
-        }
-        Board board = new Board(row.id, row.createdAt);
-        if (row.inkHash != null) {
-            byte[] bytes = readQuietly(row.id, false);
-            if (bytes == null) {
-                LaunchLog.mark("ink file missing for page " + row.id + "; shown blank");
-            } else {
-                try {
-                    board.strokes.addAll(InkCodec.decode(bytes));
-                } catch (IOException e) {
-                    // Shown blank, so the next stroke would overwrite it: keep the bytes aside first.
-                    Log.e(TAG, "unreadable ink " + row.id, e);
-                    LaunchLog.mark("unreadable ink for page " + row.id + " (" + e.getMessage() + "); copy kept as "
-                            + ink.preserve(row.id, bytes));
-                }
-            }
-        }
-        cache.put(row.id, board);
-        return board;
     }
 
     /** Null on IO failure — one quiet read for {@code .zdl} / {@code .zdi}. */

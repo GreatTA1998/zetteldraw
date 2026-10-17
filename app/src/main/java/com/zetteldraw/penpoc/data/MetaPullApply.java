@@ -1,6 +1,5 @@
 package com.zetteldraw.penpoc.data;
 
-import com.zetteldraw.penpoc.InkRenderer;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
@@ -9,7 +8,6 @@ import com.zetteldraw.penpoc.data.db.ZettelDao;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -22,16 +20,16 @@ import java.util.Map;
  * <p>Caller holds the repository lock and runs inside the pull transaction.
  * Board ink still bypasses {@link InkLogApply} for <em>unmigrated</em> notebooks
  * only — once {@link Deps#notebookLogBacked} is true, {@link #applyRemoteBoard}
- * is a no-op (Ready {@code .zdl} owns ink). Unmigrated board pull applies remote
- * without a BoardEntity conflict shelf; Ready shelves losing {@code .zdl} in
- * {@link InkSheetStore}.
+ * is a no-op (Ready {@code .zdl} owns ink). Unmigrated board pull writes
+ * migration residue {@code .zdi} only — UI refresh is Ready listener reload,
+ * not BoardEntity stroke swap.
  *
  * @see Lww
  * @see docs/ink-sot-rewrite.md
  */
 public final class MetaPullApply {
-    /** Staged legacy board ink from {@code applyPull} (hash-checked, decoded). */
-    public record Staged(File file, byte[] bytes, List<InkRenderer.InkStroke> strokes) {
+    /** Staged legacy board ink from {@code applyPull} (hash-checked, fsync'd). */
+    public record Staged(File file, byte[] bytes) {
     }
 
     /** Bridge into Room / outbox / mirror / board cache owned by the repository. */
@@ -81,8 +79,11 @@ public final class MetaPullApply {
         deps.dao().deleteOutbox(OutboxEntry.LINK, remote.id);
     }
 
+    /**
+     * Unmigrated BOARD-only residue for later {@code ensureSheet}. No UI stroke
+     * map — Ready catch-up reloads via remote listeners after {@code .zdl} install.
+     */
     public void applyRemoteBoard(BoardEntity remote, Map<String, Staged> staged,
-                                 Map<String, List<InkRenderer.InkStroke>> refreshed,
                                  List<Runnable> mirrorOps) throws IOException {
         if (deps.notebookLogBacked(remote.notebookId)) {
             // Ready owns ink — do not recreate .zdi.
@@ -104,7 +105,6 @@ public final class MetaPullApply {
             deps.ink().delete(remote.id);
             String id = remote.id;
             mirrorOps.add(() -> deps.mirrorInk(id, null));
-            refreshed.put(remote.id, new ArrayList<>());
         } else if (local == null || !remote.inkHash.equals(local.inkHash)) {
             Staged blob = staged.remove(remote.id);
             if (blob == null) {
@@ -113,7 +113,6 @@ public final class MetaPullApply {
             deps.ink().commit(blob.file(), remote.id);
             String id = remote.id;
             mirrorOps.add(() -> deps.mirrorInk(id, blob.bytes()));
-            refreshed.put(remote.id, blob.strokes());
         }
         dao.upsertBoard(remote);
         dao.deleteOutbox(OutboxEntry.BOARD, remote.id);

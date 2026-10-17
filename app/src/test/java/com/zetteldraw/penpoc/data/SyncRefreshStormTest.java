@@ -11,7 +11,7 @@ import androidx.test.core.app.ApplicationProvider;
 
 import com.zetteldraw.penpoc.Board;
 import com.zetteldraw.penpoc.InkRenderer;
-import com.zetteldraw.penpoc.data.db.BoardEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 import com.zetteldraw.penpoc.sync.SyncClient;
 import com.zetteldraw.penpoc.sync.SyncConfig;
@@ -30,23 +30,24 @@ import org.robolectric.annotation.Config;
 
 import java.io.File;
 import java.io.OutputStream;
-import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A sync pass that pulls many pages used to queue one full page-list reload
  * per pulled page onto the main thread. It must reach the UI as one refresh.
+ *
+ * <p>Ready-only: storm pages are notebook_logs, not BoardEntity stroke swaps.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
 public class SyncRefreshStormTest {
     private static final int PAGES = 30;
+    private static final int PAGE_HEIGHT = 800;
 
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
@@ -68,6 +69,7 @@ public class SyncRefreshStormTest {
         repo = new RoomBoardRepository(db, new InkFileStore(new File(root, "ink")), InkMirror.NONE,
                 Runnable::run, Runnable::run, uiQueue::add, System::currentTimeMillis);
         repo.addRemoteChangeListener(refreshes::incrementAndGet);
+        assertTrue(repo.ensureSheet(null, PAGE_HEIGHT, PAGE_HEIGHT, 0L));
     }
 
     @After
@@ -85,72 +87,63 @@ public class SyncRefreshStormTest {
                 return "{\"results\": []}";
             }
             long since = Long.parseLong(path.replaceAll(".*since=(\\d+).*", "$1"));
-            return pullPage(since).toString();
+            return pullLogPage(since).toString();
         });
         SyncConfig config = new SyncConfig("http://127.0.0.1:" + server.port(), "t", "d");
-        SyncEngine.Result result = new SyncEngine(repo, new SyncClient(config, ZettelDatabase.SCHEMA_VERSION), config,
+        new SyncEngine(repo, new SyncClient(config, ZettelDatabase.SCHEMA_VERSION), config,
                 ZettelDatabase.SCHEMA_VERSION, System::currentTimeMillis).run();
 
-        assertEquals(PAGES, result.pulledBoards);
         assertEquals("one UI turn for the whole pass, not one per pulled page", 1, uiQueue.size());
         runUi();
         assertEquals(1, refreshes.get());
-        assertEquals(PAGES + 1, repo.scratchpadPages().size());
+        assertTrue(repo.isSheetReady(null));
+        assertEquals(PAGES, db.dao().notebookLog(NotebookPaper.SCRATCHPAD_ID).rev);
+        List<Board> pages = repo.scratchpadPages();
+        assertTrue("Ready projection after log storm", pages.size() >= 1);
+        assertTrue(pages.get(0).paper.strokes().size() >= 1);
     }
 
     @Test
     public void pullsOutsideABatchCoalesceWhileTheUiIsBusy() throws Exception {
         for (long rev = 1; rev <= 10; rev++) {
-            repo.applyPull(SyncProtocolPages.page(rev));
+            repo.applyPull(SyncProtocolPages.logPage(rev));
         }
         assertEquals("one pending UI turn however many pulls land meanwhile", 1, uiQueue.size());
         runUi();
         assertEquals(1, refreshes.get());
-        repo.applyPull(SyncProtocolPages.page(11));
+        repo.applyPull(SyncProtocolPages.logPage(11));
         assertEquals(1, uiQueue.size());
         runUi();
         assertEquals(2, refreshes.get());
     }
 
     @Test
-    public void pulledStrokesReachTheSharedBoardWithoutTheLock() throws Exception {
-        // Unmigrated board-row pull refresh (board.strokes), not Ready paper projection.
-        Board page = Board.blank();
-        TestInk.draw(page, 10f);
-        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
-        legacy.scratchpad.add(page);
-        repo.importLegacy(legacy);
-        BoardEntity remote = db.dao().board(page.id).copy();
+    public void pulledReadyLogReachesScreensViaListenerNotBoardStrokeSwap() throws Exception {
+        Board page = repo.scratchpadPages().get(0);
+        String sliceId = page.id;
+        NotebookPaper remotePaper = NotebookPaper.empty(PAGE_HEIGHT);
         List<InkRenderer.InkStroke> ink = Collections.singletonList(TestInk.stroke(300f, 300f, 5));
-        byte[] bytes = InkCodec.encode(ink);
+        remotePaper.appendStroke(ink.get(0), sliceId);
+        byte[] bytes = remotePaper.bytes();
+        NotebookLogEntity remote = new NotebookLogEntity();
+        remote.id = NotebookPaper.SCRATCHPAD_ID;
+        remote.notebookId = null;
         remote.inkHash = InkFileStore.sha256(bytes);
         remote.inkBytes = bytes.length;
-        remote.rev = 9;
+        remote.sliceHeight = PAGE_HEIGHT;
+        remote.createdAt = 1L;
         remote.updatedAt = System.currentTimeMillis() + 60_000;
+        remote.rev = 9;
         SyncStore.PullPage pulled = new SyncStore.PullPage();
-        pulled.boards.add(remote);
+        pulled.logs.add(remote);
         pulled.blobs.put(remote.inkHash, bytes);
         pulled.cursor = 9;
         repo.applyPull(pulled);
-        Object lock = lockOf(repo);
-        Thread holder = new Thread(() -> {
-            synchronized (lock) {
-                try {
-                    Thread.sleep(3_000);
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-        });
-        holder.start();
-        Thread.sleep(100);
-        long started = System.nanoTime();
+        assertEquals(1, uiQueue.size());
         runUi();
-        assertTrue("delivery does not wait for the repository lock",
-                (System.nanoTime() - started) / 1_000_000 < 1_000);
-        holder.interrupt();
-        holder.join();
-        TestInk.assertSameInk(ink, page.strokes);
+        assertEquals(1, refreshes.get());
+        Board after = repo.scratchpadPages().get(0);
+        TestInk.assertSameInk(ink, after.paper.strokes());
     }
 
     private void runUi() {
@@ -161,33 +154,30 @@ public class SyncRefreshStormTest {
         }
     }
 
-    private static Object lockOf(RoomBoardRepository repo) throws Exception {
-        java.lang.reflect.Field field = RoomBoardRepository.class.getDeclaredField("lock");
-        field.setAccessible(true);
-        return field.get(repo);
-    }
-
-    private static JSONObject pullPage(long since) throws Exception {
+    private static JSONObject pullLogPage(long since) throws Exception {
         long rev = since + 1;
         JSONObject response = new JSONObject();
         response.put("schema_version", ZettelDatabase.SCHEMA_VERSION);
         response.put("cursor", rev);
         response.put("has_more", rev < PAGES);
         response.put("notebooks", new JSONArray());
-        byte[] bytes = InkCodec.encode(Collections.singletonList(TestInk.stroke(10f * rev, 20f, 4)));
+        response.put("boards", new JSONArray());
+        NotebookPaper paper = NotebookPaper.empty(PAGE_HEIGHT);
+        paper.appendStroke(TestInk.stroke(10f * rev, 20f, 4), "slice-" + rev);
+        byte[] bytes = paper.bytes();
         String hash = InkFileStore.sha256(bytes);
-        response.put("boards", new JSONArray().put(new JSONObject()
-                .put("id", UUID.nameUUIDFromBytes(("b" + rev).getBytes(StandardCharsets.UTF_8)).toString())
+        response.put("logs", new JSONArray().put(new JSONObject()
+                .put("id", NotebookPaper.SCRATCHPAD_ID)
                 .put("notebook_id", JSONObject.NULL)
-                .put("position", String.format("a%03d", rev))
                 .put("ink_hash", hash)
                 .put("ink_bytes", bytes.length)
-                .put("thumb_hash", JSONObject.NULL)
+                .put("slice_height", PAGE_HEIGHT)
                 .put("conflict_of", JSONObject.NULL)
                 .put("created_at", rev)
                 .put("updated_at", rev)
                 .put("rev", rev)
                 .put("deleted_at", JSONObject.NULL)));
+        response.put("links", new JSONArray());
         response.put("blobs", new JSONObject().put(hash, Base64.getEncoder().encodeToString(bytes)));
         return response;
     }
@@ -261,17 +251,24 @@ public class SyncRefreshStormTest {
         }
     }
 
-    /** Small pulled pages built directly, without the HTTP layer. */
+    /** Small pulled Ready log pages built directly, without the HTTP layer. */
     private static final class SyncProtocolPages {
-        static SyncStore.PullPage page(long rev) {
+        static SyncStore.PullPage logPage(long rev) throws Exception {
+            NotebookPaper paper = NotebookPaper.empty(PAGE_HEIGHT);
+            paper.appendStroke(TestInk.stroke(10f * rev, 20f, 4), "p" + rev);
+            byte[] bytes = paper.bytes();
+            NotebookLogEntity log = new NotebookLogEntity();
+            log.id = NotebookPaper.SCRATCHPAD_ID;
+            log.notebookId = null;
+            log.inkHash = InkFileStore.sha256(bytes);
+            log.inkBytes = bytes.length;
+            log.sliceHeight = PAGE_HEIGHT;
+            log.createdAt = rev;
+            log.updatedAt = rev;
+            log.rev = rev;
             SyncStore.PullPage page = new SyncStore.PullPage();
-            BoardEntity board = new BoardEntity();
-            board.id = UUID.nameUUIDFromBytes(("p" + rev).getBytes(StandardCharsets.UTF_8)).toString();
-            board.position = String.format("b%03d", rev);
-            board.createdAt = rev;
-            board.updatedAt = rev;
-            board.rev = rev;
-            page.boards.add(board);
+            page.logs.add(log);
+            page.blobs.put(log.inkHash, bytes);
             page.cursor = rev;
             return page;
         }
