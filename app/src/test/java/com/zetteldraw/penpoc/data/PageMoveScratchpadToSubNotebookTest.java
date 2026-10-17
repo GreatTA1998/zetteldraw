@@ -77,8 +77,8 @@ public class PageMoveScratchpadToSubNotebookTest {
 
     @Test
     public void lastScratchpadPageIntoActionsLifeSubNotebookKeepsPageAndInk() {
-        String actions = repo.createNotebook("actions.life").id;
-        String sub = repo.createNotebook("today", actions).id;
+        String actions = repo.createNotebook("actions.life").id();
+        String sub = repo.createNotebook("today", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         repo.ensureSheet(sub, PAGE, PAGE, 0L);
 
@@ -117,8 +117,8 @@ public class PageMoveScratchpadToSubNotebookTest {
      */
     @Test
     public void placeIntoHomePageChildIgnoresStaleParentMidlineTarget() {
-        String actions = repo.createNotebook("actions.life").id;
-        String home = repo.createNotebook("home page", actions).id;
+        String actions = repo.createNotebook("actions.life").id();
+        String home = repo.createNotebook("home page", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         repo.ensureSheet(actions, PAGE, PAGE, 0L);
         repo.ensureSheet(home, PAGE, PAGE, 0L);
@@ -144,8 +144,8 @@ public class PageMoveScratchpadToSubNotebookTest {
 
     @Test
     public void saveInkFlushBeforeDestPersistCannotDropLastScratchpadPage() throws Exception {
-        String actions = repo.createNotebook("actions.life").id;
-        String sub = repo.createNotebook("errands", actions).id;
+        String actions = repo.createNotebook("actions.life").id();
+        String sub = repo.createNotebook("errands", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         repo.ensureSheet(sub, PAGE, PAGE, 0L);
 
@@ -185,8 +185,8 @@ public class PageMoveScratchpadToSubNotebookTest {
 
     @Test
     public void syncPullDuringHeldCrossNotebookMoveCannotDropPage() throws Exception {
-        String actions = repo.createNotebook("actions.life").id;
-        String sub = repo.createNotebook("pull-race", actions).id;
+        String actions = repo.createNotebook("actions.life").id();
+        String sub = repo.createNotebook("pull-race", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         repo.ensureSheet(sub, PAGE, PAGE, 0L);
 
@@ -248,7 +248,7 @@ public class PageMoveScratchpadToSubNotebookTest {
      */
     @Test
     public void menuPathEnsureThenPlaceIntoInvalidatedTopLevelKeepsPage() {
-        String top = repo.createNotebook("journal-like").id;
+        String top = repo.createNotebook("journal-like").id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         repo.ensureSheet(top, PAGE, PAGE, 0L);
         // Touch dest so the ink log exists on disk, then drop the Ready sheet
@@ -280,8 +280,8 @@ public class PageMoveScratchpadToSubNotebookTest {
 
     @Test
     public void fullConfirmMovingQueueLandsLastPageInSubNotebookAfterDrain() throws Exception {
-        String actions = repo.createNotebook("actions.life").id;
-        String sub = repo.createNotebook("inbox", actions).id;
+        String actions = repo.createNotebook("actions.life").id();
+        String sub = repo.createNotebook("inbox", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         repo.ensureSheet(sub, PAGE, PAGE, 0L);
 

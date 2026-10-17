@@ -596,7 +596,7 @@ public final class CanvasActivity extends Activity {
         for (int i = 0; i < notebooks.size(); i++) {
             BoardRepository.NotebookInfo a = shownNotebooks.get(i);
             BoardRepository.NotebookInfo b = notebooks.get(i);
-            if (!a.id.equals(b.id) || !a.title.equals(b.title) || !Objects.equals(a.parentId, b.parentId)) {
+            if (!a.id().equals(b.id()) || !a.title().equals(b.title()) || !Objects.equals(a.parentId(), b.parentId())) {
                 return false;
             }
         }
@@ -612,10 +612,10 @@ public final class CanvasActivity extends Activity {
         String parent = null;
         while (keep < trail.size()) {
             BoardRepository.NotebookInfo info = notebookById(trail.get(keep));
-            if (info == null || !Objects.equals(info.parentId, parent)) {
+            if (info == null || !Objects.equals(info.parentId(), parent)) {
                 break;
             }
-            parent = info.id;
+            parent = info.id();
             keep++;
         }
         if (keep < trail.size()) {
@@ -693,7 +693,7 @@ public final class CanvasActivity extends Activity {
             return kids;
         }
         for (BoardRepository.NotebookInfo each : shownNotebooks) {
-            if (Objects.equals(each.parentId, parentId)) {
+            if (Objects.equals(each.parentId(), parentId)) {
                 kids.add(each);
             }
         }
@@ -735,7 +735,7 @@ public final class CanvasActivity extends Activity {
                 ? notebookId
                 : null;
         if (target == null && !notebooks.isEmpty()) {
-            target = notebooks.get(0).id;
+            target = notebooks.get(0).id();
         }
         if (target == null) {
             notebookId = null;
@@ -783,8 +783,8 @@ public final class CanvasActivity extends Activity {
             if (info == null) {
                 break;
             }
-            next.add(0, info.id);
-            cursor = info.parentId;
+            next.add(0, info.id());
+            cursor = info.parentId();
         }
         if (next.isEmpty()) {
             openNotebooks(repository.notebooks());
@@ -845,7 +845,7 @@ public final class CanvasActivity extends Activity {
         if (info == null) {
             info = notebookByIdIn(repository.notebooks(), id);
         }
-        return info == null ? "" : info.title;
+        return info == null ? "" : info.title();
     }
 
     private void openCollection(String id, Integer keepScroll) {
@@ -1128,7 +1128,7 @@ public final class CanvasActivity extends Activity {
             return null;
         }
         for (BoardRepository.NotebookInfo each : notebooks) {
-            if (each.id.equals(id)) {
+            if (each.id().equals(id)) {
                 return each;
             }
         }
@@ -1803,7 +1803,7 @@ public final class CanvasActivity extends Activity {
         if (source == null || target == null) {
             return false;
         }
-        if (targetId.equals(source.parentId)) {
+        if (targetId.equals(source.parentId())) {
             return false;
         }
         return !descendantIds(sourceId).contains(targetId);
@@ -1831,8 +1831,8 @@ public final class CanvasActivity extends Activity {
         }
         if (shownNotebooks != null) {
             for (BoardRepository.NotebookInfo each : shownNotebooks) {
-                if (each.id.equals(collectionId)) {
-                    return each.title;
+                if (each.id().equals(collectionId)) {
+                    return each.title();
                 }
             }
         }
@@ -1848,13 +1848,13 @@ public final class CanvasActivity extends Activity {
         if (place == null) {
             return null;
         }
-        String name = place.notebookId == null
+        String name = place.notebookId() == null
                 ? getString(R.string.scratchpad)
-                : titleOf(place.notebookId);
+                : titleOf(place.notebookId());
         if (name == null || name.isEmpty()) {
             return null;
         }
-        return name + " " + (place.index + 1) + "/" + place.count;
+        return name + " " + (place.index() + 1) + "/" + place.count();
     }
 
     /** Opens that page the way tapping its notebook and scrolling there would. */
@@ -1863,9 +1863,9 @@ public final class CanvasActivity extends Activity {
         if (place == null) {
             return;
         }
-        List<Board> pages = repository.pages(place.notebookId);
-        openNotebookOrScratch(place.notebookId,
-                CollectionNav.scrollYBefore(pages, place.index, pageLayout()));
+        List<Board> pages = repository.pages(place.notebookId());
+        openNotebookOrScratch(place.notebookId(),
+                CollectionNav.scrollYBefore(pages, place.index(), pageLayout()));
     }
 
     private List<Board> pagesIn(String id) {
@@ -2133,16 +2133,16 @@ public final class CanvasActivity extends Activity {
             NotebookPick onPick) {
         boolean any = false;
         for (BoardRepository.NotebookInfo each : childrenOf(parentId)) {
-            if (skipIds != null && skipIds.contains(each.id)) {
+            if (skipIds != null && skipIds.contains(each.id())) {
                 // Still walk children in case a skipped node has eligible cousins
                 // via another branch — skipIds already includes descendants of
                 // Place-under source, so children are also skipped.
                 continue;
             }
             any = true;
-            String id = each.id;
-            addPanelButton(tree, each.title, depth, () -> onPick.onPick(id));
-            if (addNotebookHierarchy(tree, each.id, depth + 1, skipIds, onPick)) {
+            String id = each.id();
+            addPanelButton(tree, each.title(), depth, () -> onPick.onPick(id));
+            if (addNotebookHierarchy(tree, each.id(), depth + 1, skipIds, onPick)) {
                 any = true;
             }
         }
@@ -2202,8 +2202,8 @@ public final class CanvasActivity extends Activity {
         queue.add(id);
         for (int i = 0; i < queue.size(); i++) {
             for (BoardRepository.NotebookInfo each : childrenOf(queue.get(i))) {
-                if (skip.add(each.id)) {
-                    queue.add(each.id);
+                if (skip.add(each.id())) {
+                    queue.add(each.id());
                 }
             }
         }
@@ -2251,9 +2251,9 @@ public final class CanvasActivity extends Activity {
             if (created == null) {
                 styleTabs();
             } else if (moveAfter != null && moveAfter.page != null) {
-                movePageToNotebook(moveAfter.page.id, created.id);
+                movePageToNotebook(moveAfter.page.id, created.id());
             } else {
-                openNotebook(created.id, null);
+                openNotebook(created.id(), null);
             }
         };
         name.setOnEditorActionListener((v, actionId, event) -> {
@@ -2893,12 +2893,12 @@ public final class CanvasActivity extends Activity {
 
         NotebookTab(Context context, BoardRepository.NotebookInfo info, int depth) {
             super(context);
-            id = info.id;
+            id = info.id();
             this.depth = depth;
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
             label = new Button(context, null, android.R.attr.borderlessButtonStyle);
-            styleTabLabel(label, info.title);
+            styleTabLabel(label, info.title());
             label.setMaxWidth(dp(220));
             onTap(label, v -> openNotebook(id, null));
             onLongTap(label, v -> {
@@ -3153,17 +3153,17 @@ public final class CanvasActivity extends Activity {
             ArrayList<BoardRepository.PageLink> outgoing = new ArrayList<>();
             ArrayList<BoardRepository.PageLink> incoming = new ArrayList<>();
             for (BoardRepository.PageLink link : repository.linksTouching(page.id)) {
-                if (page.id.equals(link.sourceId)) {
+                if (page.id.equals(link.sourceId())) {
                     outgoing.add(link);
-                } else if (page.id.equals(link.targetId)) {
+                } else if (page.id.equals(link.targetId())) {
                     incoming.add(link);
                 }
             }
             for (BoardRepository.PageLink link : outgoing) {
-                addLinkLine(lines, link.targetId, true);
+                addLinkLine(lines, link.targetId(), true);
             }
             for (BoardRepository.PageLink link : incoming) {
-                addLinkLine(lines, link.sourceId, false);
+                addLinkLine(lines, link.sourceId(), false);
             }
         }
 

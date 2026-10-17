@@ -49,16 +49,16 @@ public class NotebookManagementTest {
     @Test
     public void createAppendsAfterExistingNotebooks() {
         BoardRepository.NotebookInfo ideas = repo.createNotebook("  ideas   for later ");
-        assertEquals("ideas for later", ideas.title);
+        assertEquals("ideas for later", ideas.title());
         BoardRepository.NotebookInfo last = repo.createNotebook("zzz");
         List<BoardRepository.NotebookInfo> all = repo.notebooks();
         assertEquals(6, all.size());
-        assertEquals(ideas.id, all.get(4).id);
-        assertEquals(last.id, all.get(5).id);
-        NotebookEntity row = device.db.dao().notebook(ideas.id);
+        assertEquals(ideas.id(), all.get(4).id());
+        assertEquals(last.id(), all.get(5).id());
+        NotebookEntity row = device.db.dao().notebook(ideas.id());
         assertTrue(row.position.compareTo(device.db.dao().notebook(Notebook.MISCELLANEOUS.uuid).position) > 0);
         assertEquals(0, row.rev);
-        assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, ideas.id));
+        assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, ideas.id()));
         assertNull("blank titles are rejected", repo.createNotebook("   "));
     }
 
@@ -80,7 +80,7 @@ public class NotebookManagementTest {
         assertEquals(now, row.updatedAt);
         assertEquals("base rev stays the last synced rev", 4, row.rev);
         assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.NOTEBOOK, row.id).op);
-        assertEquals("stand-up", repo.notebooks().get(0).title);
+        assertEquals("stand-up", repo.notebooks().get(0).title());
     }
 
     @Test
@@ -114,13 +114,13 @@ public class NotebookManagementTest {
     public void moveIntoNewNotebookAndNotIntoDeletedOne() {
         Board a = inked(10f);
         BoardRepository.NotebookInfo fresh = repo.createNotebook("fresh");
-        repo.movePageToNotebook(a.id, fresh.id);
-        assertEquals(RoomBoardRepositoryTest.ids(a), RoomBoardRepositoryTest.ids(RoomBoardRepositoryTest.stored(repo.notebookPages(fresh.id))));
+        repo.movePageToNotebook(a.id, fresh.id());
+        assertEquals(RoomBoardRepositoryTest.ids(a), RoomBoardRepositoryTest.ids(RoomBoardRepositoryTest.stored(repo.notebookPages(fresh.id()))));
 
-        repo.deleteNotebook(fresh.id);
+        repo.deleteNotebook(fresh.id());
         Board b = inked(20f);
-        repo.movePageToNotebook(b.id, fresh.id);
-        assertTrue(repo.notebookPages(fresh.id).isEmpty());
+        repo.movePageToNotebook(b.id, fresh.id());
+        assertTrue(repo.notebookPages(fresh.id()).isEmpty());
         assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(b.id));
     }
 
@@ -159,19 +159,19 @@ public class NotebookManagementTest {
     @Test
     public void parentPagesExcludeTheChildsInk() {
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
-        assertEquals(shelf.id, chapter.parentId);
-        repo.ensureSheet(shelf.id, 800, 800, 0L);
-        repo.ensureSheet(chapter.id, 800, 800, 0L);
-        Board parentPage = repo.pages(shelf.id).get(0);
-        Board childPage = repo.pages(chapter.id).get(0);
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
+        assertEquals(shelf.id(), chapter.parentId());
+        repo.ensureSheet(shelf.id(), 800, 800, 0L);
+        repo.ensureSheet(chapter.id(), 800, 800, 0L);
+        Board parentPage = repo.pages(shelf.id()).get(0);
+        Board childPage = repo.pages(chapter.id()).get(0);
         assertNotEquals(parentPage.sheetId, childPage.sheetId);
         parentPage.paper.appendStroke(TestInk.stroke(11f, 20f, 4));
         childPage.paper.appendStroke(TestInk.stroke(99f, 20f, 4));
         repo.saveInk(parentPage);
         repo.saveInk(childPage);
 
-        for (Board page : repo.pages(shelf.id)) {
+        for (Board page : repo.pages(shelf.id())) {
             if (page.paper == null) {
                 continue;
             }
@@ -179,52 +179,52 @@ public class NotebookManagementTest {
                 assertTrue(stroke.points.get(0).x < 50f);
             }
         }
-        assertEquals(99f, repo.pages(chapter.id).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
-        assertEquals(2, repo.pages(shelf.id).size());
+        assertEquals(99f, repo.pages(chapter.id()).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
+        assertEquals(2, repo.pages(shelf.id()).size());
     }
 
     @Test
     public void placeRejectsSelfParentAndDescendants() {
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
-        BoardRepository.NotebookInfo scene = repo.createNotebook("scene", chapter.id);
-        assertFalse(repo.placeNotebook(shelf.id, shelf.id));
-        assertFalse(repo.placeNotebook(shelf.id, chapter.id));
-        assertFalse(repo.placeNotebook(shelf.id, scene.id));
-        assertFalse(repo.placeNotebook(chapter.id, "not-a-notebook"));
-        assertEquals(shelf.id, device.db.dao().notebook(chapter.id).parentId);
-        assertTrue(repo.placeNotebook(chapter.id, null));
-        assertNull(device.db.dao().notebook(chapter.id).parentId);
-        assertEquals(chapter.id, device.db.dao().notebook(scene.id).parentId);
-        assertTrue("already top-level is a no-op", repo.placeNotebook(chapter.id, null));
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
+        BoardRepository.NotebookInfo scene = repo.createNotebook("scene", chapter.id());
+        assertFalse(repo.placeNotebook(shelf.id(), shelf.id()));
+        assertFalse(repo.placeNotebook(shelf.id(), chapter.id()));
+        assertFalse(repo.placeNotebook(shelf.id(), scene.id()));
+        assertFalse(repo.placeNotebook(chapter.id(), "not-a-notebook"));
+        assertEquals(shelf.id(), device.db.dao().notebook(chapter.id()).parentId);
+        assertTrue(repo.placeNotebook(chapter.id(), null));
+        assertNull(device.db.dao().notebook(chapter.id()).parentId);
+        assertEquals(chapter.id(), device.db.dao().notebook(scene.id()).parentId);
+        assertTrue("already top-level is a no-op", repo.placeNotebook(chapter.id(), null));
     }
 
     @Test
     public void deletePromotesChildrenAndKeepsTheirPages() {
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
         Board childPage = inked(30f);
-        repo.movePageToNotebook(childPage.id, chapter.id);
+        repo.movePageToNotebook(childPage.id, chapter.id());
         Board parentPage = inked(40f);
-        repo.movePageToNotebook(parentPage.id, shelf.id);
-        String childPos = device.db.dao().notebook(chapter.id).position;
+        repo.movePageToNotebook(parentPage.id, shelf.id());
+        String childPos = device.db.dao().notebook(chapter.id()).position;
 
-        repo.deleteNotebook(shelf.id);
+        repo.deleteNotebook(shelf.id());
 
-        NotebookEntity child = device.db.dao().notebook(chapter.id);
+        NotebookEntity child = device.db.dao().notebook(chapter.id());
         assertNull(child.deletedAt);
         assertNull(child.parentId);
         assertEquals(childPos, child.position);
-        assertTrue(RoomBoardRepositoryTest.ids(repo.notebookPages(chapter.id)).contains(childPage.id));
+        assertTrue(RoomBoardRepositoryTest.ids(repo.notebookPages(chapter.id())).contains(childPage.id));
         assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(parentPage.id));
-        assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id));
+        assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id()));
     }
 
     @Test
     public void pulledTombstonePromotesLocalChildren() throws Exception {
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
-        NotebookEntity remote = device.db.dao().notebook(shelf.id).copy();
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
+        NotebookEntity remote = device.db.dao().notebook(shelf.id()).copy();
         remote.deletedAt = device.tick();
         remote.updatedAt = remote.deletedAt;
         remote.rev = 8;
@@ -232,9 +232,9 @@ public class NotebookManagementTest {
         page.notebooks.add(remote);
         page.cursor = 8;
         repo.applyPull(page);
-        assertNull(device.db.dao().notebook(chapter.id).parentId);
-        assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id));
-        assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id).op);
+        assertNull(device.db.dao().notebook(chapter.id()).parentId);
+        assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id()));
+        assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.NOTEBOOK, chapter.id()).op);
     }
 
     private Board inked(float x) {

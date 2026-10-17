@@ -104,15 +104,15 @@ public class PageDeleteTest {
     public void notebookPagesDeleteWithoutTouchingTheScratchpad() {
         Board page = drawnScratchpadPage(a, 10f);
         BoardRepository.NotebookInfo notebook = a.repo.createNotebook("gone");
-        a.repo.movePageToNotebook(page.id, notebook.id);
-        Board next = a.repo.notebookPages(notebook.id).get(1);
+        a.repo.movePageToNotebook(page.id, notebook.id());
+        Board next = a.repo.notebookPages(notebook.id()).get(1);
         TestInk.draw(next, 30f);
         a.repo.saveInk(next);
         a.repo.wipePage(page.id);
-        assertEquals(3, a.repo.notebookPages(notebook.id).size());
+        assertEquals(3, a.repo.notebookPages(notebook.id()).size());
 
         a.repo.deletePage(page.id);
-        List<Board> pages = a.repo.notebookPages(notebook.id);
+        List<Board> pages = a.repo.notebookPages(notebook.id());
         assertEquals(RoomBoardRepositoryTest.ids(next), RoomBoardRepositoryTest.ids(pages).subList(0, 1));
         assertEquals("the notebook keeps its trailing blank", 2, pages.size());
         assertTrue(pages.get(1).isBlank());

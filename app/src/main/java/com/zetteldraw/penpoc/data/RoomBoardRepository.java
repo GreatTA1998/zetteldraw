@@ -254,13 +254,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         notebookReads.incrementAndGet();
         String sheetId = NotebookPaper.sheetId(notebookId);
         synchronized (lock) {
-            InkSheetStore.OpenSheet sheet = sheetStore.get(sheetId);
-            if (sheet != null && sheet.ready) {
-                return projectLocked(notebookId, sheet.paper);
-            }
-            if (sheetStore.isLogBacked(sheetId)) {
-                // Log-backed: refuse legacy BoardEntity projection.
-                return new ArrayList<>();
+            List<Board> gated = logBackedPagesLocked(notebookId, sheetId);
+            if (gated != null) {
+                return gated;
             }
         }
         List<Board> pages = null;
@@ -274,12 +270,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     }
                 }
                 // A log may have appeared while we decoded; never fall through.
-                if (sheetStore.isLogBacked(sheetId)) {
-                    InkSheetStore.OpenSheet sheet = sheetStore.get(sheetId);
-                    if (sheet != null && sheet.ready) {
-                        return projectLocked(notebookId, sheet.paper);
-                    }
-                    return new ArrayList<>();
+                List<Board> gated = logBackedPagesLocked(notebookId, sheetId);
+                if (gated != null) {
+                    return gated;
                 }
                 ensureTrailingBlankLocked(notebookId);
                 List<BoardEntity> rows = rowsLocked(notebookId);
@@ -297,6 +290,21 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         scheduleWarmCache();
         return pages;
+    }
+
+    /**
+     * Log-backed open gate: Ready → project; log present but not Ready → [];
+     * {@code null} → legacy BoardEntity row path.
+     */
+    private List<Board> logBackedPagesLocked(String notebookId, String sheetId) {
+        InkSheetStore.OpenSheet sheet = sheetStore.get(sheetId);
+        if (sheet != null && sheet.ready) {
+            return projectLocked(notebookId, sheet.paper);
+        }
+        if (sheetStore.isLogBacked(sheetId)) {
+            return new ArrayList<>();
+        }
+        return null;
     }
 
     @Override
@@ -900,7 +908,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return found;
         }
         for (NotebookInfo info : notebooks()) {
-            found = placeIn(info.id, pageId);
+            found = placeIn(info.id(), pageId);
             if (found != null) {
                 return found;
             }

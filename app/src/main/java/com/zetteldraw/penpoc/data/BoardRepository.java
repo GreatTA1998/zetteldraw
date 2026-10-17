@@ -152,42 +152,15 @@ public interface BoardRepository {
 
     void removeRemoteChangeListener(Runnable listener);
 
-    final class NotebookInfo {
-        public final String id;
-        public final String title;
-        /** Null when this notebook is top-level. */
-        public final String parentId;
-
-        public NotebookInfo(String id, String title, String parentId) {
-            this.id = id;
-            this.title = title;
-            this.parentId = parentId;
-        }
+    /** Null {@code parentId} when this notebook is top-level. */
+    record NotebookInfo(String id, String title, String parentId) {
     }
 
     /** One stored link. The label is resolved when the page is shown, not stored here. */
-    final class PageLink {
-        public final String id;
-        public final String sourceId;
-        public final String targetId;
-
-        public PageLink(String id, String sourceId, String targetId) {
-            this.id = id;
-            this.sourceId = sourceId;
-            this.targetId = targetId;
-        }
+    record PageLink(String id, String sourceId, String targetId) {
     }
 
     /** A page's place in its notebook. {@code notebookId} null is the Scratchpad. */
-    final class PagePlace {
-        public final String notebookId;
-        public final int index;
-        public final int count;
-
-        public PagePlace(String notebookId, int index, int count) {
-            this.notebookId = notebookId;
-            this.index = index;
-            this.count = count;
-        }
+    record PagePlace(String notebookId, int index, int count) {
     }
 }

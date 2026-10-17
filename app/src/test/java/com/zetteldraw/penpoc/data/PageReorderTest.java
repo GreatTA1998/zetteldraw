@@ -47,7 +47,7 @@ public class PageReorderTest {
     public void setUp() throws Exception {
         device = new Device("a", tmp.newFolder("a"), 2_000_000L);
         repo = device.repo;
-        notebook = repo.createNotebook("reorder-book").id;
+        notebook = repo.createNotebook("reorder-book").id();
         repo.ensureSheet(notebook, PAGE, PAGE, 0L);
     }
 
@@ -87,7 +87,7 @@ public class PageReorderTest {
 
     @Test
     public void placePageBeforeMovesAcrossNotebooksAndKeepsId() {
-        String other = repo.createNotebook("other").id;
+        String other = repo.createNotebook("other").id();
         repo.ensureSheet(other, PAGE, PAGE, 0L);
         Board first = inkNearBottom(other, "stay");
         Board second = inkNearBottom(other, "anchor");
@@ -125,7 +125,7 @@ public class PageReorderTest {
 
     @Test
     public void densePlacePageBeforeKeepsEveryStroke() throws Exception {
-        String other = repo.createNotebook("dense-dest").id;
+        String other = repo.createNotebook("dense-dest").id();
         repo.ensureSheet(other, PAGE, PAGE, 0L);
         Board anchor = inkNearBottom(other, "anchor");
         Board blank = repo.pages(notebook).get(0);

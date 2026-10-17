@@ -54,13 +54,13 @@ public class PageLinksTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "dense");
-        int height = repo.pages(dense.id).get(0).slicePx;
+        int height = repo.pages(dense.id()).get(0).slicePx;
         assertTrue(height > 40);
-        List<Board> pages = repo.pages(dense.id);
+        List<Board> pages = repo.pages(dense.id());
         pages.get(0).paper.appendStroke(TestStrokes.stroke(3f, 39f * height + 10f), pages.get(0).id);
         repo.saveInk(pages.get(0));
         openNotebook(root, "dense");
-        assertEquals(41, repo.pages(dense.id).size());
+        assertEquals(41, repo.pages(dense.id()).size());
         // Return restores the left-behind scroll (page 1); move to the inked page so the
         // source is also the front page and the banner stays "Linking …".
         pageScroller(root).scrollTo(0, 39 * height);
@@ -70,12 +70,12 @@ public class PageLinksTest {
         // Logs on disk, sheets dropped. The old press replayed each of them once and cached the
         // sheet, so the first press froze and the tenth did not.
         RoomBoardRepository room = (RoomBoardRepository) repo;
-        room.ensureSheet(otherA.id, height, height, 1L);
-        room.ensureSheet(otherB.id, height, height, 1L);
-        ink(repo, otherA.id, 10f);
-        ink(repo, otherB.id, 30f * height + 10f);
-        room.invalidateOpenSheet(otherA.id);
-        room.invalidateOpenSheet(otherB.id);
+        room.ensureSheet(otherA.id(), height, height, 1L);
+        room.ensureSheet(otherB.id(), height, height, 1L);
+        ink(repo, otherA.id(), 10f);
+        ink(repo, otherB.id(), 30f * height + 10f);
+        room.invalidateOpenSheet(otherA.id());
+        room.invalidateOpenSheet(otherB.id());
 
         TextView control = textIn((View) find(root, "40/41").getParent(), "Link");
         assertNotNull(control);
@@ -136,8 +136,8 @@ public class PageLinksTest {
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "frombook");
         openNotebook(root, "tobook");
-        ink(repo, from.id, 10f);
-        ink(repo, to.id, 10f);
+        ink(repo, from.id(), 10f);
+        ink(repo, to.id(), 10f);
         openNotebook(root, "frombook");
         clickOnPage(root, "1/2", "Link");
         openNotebook(root, "tobook");
@@ -208,8 +208,8 @@ public class PageLinksTest {
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "frombook");
         openNotebook(root, "tobook");
-        ink(repo, from.id, 10f);
-        ink(repo, to.id, 10f);
+        ink(repo, from.id(), 10f);
+        ink(repo, to.id(), 10f);
         openNotebook(root, "frombook");
 
         clickOnPage(root, "1/2", "Link");
@@ -230,10 +230,10 @@ public class PageLinksTest {
         assertTrue(confirm.isEnabled());
         click(root, "Confirm");
 
-        String sourceId = repo.pages(from.id).get(0).id;
-        String targetId = repo.pages(to.id).get(0).id;
+        String sourceId = repo.pages(from.id()).get(0).id;
+        String targetId = repo.pages(to.id()).get(0).id;
         assertEquals(1, repo.linksTouching(sourceId).size());
-        assertEquals(targetId, repo.linksTouching(sourceId).get(0).targetId);
+        assertEquals(targetId, repo.linksTouching(sourceId).get(0).targetId());
         assertNotNull(find(root, "← frombook 1/2"));
         relayout(root);
         assertNotNull("the arrow line is a hole in the pen reader",
@@ -257,7 +257,7 @@ public class PageLinksTest {
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "frombook");
         openNotebook(root, "tobook");
-        ink(repo, from.id, 10f);
+        ink(repo, from.id(), 10f);
         openNotebook(root, "frombook");
 
         clickOnPage(root, "1/2", "Link");
@@ -288,8 +288,8 @@ public class PageLinksTest {
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "frombook");
         openNotebook(root, "tobook");
-        ink(repo, from.id, 10f);
-        ink(repo, to.id, 10f);
+        ink(repo, from.id(), 10f);
+        ink(repo, to.id(), 10f);
         openNotebook(root, "frombook");
         clickOnPage(root, "1/2", "Link");
         openNotebook(root, "tobook");
@@ -298,8 +298,8 @@ public class PageLinksTest {
 
         assertNull(find(root, "Linking frombook 1"));
         assertNull(find(root, "Confirm"));
-        assertTrue(repo.linksTouching(repo.pages(from.id).get(0).id).isEmpty());
-        assertTrue(repo.linksTouching(repo.pages(to.id).get(0).id).isEmpty());
+        assertTrue(repo.linksTouching(repo.pages(from.id()).get(0).id).isEmpty());
+        assertTrue(repo.linksTouching(repo.pages(to.id()).get(0).id).isEmpty());
 
         controller.pause().stop().destroy();
     }
@@ -315,10 +315,10 @@ public class PageLinksTest {
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "frombook");
         openNotebook(root, "tobook");
-        int height = repo.pages(to.id).get(0).slicePx;
-        ink(repo, from.id, 10f);
-        ink(repo, to.id, height + 10f);
-        assertEquals(3, repo.pages(to.id).size());
+        int height = repo.pages(to.id()).get(0).slicePx;
+        ink(repo, from.id(), 10f);
+        ink(repo, to.id(), height + 10f);
+        assertEquals(3, repo.pages(to.id()).size());
         openNotebook(root, "frombook");
         clickOnPage(root, "1/2", "Link");
         openNotebook(root, "tobook");
@@ -328,7 +328,7 @@ public class PageLinksTest {
         assertNotNull(find(root, "Linking frombook 1 to tobook 2"));
         click(root, "Confirm");
 
-        String above = repo.pages(to.id).get(0).id;
+        String above = repo.pages(to.id()).get(0).id;
         repo.deletePage(above);
         openNotebook(root, "frombook");
         assertNotNull(find(root, "→ tobook 1/2"));
@@ -348,10 +348,10 @@ public class PageLinksTest {
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "frombook");
         openNotebook(root, "tobook");
-        ink(repo, from.id, 10f);
-        ink(repo, to.id, 10f);
-        String sourceId = repo.pages(from.id).get(0).id;
-        String targetId = repo.pages(to.id).get(0).id;
+        ink(repo, from.id(), 10f);
+        ink(repo, to.id(), 10f);
+        String sourceId = repo.pages(from.id()).get(0).id;
+        String targetId = repo.pages(to.id()).get(0).id;
         repo.createLink(sourceId, targetId);
         openNotebook(root, "frombook");
         assertNotNull(find(root, "→ tobook 1/2"));
@@ -363,8 +363,8 @@ public class PageLinksTest {
         openNotebook(root, "tobook");
         assertNull(find(root, "← frombook 1/2"));
 
-        ink(repo, from.id, 10f);
-        sourceId = repo.pages(from.id).get(0).id;
+        ink(repo, from.id(), 10f);
+        sourceId = repo.pages(from.id()).get(0).id;
         repo.createLink(sourceId, targetId);
         openNotebook(root, "tobook");
         assertNotNull(find(root, "← frombook 1/2"));
@@ -383,7 +383,7 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
@@ -391,11 +391,11 @@ public class PageLinksTest {
         openNotebook(root, "frombook");
         click(root, "shelf");
         openNotebook(root, "chapter");
-        int height = repo.pages(chapter.id).get(0).slicePx;
-        ink(repo, from.id, 10f);
-        ink(repo, chapter.id, 2f * height + 10f);
-        assertEquals(4, repo.pages(chapter.id).size());
-        assertEquals(2, repo.pages(chapter.id).get(0).paper.lastInkedSlice());
+        int height = repo.pages(chapter.id()).get(0).slicePx;
+        ink(repo, from.id(), 10f);
+        ink(repo, chapter.id(), 2f * height + 10f);
+        assertEquals(4, repo.pages(chapter.id()).size());
+        assertEquals(2, repo.pages(chapter.id()).get(0).paper.lastInkedSlice());
 
         openNotebook(root, "frombook");
         clickOnPage(root, "1/2", "Link");

@@ -59,7 +59,7 @@ public class PageChromeOpticalTest {
         idle();
         click(root, "chrome");
         idleForPaint();
-        ink(repo, book.id, 40f);
+        ink(repo, book.id(), 40f);
         click(root, "chrome");
         idleForPaint();
         relayout(root);

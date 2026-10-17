@@ -503,7 +503,7 @@ public class ToolSwitchTest {
         page.strokes.add(TestStrokes.stroke(200f, 200f));
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("stay-lasso");
-        repo.movePageToNotebook(page.id, notebook.id);
+        repo.movePageToNotebook(page.id, notebook.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();

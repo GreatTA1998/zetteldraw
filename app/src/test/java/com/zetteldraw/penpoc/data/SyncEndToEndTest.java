@@ -72,31 +72,31 @@ public class SyncEndToEndTest {
         String title = "e2e " + UUID.randomUUID().toString().substring(0, 8);
         BoardRepository.NotebookInfo notebook = a.repo.createNotebook(title);
         a.tick();
-        a.repo.movePageToNotebook(page.id, notebook.id);
+        a.repo.movePageToNotebook(page.id, notebook.id());
         sync(a);
         assertEquals(0, a.repo.outboxSize());
 
         // B: fresh install pulls the notebook and the page with its ink.
         sync(b);
-        assertEquals(title, titleOn(b, notebook.id));
-        List<Board> onB = b.repo.notebookPages(notebook.id);
+        assertEquals(title, titleOn(b, notebook.id()));
+        List<Board> onB = b.repo.notebookPages(notebook.id());
         assertEquals("the page plus the notebook's trailing blank", 2, onB.size());
         assertEquals(page.id, onB.get(0).id);
         TestInk.assertSameInk(page.strokes, onB.get(0).strokes);
 
         // B renames; A sees it.
         b.tick();
-        b.repo.renameNotebook(notebook.id, title + " renamed");
+        b.repo.renameNotebook(notebook.id(), title + " renamed");
         sync(b);
         sync(a);
-        assertEquals(title + " renamed", titleOn(a, notebook.id));
+        assertEquals(title + " renamed", titleOn(a, notebook.id()));
 
         // A deletes the notebook; on B it disappears and the page is back in the scratchpad.
         a.tick();
-        a.repo.deleteNotebook(notebook.id);
+        a.repo.deleteNotebook(notebook.id());
         sync(a);
         sync(b);
-        assertNull(titleOn(b, notebook.id));
+        assertNull(titleOn(b, notebook.id()));
         Board back = find(b.repo.scratchpadPages(), page.id);
         assertNotNull("page survives the notebook delete", back);
         TestInk.assertSameInk(page.strokes, back.strokes);
@@ -146,8 +146,8 @@ public class SyncEndToEndTest {
 
     private static String titleOn(Device d, String id) {
         for (BoardRepository.NotebookInfo n : d.repo.notebooks()) {
-            if (n.id.equals(id)) {
-                return n.title;
+            if (n.id().equals(id)) {
+                return n.title();
             }
         }
         return null;

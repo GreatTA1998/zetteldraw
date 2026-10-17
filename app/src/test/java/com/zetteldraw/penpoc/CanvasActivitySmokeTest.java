@@ -86,7 +86,7 @@ public class CanvasActivitySmokeTest {
         assertEquals("sketches", name.getText().toString());
         name.setText("drawings");
         click(root, "Save");
-        assertEquals("drawings", repo.notebooks().get(4).title);
+        assertEquals("drawings", repo.notebooks().get(4).title());
         assertNotNull(find(root, "drawings"));
 
         longPress(root, "drawings");
@@ -351,7 +351,7 @@ public class CanvasActivitySmokeTest {
         idle();
         BoardRepository.NotebookInfo fresh = null;
         for (BoardRepository.NotebookInfo each : repo.notebooks()) {
-            if ("fresh".equals(each.title)) {
+            if ("fresh".equals(each.title())) {
                 fresh = each;
             }
         }
@@ -361,8 +361,8 @@ public class CanvasActivitySmokeTest {
         String movedSecond = repo.scratchpadPages().get(0).id;
         clickFirstEnabled(root, "Move");
         clickLast(root, "fresh");
-        assertEquals(2, repo.notebookPages(fresh.id).size());
-        assertEquals(movedSecond, repo.notebookPages(fresh.id).get(0).id);
+        assertEquals(2, repo.notebookPages(fresh.id()).size());
+        assertEquals(movedSecond, repo.notebookPages(fresh.id()).get(0).id);
         assertEquals(1, repo.scratchpadPages().size());
         assertTrue(repo.scratchpadPages().get(0).isBlank());
 
@@ -378,7 +378,7 @@ public class CanvasActivitySmokeTest {
         page.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(500f, 700f));
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("lasso");
-        repo.movePageToNotebook(page.id, notebook.id);
+        repo.movePageToNotebook(page.id, notebook.id());
         InkRenderer.InkStroke original = page.strokes.get(0);
         InkRenderer.InkStroke other = page.strokes.get(1);
 
@@ -457,7 +457,7 @@ public class CanvasActivitySmokeTest {
         assertTrue(redo.isEnabled());
         assertEquals("undo saves through the repository",
                 original.points.get(0).y,
-                repo.notebookPages(notebook.id).get(0).paper.stroke(original.id).points.get(0).y, 0.001f);
+                repo.notebookPages(notebook.id()).get(0).paper.stroke(original.id).points.get(0).y, 0.001f);
         clickDesc(root, "Redo");
         assertEquals(original.points.get(0).x + 100f, page.paper.stroke(original.id).points.get(0).x, 0.001f);
         clickDesc(root, "Undo");
@@ -485,7 +485,7 @@ public class CanvasActivitySmokeTest {
         page.strokes.add(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, 200f));
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("longpress-paste");
-        repo.movePageToNotebook(page.id, notebook.id);
+        repo.movePageToNotebook(page.id, notebook.id());
         InkRenderer.InkStroke original = page.strokes.get(0);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();

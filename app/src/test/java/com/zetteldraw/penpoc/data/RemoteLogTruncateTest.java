@@ -251,7 +251,7 @@ public class RemoteLogTruncateTest {
         for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
             Thread.sleep(20);
         }
-        String otherId = repo.createNotebook("safe-notes").id;
+        String otherId = repo.createNotebook("safe-notes").id();
         assertTrue(repo.ensureSheet(otherId, PAGE, PAGE, 0L));
         Board otherBlank = repo.pages(otherId).get(0);
         for (int i = 0; i < 5; i++) {

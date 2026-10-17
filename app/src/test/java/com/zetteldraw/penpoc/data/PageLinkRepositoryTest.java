@@ -46,34 +46,34 @@ public class PageLinkRepositoryTest {
     public void samePageAndDuplicateAreRejectedAndDeletingEitherPageRemovesTheLink() {
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
         BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
-        repo.ensureSheet(from.id, 400, 800, 1L);
-        repo.ensureSheet(to.id, 400, 800, 1L);
-        Board source = repo.pages(from.id).get(0);
+        repo.ensureSheet(from.id(), 400, 800, 1L);
+        repo.ensureSheet(to.id(), 400, 800, 1L);
+        Board source = repo.pages(from.id()).get(0);
         source.paper.appendStroke(TestStrokes.stroke(1f, 10f), source.id);
         repo.saveInk(source);
-        Board target = repo.pages(to.id).get(0);
+        Board target = repo.pages(to.id()).get(0);
         target.paper.appendStroke(TestStrokes.stroke(1f, 10f), target.id);
         repo.saveInk(target);
 
         assertNull(repo.createLink(source.id, source.id));
         BoardRepository.PageLink link = repo.createLink(source.id, target.id);
-        assertEquals(source.id, link.sourceId);
-        assertEquals(target.id, link.targetId);
+        assertEquals(source.id, link.sourceId());
+        assertEquals(target.id, link.targetId());
         assertNull("a live pair is stored once", repo.createLink(source.id, target.id));
         assertEquals(1, repo.linksTouching(source.id).size());
-        assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.LINK, link.id).op);
+        assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.LINK, link.id()).op);
 
         repo.deletePage(source.id);
         assertTrue(repo.linksTouching(target.id).isEmpty());
-        assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.LINK, link.id).op);
+        assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.LINK, link.id()).op);
 
-        Board sourceAgain = repo.pages(from.id).get(repo.pages(from.id).size() - 1);
+        Board sourceAgain = repo.pages(from.id()).get(repo.pages(from.id()).size() - 1);
         sourceAgain.paper.appendStroke(TestStrokes.stroke(2f, 10f), sourceAgain.id);
         repo.saveInk(sourceAgain);
         BoardRepository.PageLink second = repo.createLink(sourceAgain.id, target.id);
         repo.deletePage(target.id);
         assertTrue(repo.linksTouching(sourceAgain.id).isEmpty());
-        assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.LINK, second.id).op);
+        assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.LINK, second.id()).op);
     }
 
     @Test
@@ -91,7 +91,7 @@ public class PageLinkRepositoryTest {
         page.links.add(remote);
         page.cursor = 9L;
         repo.applyPull(page);
-        assertEquals(remote.id, repo.linksTouching(source).get(0).id);
+        assertEquals(remote.id, repo.linksTouching(source).get(0).id());
 
         PageLinkEntity tombstone = remote.copy();
         tombstone.deletedAt = 6L;

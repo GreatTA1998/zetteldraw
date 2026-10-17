@@ -53,13 +53,13 @@ public class PageMoveUiTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "book");
-        int height = repo.pages(book.id).get(0).slicePx;
-        ink(repo, book.id, 10f);
-        ink(repo, book.id, height + 10f);
-        ink(repo, book.id, 2f * height + 10f);
-        ink(repo, book.id, 3f * height + 10f);
+        int height = repo.pages(book.id()).get(0).slicePx;
+        ink(repo, book.id(), 10f);
+        ink(repo, book.id(), height + 10f);
+        ink(repo, book.id(), 2f * height + 10f);
+        ink(repo, book.id(), 3f * height + 10f);
         openNotebook(root, "book");
-        List<Board> before = repo.pages(book.id);
+        List<Board> before = repo.pages(book.id());
         assertEquals(5, before.size());
         String id1 = before.get(0).id;
         String id2 = before.get(1).id;
@@ -87,7 +87,7 @@ public class PageMoveUiTest {
         idleForPaint();
         relayout(root);
 
-        List<Board> after = repo.pages(book.id);
+        List<Board> after = repo.pages(book.id());
         assertEquals(id1, after.get(0).id);
         assertEquals(id3, after.get(1).id);
         assertEquals(id2, after.get(2).id);
@@ -108,12 +108,12 @@ public class PageMoveUiTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "book");
-        int height = repo.pages(book.id).get(0).slicePx;
-        ink(repo, book.id, 10f);
-        ink(repo, book.id, height + 10f);
+        int height = repo.pages(book.id()).get(0).slicePx;
+        ink(repo, book.id(), 10f);
+        ink(repo, book.id(), height + 10f);
         openNotebook(root, "book");
-        String first = repo.pages(book.id).get(0).id;
-        String second = repo.pages(book.id).get(1).id;
+        String first = repo.pages(book.id()).get(0).id;
+        String second = repo.pages(book.id()).get(1).id;
 
         View scroller = pageScroller(root);
         scroller.scrollTo(0, 0);
@@ -126,8 +126,8 @@ public class PageMoveUiTest {
         assertFalse(confirm.isEnabled());
         click(root, "Cancel");
         assertNull(find(root, "Reordering book 1"));
-        assertEquals(first, repo.pages(book.id).get(0).id);
-        assertEquals(second, repo.pages(book.id).get(1).id);
+        assertEquals(first, repo.pages(book.id()).get(0).id);
+        assertEquals(second, repo.pages(book.id()).get(1).id);
 
         controller.pause().stop().destroy();
     }
@@ -142,9 +142,9 @@ public class PageMoveUiTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "book");
-        ink(repo, book.id, 10f);
+        ink(repo, book.id(), 10f);
         openNotebook(root, "book");
-        String source = repo.pages(book.id).get(0).id;
+        String source = repo.pages(book.id()).get(0).id;
 
         clickOnPage(root, "1/2", "Move");
         assertNull("Move is menu, not snackbar", find(root, "Reordering book 1"));
@@ -153,9 +153,9 @@ public class PageMoveUiTest {
         assertTrue(last(root, "other").performClick());
         idleForPaint();
 
-        assertEquals(1, repo.pages(book.id).size());
-        assertTrue(repo.pages(book.id).get(0).isBlank());
-        List<Board> dest = repo.pages(other.id);
+        assertEquals(1, repo.pages(book.id()).size());
+        assertTrue(repo.pages(book.id()).get(0).isBlank());
+        List<Board> dest = repo.pages(other.id());
         assertEquals(source, dest.get(0).id);
         assertTrue(dest.get(dest.size() - 1).isBlank());
 
@@ -173,24 +173,24 @@ public class PageMoveUiTest {
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
         BoardRepository.NotebookInfo top = repo.createNotebook("top-level");
         // Install once so the dest is log-backed, then drop Ready (Scratchpad-only session).
-        repo.ensureSheet(top.id, 800, 800, 0L);
-        ((com.zetteldraw.penpoc.data.RoomBoardRepository) repo).invalidateOpenSheet(top.id);
-        assertTrue(repo.pages(top.id).isEmpty());
+        repo.ensureSheet(top.id(), 800, 800, 0L);
+        ((com.zetteldraw.penpoc.data.RoomBoardRepository) repo).invalidateOpenSheet(top.id());
+        assertTrue(repo.pages(top.id()).isEmpty());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "book");
-        ink(repo, book.id, 10f);
+        ink(repo, book.id(), 10f);
         openNotebook(root, "book");
-        String source = repo.pages(book.id).get(0).id;
+        String source = repo.pages(book.id()).get(0).id;
 
         clickOnPage(root, "1/2", "Move");
         assertTrue(last(root, "top-level").performClick());
         idleForPaint();
 
         assertTrue("source must leave book",
-                repo.pages(book.id).stream().noneMatch(b -> source.equals(b.id)));
-        List<Board> dest = repo.pages(top.id);
+                repo.pages(book.id()).stream().noneMatch(b -> source.equals(b.id)));
+        List<Board> dest = repo.pages(top.id());
         assertEquals(source, dest.get(0).id);
         assertTrue(dest.get(dest.size() - 1).isBlank());
 
@@ -206,7 +206,7 @@ public class PageMoveUiTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "book");
-        ink(repo, book.id, 10f);
+        ink(repo, book.id(), 10f);
         openNotebook(root, "book");
 
         View area = (View) pageScroller(root).getParent();

@@ -50,7 +50,7 @@ public class MovePageTearTest {
     public void setUp() throws Exception {
         device = new Device("a", tmp.newFolder("a"), 2_000_000L);
         repo = device.repo;
-        doodles = repo.createNotebook("doodles").id;
+        doodles = repo.createNotebook("doodles").id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         repo.ensureSheet(doodles, PAGE, PAGE, 0L);
     }

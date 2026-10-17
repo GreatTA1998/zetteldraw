@@ -56,8 +56,8 @@ public class RoomBoardRepositoryTest {
         List<BoardRepository.NotebookInfo> notebooks = repo.notebooks();
         assertEquals(Notebook.values().length, notebooks.size());
         for (int i = 0; i < notebooks.size(); i++) {
-            assertEquals(Notebook.values()[i].uuid, notebooks.get(i).id);
-            assertEquals(Notebook.values()[i].label, notebooks.get(i).title);
+            assertEquals(Notebook.values()[i].uuid, notebooks.get(i).id());
+            assertEquals(Notebook.values()[i].label, notebooks.get(i).title());
         }
         assertEquals(4, device.db.dao().outboxCount());
         device.reopen();
@@ -208,7 +208,7 @@ public class RoomBoardRepositoryTest {
     @Test
     public void notebookGrowsAPageAfterDrawingOnItsLastBlank() {
         BoardRepository.NotebookInfo notebook = repo.createNotebook("grows");
-        List<Board> pages = repo.pages(notebook.id);
+        List<Board> pages = repo.pages(notebook.id());
         assertEquals("an empty notebook shows one blank page", 1, pages.size());
         Board first = pages.get(0);
         assertTrue(first.isBlank());
@@ -218,9 +218,9 @@ public class RoomBoardRepositoryTest {
         device.tick();
         repo.saveInk(first);
         BoardEntity row = device.db.dao().board(first.id);
-        assertEquals(notebook.id, row.notebookId);
+        assertEquals(notebook.id(), row.notebookId);
         assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.BOARD, first.id).op);
-        pages = repo.pages(notebook.id);
+        pages = repo.pages(notebook.id());
         assertEquals(2, pages.size());
         assertSame(first, pages.get(0));
         assertTrue(pages.get(1).isBlank());
@@ -232,11 +232,11 @@ public class RoomBoardRepositoryTest {
         repo.saveInk(second);
         assertTrue("next fractional position in that notebook",
                 device.db.dao().board(second.id).position.compareTo(row.position) > 0);
-        assertEquals(ids(first, second), ids(stored(repo.pages(notebook.id))));
-        assertEquals(3, repo.pages(notebook.id).size());
+        assertEquals(ids(first, second), ids(stored(repo.pages(notebook.id()))));
+        assertEquals(3, repo.pages(notebook.id()).size());
 
         device.reopen();
-        List<Board> reopened = device.repo.pages(notebook.id);
+        List<Board> reopened = device.repo.pages(notebook.id());
         assertEquals(ids(first, second), ids(stored(reopened)));
         assertTrue(reopened.get(2).isBlank());
     }
@@ -244,9 +244,9 @@ public class RoomBoardRepositoryTest {
     @Test
     public void deletedOrUnknownNotebookHasNoPages() {
         BoardRepository.NotebookInfo notebook = repo.createNotebook("brief");
-        assertEquals(1, repo.pages(notebook.id).size());
-        repo.deleteNotebook(notebook.id);
-        assertTrue(repo.pages(notebook.id).isEmpty());
+        assertEquals(1, repo.pages(notebook.id()).size());
+        repo.deleteNotebook(notebook.id());
+        assertTrue(repo.pages(notebook.id()).isEmpty());
         assertTrue(repo.pages("no-such-notebook").isEmpty());
     }
 

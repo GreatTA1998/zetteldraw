@@ -55,9 +55,9 @@ public class NestedNotebooksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
-        BoardRepository.NotebookInfo notes = repo.createNotebook("notes", shelf.id);
-        repo.createNotebook("scene", chapter.id);
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
+        BoardRepository.NotebookInfo notes = repo.createNotebook("notes", shelf.id());
+        repo.createNotebook("scene", chapter.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -113,7 +113,7 @@ public class NestedNotebooksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo dating = repo.createNotebook("dating");
-        BoardRepository.NotebookInfo stacey = repo.createNotebook("stacey", dating.id);
+        BoardRepository.NotebookInfo stacey = repo.createNotebook("stacey", dating.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -121,20 +121,20 @@ public class NestedNotebooksTest {
         click(root, "dating");
         idleForPaint();
         relayout(root);
-        assertNotNull(find(root, "1/" + repo.pages(dating.id).size()));
-        repo.pages(dating.id).get(0).paper.appendStroke(TestStrokes.stroke(11f, 20f));
-        repo.saveInk(repo.pages(dating.id).get(0));
+        assertNotNull(find(root, "1/" + repo.pages(dating.id()).size()));
+        repo.pages(dating.id()).get(0).paper.appendStroke(TestStrokes.stroke(11f, 20f));
+        repo.saveInk(repo.pages(dating.id()).get(0));
 
         click(root, "stacey");
         idleForPaint();
         relayout(root);
-        assertNotNull("Stacey pages are on screen after switch", find(root, "1/" + repo.pages(stacey.id).size()));
+        assertNotNull("Stacey pages are on screen after switch", find(root, "1/" + repo.pages(stacey.id()).size()));
         assertTrue(((View) find(root, "stacey").getParent()).isSelected());
         assertFalse("Dating must not stay underlined while Stacey is open",
                 ((View) find(root, "dating").getParent()).isSelected());
-        repo.pages(stacey.id).get(0).paper.appendStroke(TestStrokes.stroke(99f, 20f));
-        repo.saveInk(repo.pages(stacey.id).get(0));
-        assertNotEquals(NotebookPaper.sheetId(dating.id), NotebookPaper.sheetId(stacey.id));
+        repo.pages(stacey.id()).get(0).paper.appendStroke(TestStrokes.stroke(99f, 20f));
+        repo.saveInk(repo.pages(stacey.id()).get(0));
+        assertNotEquals(NotebookPaper.sheetId(dating.id()), NotebookPaper.sheetId(stacey.id()));
 
         click(root, "dating");
         idleForPaint();
@@ -142,15 +142,15 @@ public class NestedNotebooksTest {
         assertTrue(((View) find(root, "dating").getParent()).isSelected());
         assertFalse("Stacey must not stay underlined while Dating is open",
                 ((View) find(root, "stacey").getParent()).isSelected());
-        assertNotNull(find(root, "1/" + repo.pages(dating.id).size()));
+        assertNotNull(find(root, "1/" + repo.pages(dating.id()).size()));
 
         click(root, "stacey");
         idleForPaint();
         relayout(root);
         assertTrue(((View) find(root, "stacey").getParent()).isSelected());
         assertFalse(((View) find(root, "dating").getParent()).isSelected());
-        assertEquals(99f, repo.pages(stacey.id).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
-        assertEquals(11f, repo.pages(dating.id).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
+        assertEquals(99f, repo.pages(stacey.id()).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
+        assertEquals(11f, repo.pages(dating.id()).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
 
         controller.pause().stop().destroy();
     }
@@ -160,7 +160,7 @@ public class NestedNotebooksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         CanvasActivity activity = controller.get();
@@ -192,7 +192,7 @@ public class NestedNotebooksTest {
         // Overlay menu item is the last match (tab bars are earlier in the tree).
         assertTrue(last(root, "chapter").performClick());
         idle();
-        Board moved = repo.pages(chapter.id).get(0);
+        Board moved = repo.pages(chapter.id()).get(0);
         assertEquals(sourceId, moved.id);
         assertFalse(moved.isBlank());
         boolean found = false;
@@ -211,7 +211,7 @@ public class NestedNotebooksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("resume");
-        int height = seedLastInkedOnPageThree(app, repo, notebook.id);
+        int height = seedLastInkedOnPageThree(app, repo, notebook.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         CanvasActivity activity = controller.get();
@@ -226,7 +226,7 @@ public class NestedNotebooksTest {
         ink.onSurface(true);
         idleForPaint();
 
-        List<Board> pages = repo.pages(notebook.id);
+        List<Board> pages = repo.pages(notebook.id());
         assertEquals(4, pages.size());
         assertEquals(2, pages.get(0).paper.lastInkedSlice());
         View scroller = pageScroller(root);
@@ -253,7 +253,7 @@ public class NestedNotebooksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("resume");
-        int height = seedLastInkedOnPageThree(app, repo, notebook.id);
+        int height = seedLastInkedOnPageThree(app, repo, notebook.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -288,7 +288,7 @@ public class NestedNotebooksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("resume");
-        int height = seedLastInkedOnPageThree(app, repo, notebook.id);
+        int height = seedLastInkedOnPageThree(app, repo, notebook.id());
 
         ActivityController<CanvasActivity> first = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = first.get().getWindow().getDecorView();
@@ -341,7 +341,7 @@ public class NestedNotebooksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
-        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id);
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
         BoardRepository.NotebookInfo notes = repo.createNotebook("notes");
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
@@ -360,8 +360,8 @@ public class NestedNotebooksTest {
         assertTrue(last(root, "chapter").performClick());
         idle();
 
-        assertEquals(chapter.id, repo.notebooks().stream()
-                .filter(n -> n.id.equals(notes.id)).findFirst().get().parentId);
+        assertEquals(chapter.id(), repo.notebooks().stream()
+                .filter(n -> n.id().equals(notes.id())).findFirst().get().parentId());
 
         // shelf → chapter → notes; descendants omitted from the picker (child-bar
         // "chapter" may still show; nested "notes" is not a menu row).

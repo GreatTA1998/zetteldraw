@@ -49,7 +49,7 @@ public class PageMoveSafetyTest {
     public void setUp() throws Exception {
         device = new Device("a", tmp.newFolder("a"), 3_000_000L);
         repo = device.repo;
-        book = repo.createNotebook("safety-book").id;
+        book = repo.createNotebook("safety-book").id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
         repo.ensureSheet(book, PAGE, PAGE, 0L);
     }
@@ -122,7 +122,7 @@ public class PageMoveSafetyTest {
 
     @Test
     public void crossNotebookPlaceBeforeRemovesSourceOnlyAfterDestHasPage() {
-        String other = repo.createNotebook("dest").id;
+        String other = repo.createNotebook("dest").id();
         repo.ensureSheet(other, PAGE, PAGE, 0L);
         Board anchor = inkNearBottom(other, "anchor");
         Board source = inkNearBottom(null, "moved");
@@ -145,7 +145,7 @@ public class PageMoveSafetyTest {
 
     @Test
     public void crossNotebookPlaceOntoTrailingBlankKeepsLastSourcePageNeighbors() {
-        String other = repo.createNotebook("dest-blank").id;
+        String other = repo.createNotebook("dest-blank").id();
         repo.ensureSheet(other, PAGE, PAGE, 0L);
         inkNearBottom(other, "stay");
         Board first = inkNearBottom(null, "keep");
@@ -184,7 +184,7 @@ public class PageMoveSafetyTest {
 
     @Test
     public void staleSliceIndexStillMovesTheRequestedPageNotItsNeighbor() {
-        String other = repo.createNotebook("stale-dest").id;
+        String other = repo.createNotebook("stale-dest").id();
         repo.ensureSheet(other, PAGE, PAGE, 0L);
         Board anchor = inkNearBottom(other, "anchor");
 
