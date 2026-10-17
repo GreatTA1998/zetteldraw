@@ -2340,6 +2340,20 @@ public final class CanvasActivity extends Activity {
         box.addView(actions, actionsLp);
     }
 
+    /** End-aligned Close row that dismisses the overlay (Settings / launch log). */
+    private void addCloseActionsRow(LinearLayout box, int topMarginPx) {
+        Button close = tinyButton(getString(R.string.close), 15);
+        styleButton(close, true);
+        onTap(close, v -> dismissOverlay());
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        actions.addView(close, wrap());
+        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        actionsLp.topMargin = topMarginPx;
+        box.addView(actions, actionsLp);
+    }
+
     /** In-window Settings: Google Sign-In, sync toggle, privacy, version. */
     private void showSettings() {
         settingsGeneration++;
@@ -2510,16 +2524,7 @@ public final class CanvasActivity extends Activity {
                 getString(R.string.settings_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
                 12));
 
-        Button close = tinyButton(getString(R.string.close), 15);
-        styleButton(close, true);
-        onTap(close, v -> dismissOverlay());
-        LinearLayout actions = new LinearLayout(this);
-        actions.setGravity(Gravity.END);
-        actions.addView(close, wrap());
-        LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        actionsLp.topMargin = dp(8);
-        box.addView(actions, actionsLp);
+        addCloseActionsRow(box, dp(8));
 
         // Browser links last and clearly labeled so they are not mistaken for Prepare transfer.
         TextView linksHeader = panelText(getString(R.string.settings_links_section), 11);
@@ -2677,14 +2682,7 @@ public final class CanvasActivity extends Activity {
         scroll.addView(text);
         box.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, Math.round(root.getHeight() * 0.7f)));
-        Button close = tinyButton(getString(R.string.close), 15);
-        styleButton(close, true);
-        onTap(close, v -> dismissOverlay());
-        LinearLayout actions = new LinearLayout(this);
-        actions.setGravity(Gravity.END);
-        actions.addView(close, wrap());
-        box.addView(actions, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+        addCloseActionsRow(box, 0);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT);
         lp.gravity = Gravity.TOP;
