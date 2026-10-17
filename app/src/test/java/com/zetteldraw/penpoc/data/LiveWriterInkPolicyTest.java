@@ -103,6 +103,7 @@ public class LiveWriterInkPolicyTest {
 
     @Test
     public void livePushOnlyKeepsUnmigratedBoardResidue() throws Exception {
+        // Pull never adopts BOARD (live or catch-up); residue waits for Prepare.
         Board page = Board.blank();
         TestInk.draw(page, 10f);
         device.seedUnmigrated(page);
@@ -128,7 +129,7 @@ public class LiveWriterInkPolicyTest {
         repo.applyPull(pulled);
 
         BoardEntity after = device.db.dao().board(page.id);
-        assertEquals("live must not adopt remote BOARD over local .zdi", localHash, after.inkHash);
+        assertEquals("pull must not adopt remote BOARD over local .zdi", localHash, after.inkHash);
         assertEquals(local.rev, after.rev);
         TestInk.assertSameInk(page.strokes,
                 InkCodec.decode(new InkFileStore(device.inkDir()).read(page.id)));

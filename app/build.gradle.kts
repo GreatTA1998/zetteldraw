@@ -45,8 +45,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Tip v138: Documents index catalogs Ready .zdl — no BoardEntity .zdi paths.
-        versionCode = 138
-        versionName = "4.17"
+        versionCode = 139
+        versionName = "4.18"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

@@ -105,7 +105,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * orchestration still calls into it under {@link #lock}.
      */
     private final InkSheetStore sheetStore;
-    /** Notebook / link / legacy board meta LWW during pull (exception shelf). */
+    /** Notebook / link meta LWW during pull (exception shelf). */
     private final MetaPullApply metaPull;
     private int knownPageHeight;
     private int knownLegacyHeight;
@@ -158,21 +158,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         this.metaPull = new MetaPullApply(new MetaDeps());
     }
 
-    /** Bridge for {@link MetaPullApply} — Room/outbox/mirror/cache stay here. */
+    /** Bridge for {@link MetaPullApply} — Room/outbox stay here. */
     private final class MetaDeps implements MetaPullApply.Deps {
         @Override public ZettelDao dao() { return RoomBoardRepository.this.dao; }
-        @Override public InkFileStore ink() { return RoomBoardRepository.this.ink; }
         @Override public boolean pendingOutbox(String entity, String id) {
             return pendingLocked(entity, id);
-        }
-        @Override public void removeCachedBoard(String boardId) {
-            cache.remove(boardId);
-        }
-        @Override public boolean notebookLogBacked(String notebookId) {
-            return notebookLogBackedLocked(notebookId);
-        }
-        @Override public boolean allowRemoteInkAdopt() {
-            return RoomBoardRepository.this.allowRemoteInkAdopt();
         }
     }
 
@@ -535,8 +525,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
      * Ready wipe/delete only — paper slice tear (same spine as UI). Unmigrated /
      * paper-null ids refuse; open via {@link #ensureSheet} first so delete never
-     * BoardEntity-tombstones beside Ready. Remote BOARD tombstones stay in
-     * {@link MetaPullApply#applyRemoteBoard}.
+     * BoardEntity-tombstones beside Ready. Remote page deletes land via Ready
+     * {@code notebook_logs} pull (Hand-off requires Ready-cover).
      */
     private void mutateReadyPage(String boardId, boolean delete) {
         synchronized (lock) {
@@ -972,67 +962,30 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return sheetStore.localInkLogHash(sheetId);
     }
 
-    @Override
-    public String localBoardInkHash(String boardId) {
-        if (boardId == null) {
-            return "";
-        }
-        synchronized (lock) {
-            BoardEntity row = dao.board(boardId);
-            return row == null || row.inkHash == null ? "" : row.inkHash;
-        }
-    }
-
     /**
-     * Blobs are verified and staged (fsync'd) before the lock is taken; under
-     * the lock each applied board only renames its staged file. Log-backed
-     * notebooks skip board blob staging — Ready {@code .zdl} owns ink.
+     * Log blobs are verified and staged (fsync'd) before the lock is taken.
+     * Remote BOARD ink is ignored — Hand-off requires Ready-cover; catch-up
+     * restores via {@code notebook_logs} only.
      */
     @Override
     public void applyPull(PullPage page) throws IOException {
-        HashMap<String, MetaPullApply.Staged> staged = new HashMap<>();
         HashMap<String, InkSheetStore.StagedLog> stagedLogs = new HashMap<>();
-        try {
-            for (NotebookLogEntity remote : page.logs) {
-                byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink log");
-                if (bytes == null) {
-                    continue;
-                }
-                // Replay once before the lock so a torn log never becomes the notebook.
-                stagedLogs.put(remote.id, new InkSheetStore.StagedLog(bytes, NotebookPaper.replay(bytes)));
+        for (NotebookLogEntity remote : page.logs) {
+            byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink log");
+            if (bytes == null) {
+                continue;
             }
-            for (BoardEntity remote : page.boards) {
-                String sheetId = NotebookPaper.sheetId(remote.notebookId);
-                // Same-page logs install first under lock — do not stage doomed .zdi.
-                if (stagedLogs.containsKey(sheetId)) {
-                    continue;
-                }
-                synchronized (lock) {
-                    if (dao.notebookLog(sheetId) != null || ink.hasLog(sheetId)) {
-                        continue;
-                    }
-                }
-                byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink blob");
-                if (bytes == null) {
-                    continue;
-                }
-                staged.put(remote.id, new MetaPullApply.Staged(
-                        ink.stage(remote.id, "pull", bytes), bytes));
-            }
-            // Same Ready return as local deleteNotebook — before tombstone so
-            // pages() still sees the sheet. Ensure-fail with inked BoardEntity
-            // is logged; remote LWW tombstone still applies (no BoardEntity reseat).
-            for (NotebookEntity remote : page.notebooks) {
-                if (remoteNotebookDeleteWins(remote)) {
-                    returnReadyPagesToScratchpad(remote.id);
-                }
-            }
-            applyPullLocked(page, staged, stagedLogs);
-        } finally {
-            for (MetaPullApply.Staged s : staged.values()) {
-                ink.discard(s.file());
+            // Replay once before the lock so a torn log never becomes the notebook.
+            stagedLogs.put(remote.id, new InkSheetStore.StagedLog(bytes, NotebookPaper.replay(bytes)));
+        }
+        // Same Ready return as local deleteNotebook — before tombstone so
+        // pages() still sees the sheet.
+        for (NotebookEntity remote : page.notebooks) {
+            if (remoteNotebookDeleteWins(remote)) {
+                returnReadyPagesToScratchpad(remote.id);
             }
         }
+        applyPullLocked(page, stagedLogs);
         if (!page.isEmpty()) {
             boolean post;
             synchronized (refreshLock) {
@@ -1108,10 +1061,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         remoteListeners.remove(listener);
     }
 
-    private void applyPullLocked(PullPage page, Map<String, MetaPullApply.Staged> staged,
-                                 Map<String, InkSheetStore.StagedLog> stagedLogs) throws IOException {
+    private void applyPullLocked(PullPage page, Map<String, InkSheetStore.StagedLog> stagedLogs)
+            throws IOException {
         synchronized (lock) {
-            // Omitted-blob policy lives in MetaPullApply / InkSheetStore (hash match ⇒ keep local).
+            // Omitted-blob policy lives in InkSheetStore (hash match ⇒ keep local).
             ArrayList<Runnable> mirrorOps = new ArrayList<>();
             try {
                 db.runInTransaction(() -> {
@@ -1126,14 +1079,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                                 forgetDeletedNotebookUiLocked(remote.id);
                             }
                         }
-                        // Logs before boards: Ready .zdl SoT installs first so
-                        // MetaPullApply can no-op board ink on log-backed notebooks
-                        // in the same pull page (no transient .zdi dual).
+                        // Ready .zdl is the only remote ink SoT on catch-up / Hand-off.
                         for (NotebookLogEntity remote : page.logs) {
                             sheetStore.applyRemoteLogLocked(remote, stagedLogs, mirrorOps);
-                        }
-                        for (BoardEntity remote : page.boards) {
-                            metaPull.applyRemoteBoard(remote, staged);
                         }
                         for (PageLinkEntity remote : page.links) {
                             metaPull.applyRemoteLink(remote);
