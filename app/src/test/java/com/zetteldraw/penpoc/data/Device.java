@@ -5,9 +5,11 @@ import android.content.Context;
 import androidx.room.Room;
 import androidx.test.core.app.ApplicationProvider;
 
+import com.zetteldraw.penpoc.Board;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** One simulated install: its own database file, ink dir, mirror dir and clock. */
@@ -57,6 +59,16 @@ final class Device {
 
     boolean ensureReady(String notebookId) {
         return repo.ensureSheet(notebookId, PAGE, PAGE, 0L);
+    }
+
+    /**
+     * Importer-shaped unmigrated {@code .zdi} seed for migration / retire tests.
+     * Production writers are Ready-only; do not use for day-to-day ink.
+     */
+    void seedUnmigrated(Board page) throws IOException {
+        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
+        legacy.scratchpad.add(page);
+        repo.importLegacy(legacy);
     }
 
     File inkDir() {

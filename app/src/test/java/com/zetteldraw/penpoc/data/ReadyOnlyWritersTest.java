@@ -134,11 +134,13 @@ public class ReadyOnlyWritersTest {
     }
 
     @Test
-    public void persistBoardEntityInkStillSeedsUnmigratedConflictShelf() throws Exception {
-        // Unmigrated only — after ensureSheet, Ready retires .zdi (see BoardEntityInkRetireTest).
+    public void importLegacyStillWritesUnmigratedPageFilesForMigration() throws Exception {
+        // Importer residue only — after ensureSheet, Ready retires .zdi.
         Board page = Board.blank();
         TestInk.draw(page, 7f);
-        repo.persistBoardEntityInk(page);
+        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
+        legacy.scratchpad.add(page);
+        assertEquals(1, repo.importLegacy(legacy));
 
         assertTrue(new File(inkDir, page.id + ".zdi").exists());
         BoardEntity row = db.dao().board(page.id);

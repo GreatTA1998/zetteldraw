@@ -6,7 +6,7 @@ import static org.junit.Assert.assertTrue;
 import android.app.Application;
 
 import com.zetteldraw.penpoc.Board;
-import com.zetteldraw.penpoc.data.db.BoardEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
 
 import org.junit.After;
@@ -43,17 +43,20 @@ public class EnsureUnsyncedQueuedTest {
     }
 
     @Test
-    public void requeuesInkedRevZeroBoardMissingFromOutbox() throws Exception {
-        // Legacy board-row path: ensureUnsyncedQueued heals BoardEntity outbox gaps.
-        Board page = Board.blank();
+    public void requeuesInkedRevZeroLogMissingFromOutbox() throws Exception {
+        assertTrue(device.ensureReady());
+        Board page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 7f);
         device.tick();
-        repo.persistBoardEntityInk(page);
+        repo.saveInk(page);
+        for (int i = 0; i < 40 && repo.pendingWrites() > 0; i++) {
+            Thread.sleep(20);
+        }
         assertTrue(repo.outboxSize() > 0);
 
-        // Simulate a lost outbox row while the page stays local and never pushed.
-        device.db.dao().deleteOutbox(OutboxEntry.BOARD, page.id);
-        BoardEntity row = device.db.dao().board(page.id);
+        String sheetId = NotebookPaper.sheetId(null);
+        device.db.dao().deleteOutbox(OutboxEntry.LOG, sheetId);
+        NotebookLogEntity row = device.db.dao().notebookLog(sheetId);
         assertEquals(0, row.rev);
         assertTrue(row.inkHash != null);
 
@@ -61,7 +64,7 @@ public class EnsureUnsyncedQueuedTest {
         int added = repo.ensureUnsyncedQueued();
         assertTrue(added >= 1);
         assertEquals(before + added, repo.outboxSize());
-        assertTrue(device.db.dao().outbox(OutboxEntry.BOARD, page.id) != null);
+        assertTrue(device.db.dao().outbox(OutboxEntry.LOG, sheetId) != null);
     }
 
     @Test

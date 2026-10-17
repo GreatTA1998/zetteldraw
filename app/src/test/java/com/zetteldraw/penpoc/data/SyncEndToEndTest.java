@@ -9,7 +9,7 @@ import static org.junit.Assume.assumeTrue;
 import android.app.Application;
 
 import com.zetteldraw.penpoc.Board;
-import com.zetteldraw.penpoc.data.db.BoardEntity;
+import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
 import com.zetteldraw.penpoc.sync.SyncClient;
 import com.zetteldraw.penpoc.sync.SyncConfig;
@@ -31,6 +31,9 @@ import java.util.UUID;
  * Two simulated devices sync through the real server. Needs the
  * docker-compose stack: {@code WITH_ANDROID=1 server/scripts/integration.sh}
  * (or set ZD_SYNC_URL / ZD_SYNC_TOKEN yourself). Skipped otherwise.
+ *
+ * <p>Ready-only: ink via {@code saveInk} / {@code .zdl}; conflict shelf is the
+ * Ready log shelf (BoardEntity board shelf deleted).
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
@@ -64,22 +67,24 @@ public class SyncEndToEndTest {
 
     @Test
     public void notebooksPagesAndConflictsRoundTripBetweenTwoDevices() throws Exception {
-        // A: BoardEntity conflict shelf still needs a page-file seed (no Ready
-        // ensure — that would absorb the row into .zdl before the BoardEntity
-        // conflict half of this e2e). Production saveInk is Ready-only.
-        Board page = Board.blank();
+        assertTrue(a.ensureReady());
+        Board page = a.repo.scratchpadPages().get(0);
         TestInk.draw(page, 42f);
         a.tick();
-        a.repo.persistBoardEntityInk(page);
+        a.repo.saveInk(page);
+        drain(a);
         String title = "e2e " + UUID.randomUUID().toString().substring(0, 8);
         BoardRepository.NotebookInfo notebook = a.repo.createNotebook(title);
+        assertTrue(a.ensureReady(notebook.id()));
         a.tick();
-        a.repo.movePageToNotebook(page.id, notebook.id());
+        assertTrue(a.repo.movePageToNotebook(page.id, notebook.id()));
+        drain(a);
         sync(a);
         assertEquals(0, a.repo.outboxSize());
 
-        // B: fresh install pulls the notebook and the page with its ink.
+        // B: fresh install pulls the notebook log; ensure projects Ready pages.
         sync(b);
+        assertTrue(b.ensureReady(notebook.id()));
         assertEquals(title, titleOn(b, notebook.id()));
         List<Board> onB = b.repo.notebookPages(notebook.id());
         assertEquals("the page plus the notebook's trailing blank", 2, onB.size());
@@ -98,46 +103,61 @@ public class SyncEndToEndTest {
         a.repo.deleteNotebook(notebook.id());
         sync(a);
         sync(b);
+        assertTrue(b.ensureReady());
         assertNull(titleOn(b, notebook.id()));
         Board back = find(b.repo.scratchpadPages(), page.id);
         assertNotNull("page survives the notebook delete", back);
         TestInk.assertSameInk(page.strokes, back.strokes);
 
-        // Both edit the page offline; B's edit is newer and wins, A's ink is kept as a hidden copy.
+        // Both edit the Scratchpad log offline; B's edit is newer and wins, A's log is shelved.
+        assertTrue(a.ensureReady());
+        page = find(a.repo.scratchpadPages(), page.id);
+        assertNotNull(page);
         page.strokes.add(TestInk.stroke(100f, 100f, 6));
         a.tick();
-        a.repo.persistBoardEntityInk(page);
+        a.repo.saveInk(page);
+        drain(a);
         back.strokes.add(TestInk.stroke(300f, 300f, 6));
         b.tick();
-        b.repo.persistBoardEntityInk(back);
-        String aHash = a.db.dao().board(page.id).inkHash;
-        String bHash = b.db.dao().board(page.id).inkHash;
+        b.repo.saveInk(back);
+        drain(b);
+        String sheetId = NotebookPaper.sheetId(null);
+        String aHash = a.db.dao().notebookLog(sheetId).inkHash;
+        String bHash = b.db.dao().notebookLog(sheetId).inkHash;
 
         sync(a);
         sync(b);
         sync(a);
 
-        assertEquals(bHash, a.db.dao().board(page.id).inkHash);
-        assertEquals(bHash, b.db.dao().board(page.id).inkHash);
+        assertEquals(bHash, a.db.dao().notebookLog(sheetId).inkHash);
+        assertEquals(bHash, b.db.dao().notebookLog(sheetId).inkHash);
         TestInk.assertSameInk(back.strokes, find(a.repo.scratchpadPages(), page.id).strokes);
         for (Device d : new Device[]{a, b}) {
             boolean kept = false;
-            for (BoardEntity copy : d.db.dao().conflictCopies()) {
-                kept |= page.id.equals(copy.conflictOf) && aHash.equals(copy.inkHash);
+            for (NotebookLogEntity copy : d.db.dao().conflictLogCopies()) {
+                kept |= sheetId.equals(copy.conflictOf) && aHash.equals(copy.inkHash);
             }
-            assertTrue(d.name + " keeps A's losing ink as a conflict copy", kept);
+            assertTrue(d.name + " keeps A's losing log as a conflict copy", kept);
             assertEquals(0, d.repo.outboxSize());
         }
 
         // A deletes the page; B gets the tombstone and still ends its Scratchpad with a blank.
         a.tick();
         a.repo.deletePage(page.id);
+        drain(a);
         sync(a);
         sync(b);
-        assertNotNull(b.db.dao().board(page.id).deletedAt);
+        assertTrue(b.ensureReady());
         assertNull(find(b.repo.scratchpadPages(), page.id));
         List<Board> left = b.repo.scratchpadPages();
         assertTrue(left.get(left.size() - 1).isBlank());
+    }
+
+    private static void drain(Device d) throws Exception {
+        for (int i = 0; i < 40 && d.repo.pendingWrites() > 0; i++) {
+            Thread.sleep(20);
+        }
+        assertEquals(0, d.repo.pendingWrites());
     }
 
     private void sync(Device d) throws Exception {

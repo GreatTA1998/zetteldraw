@@ -55,8 +55,9 @@ import java.util.function.LongSupplier;
  *
  * <p>Ink saves are Ready-only write-behind: {@code page.paper != null} queues
  * {@link InkSheetStore#flushSheetOrFalse}. There is no BoardEntity {@code .zdi}
- * write-behind. Unmigrated page files feed {@link #migrationSourcesForSheet}
- * once; after Ready install {@link #retireBoardEntityInkLocked} clears them.
+ * write-behind or board conflict shelf. Unmigrated page files from
+ * {@link #importLegacy} feed {@link #migrationSourcesForSheet} once; after Ready
+ * install {@link #retireBoardEntityInkLocked} clears them.
  * {@link MetaPullApply} board LWW applies only while not log-backed.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
@@ -166,13 +167,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         @Override public InkFileStore ink() { return RoomBoardRepository.this.ink; }
         @Override public boolean pendingOutbox(String entity, String id) {
             return pendingLocked(entity, id);
-        }
-        @Override public boolean hasPendingInk(String boardId) {
-            // BoardEntity write-behind is gone; in-flight .zdi snapshots no longer exist.
-            return false;
-        }
-        @Override public void queueBoardUpsert(String boardId) {
-            queueLocked(OutboxEntry.BOARD, boardId, OutboxEntry.UPSERT);
         }
         @Override public void mirrorInk(String boardId, byte[] bytes) {
             RoomBoardRepository.this.mirrorInk(boardId, bytes);
@@ -288,56 +282,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return;
         }
         writer.execute(() -> sheetStore.flushSheetOrFalse(page.sheetId));
-    }
-
-    /**
-     * Synchronous BoardEntity {@code .zdi} persist for importer-style seeds and
-     * conflict-shelf tests. Not a production writer — {@link #saveInk} is Ready
-     * flush only.
-     */
-    void persistBoardEntityInk(Board page) throws IOException {
-        if (page == null) {
-            return;
-        }
-        synchronized (lock) {
-            List<InkRenderer.InkStroke> snapshot =
-                    Collections.unmodifiableList(new ArrayList<>(page.strokes));
-            BoardEntity row = dao.board(page.id);
-            if (row == null) {
-                if (snapshot.isEmpty()) {
-                    return;
-                }
-                String key = listOfBlankLocked(page.id);
-                if (key != null) {
-                    trailingBlanks.remove(key);
-                }
-                row = new BoardEntity();
-                row.id = page.id;
-                row.notebookId = key == null ? null : notebookOfKey(key);
-                row.position = Positions.after(lastPositionLocked(row.notebookId));
-                row.createdAt = page.createdAt;
-                cache.put(page.id, page);
-            } else if (row.deletedAt != null) {
-                return;
-            }
-            byte[] bytes = snapshot.isEmpty() ? null : InkCodec.encode(snapshot);
-            String hash = bytes == null ? null : InkFileStore.sha256(bytes);
-            if (Objects.equals(row.inkHash, hash)) {
-                return;
-            }
-            writeInkLocked(page.id, bytes);
-            row.inkHash = hash;
-            row.inkBytes = bytes == null ? 0 : bytes.length;
-            row.updatedAt = clock.getAsLong();
-            localEdits.merge(page.id, 1L, Long::sum);
-            BoardEntity toSave = row;
-            db.runInTransaction(() -> {
-                dao.upsertBoard(toSave);
-                queueLocked(OutboxEntry.BOARD, toSave.id, OutboxEntry.UPSERT);
-            });
-            // No BoardEntity trailing-blank bookkeeping — Ready projection owns blanks.
-            scheduleIndex();
-        }
     }
 
     /** Always 0 — BoardEntity write-behind queue is gone; Ready flushes are fire-and-forget. */
@@ -628,42 +572,31 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (paperSliceActionLocked(boardId, delete)) {
                 return;
             }
-            Board board = cache.get(boardId);
-            if (board != null && board.paper != null) {
+            Board cached = cache.get(boardId);
+            if (cached != null && cached.paper != null) {
                 return;
             }
-            if (delete) {
-                BoardEntity row = dao.board(boardId);
-                if (row == null || row.deletedAt != null || row.conflictOf != null) {
-                    return;
-                }
-                // Refuse deleting the sole stored trailing blank of an unmigrated
-                // list (migrationSources strips one inkHash-null tail). Ready
-                // deletes never reach here — paperSliceActionLocked returns first.
-                if (row.inkHash == null) {
-                    List<BoardEntity> rows = rowsLocked(row.notebookId);
-                    if (!rows.isEmpty() && rows.get(rows.size() - 1).id.equals(row.id)
-                            && !trailingBlanks.containsKey(listKey(row.notebookId))) {
-                        return;
-                    }
-                }
-                tombstoneLocked(row);
-                tombstoneLinksTouchingLocked(row.id);
+            if (!delete) {
+                // UI only wipes Ready slices (paperSliceActionLocked). Unmigrated
+                // page-file wipe is gone with persistBoardEntityInk.
                 return;
             }
             BoardEntity row = dao.board(boardId);
-            if (board == null && row != null) {
-                board = load(row);
-            }
-            if (board == null || row == null) {
+            if (row == null || row.deletedAt != null || row.conflictOf != null) {
                 return;
             }
-            board.strokes.clear();
-            try {
-                persistBoardEntityInk(board);
-            } catch (IOException e) {
-                Log.e(TAG, "legacy wipe failed " + boardId, e);
+            // Refuse deleting the sole stored trailing blank of an unmigrated
+            // list (migrationSources strips one inkHash-null tail). Ready
+            // deletes never reach here — paperSliceActionLocked returns first.
+            if (row.inkHash == null) {
+                List<BoardEntity> rows = rowsLocked(row.notebookId);
+                if (!rows.isEmpty() && rows.get(rows.size() - 1).id.equals(row.id)
+                        && !trailingBlanks.containsKey(listKey(row.notebookId))) {
+                    return;
+                }
             }
+            tombstoneLocked(row);
+            tombstoneLinksTouchingLocked(row.id);
         }
     }
 
@@ -1940,7 +1873,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     /**
      * Ready {@code .zdl} is SoT — clear BoardEntity page-file ink so first-time
-     * migrate residue cannot remain a second ink SoT / MetaPullApply shelf seed.
+     * migrate residue cannot remain a second ink SoT.
      * Keeps BoardEntity rows (identity / blank slots) but drops {@code .zdi},
      * inkHash, and BOARD outbox. Conflict copies are left for Hand-off history.
      * Caller holds {@link #lock}.

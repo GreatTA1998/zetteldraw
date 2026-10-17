@@ -9,7 +9,6 @@ import static org.junit.Assert.assertTrue;
 import android.app.Application;
 
 import com.zetteldraw.penpoc.Board;
-import com.zetteldraw.penpoc.InkRenderer;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
@@ -34,8 +33,6 @@ import java.util.List;
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
 public class BoardEntityInkRetireTest {
-    private static final int PAGE = 800;
-
     @Rule
     public TemporaryFolder tmp = new TemporaryFolder();
 
@@ -60,7 +57,7 @@ public class BoardEntityInkRetireTest {
     public void ensureMigratesThenRetiresPageFiles() throws Exception {
         Board page = Board.blank();
         TestInk.draw(page, 15f);
-        repo.persistBoardEntityInk(page);
+        device.seedUnmigrated(page);
         assertTrue(new File(inkDir, page.id + ".zdi").exists());
         assertNotNull(device.db.dao().board(page.id).inkHash);
         assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
@@ -122,30 +119,5 @@ public class BoardEntityInkRetireTest {
         byte[] logAfter = new InkFileStore(inkDir).readLog(sheetId);
         assertTrue(java.util.Arrays.equals(logBefore, logAfter));
         assertTrue(device.db.dao().conflictCopies().isEmpty());
-    }
-
-    @Test
-    public void unmigratedBoardConflictShelfStillWorks() throws Exception {
-        Board page = Board.blank();
-        TestInk.draw(page, 10f);
-        repo.persistBoardEntityInk(page);
-        BoardEntity local = device.db.dao().board(page.id);
-        List<InkRenderer.InkStroke> remoteInk =
-                Collections.singletonList(TestInk.stroke(500f, 600f, 9));
-        byte[] bytes = InkCodec.encode(remoteInk);
-        BoardEntity remote = local.copy();
-        remote.inkHash = InkFileStore.sha256(bytes);
-        remote.inkBytes = bytes.length;
-        remote.updatedAt = local.updatedAt + 5_000;
-        remote.rev = 10;
-        SyncStore.PullPage pull = new SyncStore.PullPage();
-        pull.boards.add(remote);
-        pull.blobs.put(remote.inkHash, bytes);
-        pull.cursor = 10;
-        repo.applyPull(pull);
-
-        assertEquals(10, device.db.dao().board(page.id).rev);
-        assertEquals(1, device.db.dao().conflictCopies().size());
-        assertTrue(new File(inkDir, page.id + ".zdi").exists());
     }
 }

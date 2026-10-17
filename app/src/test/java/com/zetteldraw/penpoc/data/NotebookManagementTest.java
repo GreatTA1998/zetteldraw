@@ -176,7 +176,7 @@ public class NotebookManagementTest {
         BoardRepository.NotebookInfo book = repo.createNotebook("legacy-book");
         Board page = Board.blank();
         TestInk.draw(page, 42f);
-        repo.persistBoardEntityInk(page);
+        device.seedUnmigrated(page);
         BoardEntity row = device.db.dao().board(page.id);
         assertNotNull(row);
         row.notebookId = book.id();
@@ -201,7 +201,7 @@ public class NotebookManagementTest {
         BoardRepository.NotebookInfo book = repo.createNotebook("corrupt-book");
         Board page = Board.blank();
         TestInk.draw(page, 7f);
-        repo.persistBoardEntityInk(page);
+        device.seedUnmigrated(page);
         BoardEntity row = device.db.dao().board(page.id);
         row.notebookId = book.id();
         device.db.dao().upsertBoard(row);

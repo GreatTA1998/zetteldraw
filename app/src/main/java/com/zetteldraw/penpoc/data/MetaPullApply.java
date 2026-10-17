@@ -12,18 +12,19 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
 /**
  * Exception-path meta LWW for pulled notebooks, page links, and legacy board
- * rows (Hand off / history / dual-push shelf). Day-to-day ink SoT is
+ * rows (Hand off / history / dual-push). Day-to-day ink SoT is
  * {@link InkSheetStore} + {@link InkLogApply}; this type is the shelf beside
  * {@link Lww}, not peer merge.
  *
  * <p>Caller holds the repository lock and runs inside the pull transaction.
  * Board ink still bypasses {@link InkLogApply} for <em>unmigrated</em> notebooks
  * only — once {@link Deps#notebookLogBacked} is true, {@link #applyRemoteBoard}
- * is a no-op (Ready {@code .zdl} owns ink).
+ * is a no-op (Ready {@code .zdl} owns ink). Unmigrated board pull applies remote
+ * without a BoardEntity conflict shelf; Ready shelves losing {@code .zdl} in
+ * {@link InkSheetStore}.
  *
  * @see Lww
  * @see docs/ink-sot-rewrite.md
@@ -40,10 +41,6 @@ public final class MetaPullApply {
         InkFileStore ink();
 
         boolean pendingOutbox(String entity, String id);
-
-        boolean hasPendingInk(String boardId);
-
-        void queueBoardUpsert(String boardId);
 
         void mirrorInk(String boardId, byte[] bytes);
 
@@ -88,7 +85,7 @@ public final class MetaPullApply {
                                  Map<String, List<InkRenderer.InkStroke>> refreshed,
                                  List<Runnable> mirrorOps) throws IOException {
         if (deps.notebookLogBacked(remote.notebookId)) {
-            // Ready owns ink — do not recreate .zdi / BoardEntity conflict shelf.
+            // Ready owns ink — do not recreate .zdi.
             return;
         }
         ZettelDao dao = deps.dao();
@@ -97,19 +94,10 @@ public final class MetaPullApply {
             if (remote.rev <= local.rev) {
                 return;
             }
-            if (deps.hasPendingInk(remote.id)) {
-                // Drawn on this device and not yet written: that edit is the newest and pushes after.
+            if (deps.pendingOutbox(OutboxEntry.BOARD, remote.id)
+                    && !Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
+                // Local edit is newer; it stays queued with its old base rev.
                 return;
-            }
-            if (deps.pendingOutbox(OutboxEntry.BOARD, remote.id)) {
-                if (!Lww.remoteWins(local.updatedAt, remote.updatedAt)) {
-                    // Local edit is newer; it stays queued with its old base rev and the
-                    // server keeps its current row as a conflict copy on the next push.
-                    return;
-                }
-                if (Lww.needsConflictCopy(local, remote)) {
-                    conflictCopy(local, mirrorOps);
-                }
             }
         }
         if (remote.deletedAt != null || remote.inkHash == null) {
@@ -132,20 +120,5 @@ public final class MetaPullApply {
         if (remote.deletedAt != null) {
             deps.removeCachedBoard(remote.id);
         }
-    }
-
-    private void conflictCopy(BoardEntity loser, List<Runnable> mirrorOps) throws IOException {
-        BoardEntity copy = loser.copy();
-        copy.id = UUID.randomUUID().toString();
-        copy.conflictOf = loser.id;
-        copy.rev = 0;
-        byte[] bytes = deps.ink().read(loser.id);
-        if (bytes != null) {
-            deps.ink().write(copy.id, bytes);
-            String id = copy.id;
-            mirrorOps.add(() -> deps.mirrorInk(id, bytes));
-        }
-        deps.dao().upsertBoard(copy);
-        deps.queueBoardUpsert(copy.id);
     }
 }

@@ -27,15 +27,14 @@ import org.robolectric.annotation.Config;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Exception-path conflict shelves on the device side of sync (Hand off /
  * history). Day-to-day sync is single live writer push + pull catch-up.
  *
- * <p>Ready path shelves losing local {@code .zdl} via {@link InkSheetStore};
- * legacy BoardEntity {@code .zdi} shelf remains in {@link MetaPullApply} until
- * writers no longer need page-file rows.
+ * <p>Ready path shelves losing local {@code .zdl} via {@link InkSheetStore}.
+ * BoardEntity {@code .zdi} conflict shelf is deleted — unmigrated board pull
+ * applies remote without shelving local page-file ink.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
@@ -47,18 +46,12 @@ public class ConflictTest {
 
     private Device device;
     private RoomBoardRepository repo;
-    private Board page;
 
     @Before
     public void setUp() throws Exception {
         device = new Device("a", tmp.newFolder("a"), 10_000_000L);
         repo = device.repo;
-        // BoardEntity conflict shelf still seeds via legacy page-file path
-        // (no ensure — Ready migration would absorb the row into .zdl).
-        // saveInk is Ready-only; importer-style sync persist for shelf seeds.
-        page = Board.blank();
-        TestInk.draw(page, 10f);
-        repo.persistBoardEntityInk(page);
+        assertTrue(device.ensureReady());
     }
 
     @After
@@ -82,202 +75,175 @@ public class ConflictTest {
     }
 
     @Test
-    public void newerRemoteEditWinsAndLocalInkBecomesHiddenCopy() throws Exception {
-        BoardEntity local = device.db.dao().board(page.id);
-        List<InkRenderer.InkStroke> localInk = new ArrayList<>(page.strokes);
-        AtomicInteger notified = new AtomicInteger();
-        repo.addRemoteChangeListener(notified::incrementAndGet);
-
-        List<InkRenderer.InkStroke> remoteInk = Collections.singletonList(TestInk.stroke(500f, 600f, 9));
-        SyncStore.PullPage pulled = remotePage(local, remoteInk, local.updatedAt + 5_000, 10);
-        repo.applyPull(pulled);
-
-        BoardEntity after = device.db.dao().board(page.id);
-        assertEquals(10, after.rev);
-        assertEquals(pulled.boards.get(0).inkHash, after.inkHash);
-        assertNull("remote row replaced the pending edit", device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        TestInk.assertSameInk(remoteInk, page.strokes);
-        assertEquals(1, notified.get());
-
-        List<BoardEntity> copies = device.db.dao().conflictCopies();
-        assertEquals(1, copies.size());
-        BoardEntity copy = copies.get(0);
-        assertEquals(page.id, copy.conflictOf);
-        assertEquals(local.inkHash, copy.inkHash);
-        assertEquals(0, copy.rev);
-        assertNotNull("copy is pushed so the server keeps it too", device.db.dao().outbox(OutboxEntry.BOARD, copy.id));
-        TestInk.assertSameInk(localInk, InkCodec.decode(new InkFileStore(device.inkDir()).read(copy.id)));
-        for (Board b : repo.scratchpadPages()) {
-            assertNotEquals("copies stay hidden", copy.id, b.id);
-        }
-        assertEquals(10, repo.pullCursor());
-    }
-
-    @Test
-    public void newerLocalEditSurvivesAnOlderRemoteOne() throws Exception {
-        BoardEntity local = device.db.dao().board(page.id);
-        repo.applyPull(remotePage(local, Collections.singletonList(TestInk.stroke(1f, 1f, 3)),
-                local.updatedAt - 1, 10));
-        BoardEntity after = device.db.dao().board(page.id);
-        assertEquals(local.inkHash, after.inkHash);
-        assertEquals("keeps its stale base rev so the server resolves it on push", 0, after.rev);
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        assertTrue(device.db.dao().conflictCopies().isEmpty());
-    }
-
-    @Test
-    public void remoteChangeWithoutLocalEditsJustApplies() throws Exception {
-        BoardEntity local = device.db.dao().board(page.id);
-        device.db.dao().deleteOutbox(OutboxEntry.BOARD, page.id);
-        repo.applyPull(remotePage(local, Collections.singletonList(TestInk.stroke(1f, 1f, 3)),
-                local.updatedAt - 1, 10));
-        assertNotEquals(local.inkHash, device.db.dao().board(page.id).inkHash);
-        assertTrue(device.db.dao().conflictCopies().isEmpty());
-        repo.applyPull(remotePage(local, Collections.singletonList(TestInk.stroke(2f, 2f, 3)),
-                local.updatedAt + 1, 9));
-        assertEquals("older revs are ignored", 10, device.db.dao().board(page.id).rev);
-    }
-
-    @Test
-    public void pushResultsAdvanceRevAndClearOutboxUnlessEditedMidFlight() throws Exception {
-        repo.queuePlaceholderSeedsForUpload();
-        SyncStore.PushBatch batch = repo.pendingPush(50);
-        assertEquals(4, batch.notebooks.size());
-        assertEquals(1, batch.boards.size());
-        String hash = batch.boards.get(0).inkHash;
-        assertEquals(hash, InkFileStore.sha256(batch.blobs.get(hash)));
-
-        TestInk.draw(page, 99f);
-        device.tick();
-        repo.persistBoardEntityInk(page);
-
-        List<SyncStore.PushResult> results = new ArrayList<>();
-        for (var n : batch.notebooks) {
-            results.add(new SyncStore.PushResult(OutboxEntry.NOTEBOOK, n.id, SyncStore.PushResult.APPLIED, 3));
-        }
-        results.add(new SyncStore.PushResult(OutboxEntry.BOARD, page.id, SyncStore.PushResult.APPLIED, 7));
-        repo.applyPushResults(batch, results);
-
-        assertEquals(1, repo.outboxSize());
-        assertNotNull("edited after the snapshot: still queued", device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        assertEquals(7, device.db.dao().board(page.id).rev);
-    }
-
-    @Test
-    public void lostConflictClearsOutboxAndWaitsForPull() {
-        SyncStore.PushBatch batch = repo.pendingPush(50);
-        repo.applyPushResults(batch, Collections.singletonList(
-                new SyncStore.PushResult(OutboxEntry.BOARD, page.id, SyncStore.PushResult.CONFLICT_LOST, 12)));
-        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        assertEquals(0, device.db.dao().board(page.id).rev);
-    }
-
-    @Test
-    public void missingBlobStaysQueued() {
-        SyncStore.PushBatch batch = repo.pendingPush(50);
-        repo.applyPushResults(batch, Collections.singletonList(
-                new SyncStore.PushResult(OutboxEntry.BOARD, page.id, SyncStore.PushResult.MISSING_BLOB, 0)));
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-    }
-
-    @Test
     public void newerRemoteLogWinsAndLocalLogBecomesHiddenCopy() throws Exception {
-        // Fresh Ready device — no legacy BoardEntity seed (that would inflate local .zdl).
-        Device readyDevice = new Device("ready-shelf", tmp.newFolder("ready-shelf"), 20_000_000L);
-        RoomBoardRepository readyRepo = readyDevice.repo;
-        try {
-            assertTrue(readyDevice.ensureReady());
-            Board ready = readyRepo.scratchpadPages().get(0);
-            TestInk.draw(ready, 10f);
-            readyRepo.saveInk(ready);
-            drainWrites(readyRepo);
+        Board ready = repo.scratchpadPages().get(0);
+        TestInk.draw(ready, 10f);
+        repo.saveInk(ready);
+        drainWrites(repo);
 
-            String sheetId = NotebookPaper.sheetId(null);
-            NotebookLogEntity local = readyDevice.db.dao().notebookLog(sheetId);
-            assertNotNull(local);
-            assertNotNull(readyDevice.db.dao().outbox(OutboxEntry.LOG, sheetId));
-            String localHash = local.inkHash;
-            byte[] localBytes = new InkFileStore(readyDevice.inkDir()).readLog(sheetId);
-            assertNotNull(localBytes);
+        String sheetId = NotebookPaper.sheetId(null);
+        NotebookLogEntity local = device.db.dao().notebookLog(sheetId);
+        assertNotNull(local);
+        assertNotNull(device.db.dao().outbox(OutboxEntry.LOG, sheetId));
+        String localHash = local.inkHash;
+        byte[] localBytes = new InkFileStore(device.inkDir()).readLog(sheetId);
+        assertNotNull(localBytes);
 
-            // Same slice count; remote body not shorter on disk (install refuses shrink).
-            NotebookPaper remotePaper = NotebookPaper.empty(PAGE);
-            remotePaper.appendStroke(TestInk.stroke(500f, 60f, 24), ready.id);
-            byte[] remoteBytes = remotePaper.bytes();
-            assertTrue("remote must not be shorter than local disk",
-                    remoteBytes.length >= localBytes.length);
-            NotebookLogEntity remote = local.copy();
-            remote.inkHash = InkFileStore.sha256(remoteBytes);
-            remote.inkBytes = remoteBytes.length;
-            remote.updatedAt = local.updatedAt + 5_000;
-            remote.rev = Math.max(1, local.rev) + 10;
-            SyncStore.PullPage pull = new SyncStore.PullPage();
-            pull.logs.add(remote);
-            pull.blobs.put(remote.inkHash, remoteBytes);
-            pull.cursor = remote.rev;
-            readyRepo.applyPull(pull);
+        NotebookPaper remotePaper = NotebookPaper.empty(PAGE);
+        remotePaper.appendStroke(TestInk.stroke(500f, 60f, 24), ready.id);
+        byte[] remoteBytes = remotePaper.bytes();
+        assertTrue("remote must not be shorter than local disk",
+                remoteBytes.length >= localBytes.length);
+        NotebookLogEntity remote = local.copy();
+        remote.inkHash = InkFileStore.sha256(remoteBytes);
+        remote.inkBytes = remoteBytes.length;
+        remote.updatedAt = local.updatedAt + 5_000;
+        remote.rev = Math.max(1, local.rev) + 10;
+        SyncStore.PullPage pull = new SyncStore.PullPage();
+        pull.logs.add(remote);
+        pull.blobs.put(remote.inkHash, remoteBytes);
+        pull.cursor = remote.rev;
+        repo.applyPull(pull);
 
-            NotebookLogEntity after = readyDevice.db.dao().notebookLog(sheetId);
-            assertEquals(remote.rev, after.rev);
-            assertEquals(remote.inkHash, after.inkHash);
-            assertNull(readyDevice.db.dao().outbox(OutboxEntry.LOG, sheetId));
-            assertEquals(remote.inkHash, readyRepo.localInkLogHash(sheetId));
+        NotebookLogEntity after = device.db.dao().notebookLog(sheetId);
+        assertEquals(remote.rev, after.rev);
+        assertEquals(remote.inkHash, after.inkHash);
+        assertNull(device.db.dao().outbox(OutboxEntry.LOG, sheetId));
+        assertEquals(remote.inkHash, repo.localInkLogHash(sheetId));
 
-            List<NotebookLogEntity> copies = readyDevice.db.dao().conflictLogCopies();
-            assertEquals(1, copies.size());
-            NotebookLogEntity copy = copies.get(0);
-            assertEquals(sheetId, copy.conflictOf);
-            assertEquals(localHash, copy.inkHash);
-            assertEquals(0, copy.rev);
-            assertNotNull("copy is pushed so the server keeps it too",
-                    readyDevice.db.dao().outbox(OutboxEntry.LOG, copy.id));
-            byte[] shelved = new InkFileStore(readyDevice.inkDir()).readLog(copy.id);
-            assertNotNull(shelved);
-            assertTrue(java.util.Arrays.equals(localBytes, shelved));
-            for (Board b : readyRepo.scratchpadPages()) {
-                assertNotEquals("copies stay hidden from Ready projection", copy.id, b.id);
-            }
-        } finally {
-            readyDevice.close();
+        List<NotebookLogEntity> copies = device.db.dao().conflictLogCopies();
+        assertEquals(1, copies.size());
+        NotebookLogEntity copy = copies.get(0);
+        assertEquals(sheetId, copy.conflictOf);
+        assertEquals(localHash, copy.inkHash);
+        assertEquals(0, copy.rev);
+        assertNotNull("copy is pushed so the server keeps it too",
+                device.db.dao().outbox(OutboxEntry.LOG, copy.id));
+        byte[] shelved = new InkFileStore(device.inkDir()).readLog(copy.id);
+        assertNotNull(shelved);
+        assertTrue(java.util.Arrays.equals(localBytes, shelved));
+        for (Board b : repo.scratchpadPages()) {
+            assertNotEquals("copies stay hidden from Ready projection", copy.id, b.id);
         }
     }
 
     @Test
     public void readyNewerLocalLogSurvivesOlderRemoteWithoutShelf() throws Exception {
-        Device readyDevice = new Device("ready-keep", tmp.newFolder("ready-keep"), 21_000_000L);
-        RoomBoardRepository readyRepo = readyDevice.repo;
+        Board ready = repo.scratchpadPages().get(0);
+        TestInk.draw(ready, 11f);
+        repo.saveInk(ready);
+        drainWrites(repo);
+
+        String sheetId = NotebookPaper.sheetId(null);
+        NotebookLogEntity local = device.db.dao().notebookLog(sheetId);
+        assertNotNull(local);
+        String localHash = local.inkHash;
+
+        NotebookPaper remotePaper = NotebookPaper.empty(PAGE);
+        remotePaper.appendStroke(TestInk.stroke(1f, 60f, 12), ready.id);
+        byte[] remoteBytes = remotePaper.bytes();
+        NotebookLogEntity remote = local.copy();
+        remote.inkHash = InkFileStore.sha256(remoteBytes);
+        remote.inkBytes = remoteBytes.length;
+        remote.updatedAt = local.updatedAt - 1;
+        remote.rev = Math.max(1, local.rev) + 10;
+        SyncStore.PullPage pull = new SyncStore.PullPage();
+        pull.logs.add(remote);
+        pull.blobs.put(remote.inkHash, remoteBytes);
+        pull.cursor = remote.rev;
+        repo.applyPull(pull);
+
+        assertEquals(localHash, device.db.dao().notebookLog(sheetId).inkHash);
+        assertNotNull(device.db.dao().outbox(OutboxEntry.LOG, sheetId));
+        assertTrue(device.db.dao().conflictLogCopies().isEmpty());
+    }
+
+    @Test
+    public void unmigratedRemoteBoardWinsWithoutShelvingLocal() throws Exception {
+        Device bare = new Device("bare", tmp.newFolder("bare"), 11_000_000L);
         try {
-            assertTrue(readyDevice.ensureReady());
-            Board ready = readyRepo.scratchpadPages().get(0);
-            TestInk.draw(ready, 11f);
-            readyRepo.saveInk(ready);
-            drainWrites(readyRepo);
-
-            String sheetId = NotebookPaper.sheetId(null);
-            NotebookLogEntity local = readyDevice.db.dao().notebookLog(sheetId);
+            Board page = Board.blank();
+            TestInk.draw(page, 10f);
+            bare.seedUnmigrated(page);
+            BoardEntity local = bare.db.dao().board(page.id);
             assertNotNull(local);
-            String localHash = local.inkHash;
+            assertNotNull(bare.db.dao().outbox(OutboxEntry.BOARD, page.id));
 
-            NotebookPaper remotePaper = NotebookPaper.empty(PAGE);
-            remotePaper.appendStroke(TestInk.stroke(1f, 60f, 12), ready.id);
-            byte[] remoteBytes = remotePaper.bytes();
-            NotebookLogEntity remote = local.copy();
-            remote.inkHash = InkFileStore.sha256(remoteBytes);
-            remote.inkBytes = remoteBytes.length;
-            remote.updatedAt = local.updatedAt - 1;
-            remote.rev = Math.max(1, local.rev) + 10;
-            SyncStore.PullPage pull = new SyncStore.PullPage();
-            pull.logs.add(remote);
-            pull.blobs.put(remote.inkHash, remoteBytes);
-            pull.cursor = remote.rev;
-            readyRepo.applyPull(pull);
+            List<InkRenderer.InkStroke> remoteInk =
+                    Collections.singletonList(TestInk.stroke(500f, 600f, 9));
+            SyncStore.PullPage pulled = remoteBoardPage(local, remoteInk, local.updatedAt + 5_000, 10);
+            bare.repo.applyPull(pulled);
 
-            assertEquals(localHash, readyDevice.db.dao().notebookLog(sheetId).inkHash);
-            assertNotNull(readyDevice.db.dao().outbox(OutboxEntry.LOG, sheetId));
-            assertTrue(readyDevice.db.dao().conflictLogCopies().isEmpty());
+            BoardEntity after = bare.db.dao().board(page.id);
+            assertEquals(10, after.rev);
+            assertEquals(pulled.boards.get(0).inkHash, after.inkHash);
+            assertNull(bare.db.dao().outbox(OutboxEntry.BOARD, page.id));
+            assertTrue("BoardEntity shelf deleted — no hidden copy",
+                    bare.db.dao().conflictCopies().isEmpty());
+            TestInk.assertSameInk(remoteInk, InkCodec.decode(
+                    new InkFileStore(bare.inkDir()).read(page.id)));
         } finally {
-            readyDevice.close();
+            bare.close();
         }
+    }
+
+    @Test
+    public void pushResultsAdvanceLogRevAndClearOutboxUnlessEditedMidFlight() throws Exception {
+        Board ready = repo.scratchpadPages().get(0);
+        TestInk.draw(ready, 10f);
+        repo.saveInk(ready);
+        drainWrites(repo);
+
+        String sheetId = NotebookPaper.sheetId(null);
+        repo.queuePlaceholderSeedsForUpload();
+        SyncStore.PushBatch batch = repo.pendingPush(50);
+        assertEquals(1, batch.logs.size());
+        String hash = batch.logs.get(0).inkHash;
+        assertEquals(hash, InkFileStore.sha256(batch.blobs.get(hash)));
+
+        TestInk.draw(ready, 99f);
+        device.tick();
+        repo.saveInk(ready);
+        drainWrites(repo);
+
+        List<SyncStore.PushResult> results = new ArrayList<>();
+        for (var n : batch.notebooks) {
+            results.add(new SyncStore.PushResult(OutboxEntry.NOTEBOOK, n.id, SyncStore.PushResult.APPLIED, 3));
+        }
+        results.add(new SyncStore.PushResult(OutboxEntry.LOG, sheetId, SyncStore.PushResult.APPLIED, 7));
+        repo.applyPushResults(batch, results);
+
+        assertTrue(repo.outboxSize() >= 1);
+        assertNotNull("edited after the snapshot: still queued",
+                device.db.dao().outbox(OutboxEntry.LOG, sheetId));
+        assertEquals(7, device.db.dao().notebookLog(sheetId).rev);
+    }
+
+    @Test
+    public void lostLogConflictClearsOutboxAndWaitsForPull() throws Exception {
+        Board ready = repo.scratchpadPages().get(0);
+        TestInk.draw(ready, 10f);
+        repo.saveInk(ready);
+        drainWrites(repo);
+        String sheetId = NotebookPaper.sheetId(null);
+        SyncStore.PushBatch batch = repo.pendingPush(50);
+        repo.applyPushResults(batch, Collections.singletonList(
+                new SyncStore.PushResult(OutboxEntry.LOG, sheetId, SyncStore.PushResult.CONFLICT_LOST, 12)));
+        assertNull(device.db.dao().outbox(OutboxEntry.LOG, sheetId));
+        assertEquals(0, device.db.dao().notebookLog(sheetId).rev);
+    }
+
+    @Test
+    public void missingLogBlobStaysQueued() throws Exception {
+        Board ready = repo.scratchpadPages().get(0);
+        TestInk.draw(ready, 10f);
+        repo.saveInk(ready);
+        drainWrites(repo);
+        String sheetId = NotebookPaper.sheetId(null);
+        SyncStore.PushBatch batch = repo.pendingPush(50);
+        repo.applyPushResults(batch, Collections.singletonList(
+                new SyncStore.PushResult(OutboxEntry.LOG, sheetId, SyncStore.PushResult.MISSING_BLOB, 0)));
+        assertNotNull(device.db.dao().outbox(OutboxEntry.LOG, sheetId));
     }
 
     private static void drainWrites(RoomBoardRepository target) throws Exception {
@@ -287,7 +253,8 @@ public class ConflictTest {
         assertEquals(0, target.pendingWrites());
     }
 
-    private SyncStore.PullPage remotePage(BoardEntity base, List<InkRenderer.InkStroke> ink, long updatedAt, long rev) {
+    private SyncStore.PullPage remoteBoardPage(BoardEntity base, List<InkRenderer.InkStroke> ink,
+                                               long updatedAt, long rev) {
         byte[] bytes = InkCodec.encode(ink);
         BoardEntity remote = base.copy();
         remote.inkHash = InkFileStore.sha256(bytes);

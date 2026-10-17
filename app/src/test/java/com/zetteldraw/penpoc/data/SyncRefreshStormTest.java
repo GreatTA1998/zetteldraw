@@ -114,10 +114,12 @@ public class SyncRefreshStormTest {
 
     @Test
     public void pulledStrokesReachTheSharedBoardWithoutTheLock() throws Exception {
-        // Legacy board-row pull refresh (board.strokes), not Ready paper projection.
+        // Unmigrated board-row pull refresh (board.strokes), not Ready paper projection.
         Board page = Board.blank();
         TestInk.draw(page, 10f);
-        repo.persistBoardEntityInk(page);
+        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
+        legacy.scratchpad.add(page);
+        repo.importLegacy(legacy);
         BoardEntity remote = db.dao().board(page.id).copy();
         List<InkRenderer.InkStroke> ink = Collections.singletonList(TestInk.stroke(300f, 300f, 5));
         byte[] bytes = InkCodec.encode(ink);
