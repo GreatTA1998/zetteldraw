@@ -1,7 +1,8 @@
 /**
- * Loads the demo library (src/demo.ts) through the normal push path, then renders
- * its thumbnails. Rows that already exist are left alone, so re-running it never
- * undoes a rename or reorder.
+ * Loads the demo library (src/demo.ts): notebooks via normal push, boards via
+ * SQL + storage.put (BOARD push is retired — Ready notebook_logs carry ink).
+ * Rows that already exist are left alone, so re-running it never undoes a
+ * rename or reorder.
  *
  *   docker compose run --rm sync node dist/scripts/seed.js
  */
@@ -37,22 +38,40 @@ const existing = new Set(
 );
 const notebooks = library.notebooks.filter((n) => !existing.has(n.id));
 const boards = library.boards.filter((b) => !existing.has(b.id));
-const blobs: Record<string, string> = {};
-for (const b of boards) {
-  if (b.ink_hash) {
-    blobs[b.ink_hash] = library.blobs.get(b.ink_hash)!.toString("base64");
-  }
-}
 
 await push(pool, storage, {
   schema_version: schemaVersion,
   device_id: "demo-seed",
   notebooks,
-  boards,
+  boards: [],
   logs: [],
   links: [],
-  blobs,
+  blobs: {},
 });
+
+for (const b of boards) {
+  if (b.ink_hash) {
+    await storage.put(b.ink_hash, library.blobs.get(b.ink_hash)!);
+  }
+  await pool.query(
+    `INSERT INTO boards (
+       id, notebook_id, position, ink_hash, ink_bytes, thumb_hash,
+       conflict_of, created_at, updated_at, deleted_at, rev
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, nextval('sync_rev'))`,
+    [
+      b.id,
+      b.notebook_id,
+      b.position,
+      b.ink_hash,
+      b.ink_bytes,
+      b.thumb_hash ?? null,
+      b.conflict_of,
+      b.created_at,
+      b.updated_at,
+      b.deleted_at,
+    ],
+  );
+}
 
 const thumbs = new Thumbnailer(storage, config.page);
 let rendered = 0;

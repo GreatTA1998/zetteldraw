@@ -56,10 +56,11 @@ import java.util.function.LongSupplier;
  * write-behind or board conflict shelf. {@link #importLegacy} writes Ready
  * {@code .zdl} from in-memory SourcePages once pageHeight is known — never
  * {@code .zdi} / BOARD outbox. Tip never pushes BOARD ink ({@link #pendingPush}
- * drops BOARD outbox). Historical BOARD pull still stages app-private migration
- * {@code .zdi} via {@link MetaPullApply} (no Documents {@code .zdi} mirror);
+ * drops BOARD outbox). Catch-up / Hand-off may stage app-private migration
+ * {@code .zdi} via {@link MetaPullApply}; live push-only never adopts remote
+ * BOARD. Documents index catalogs Ready {@code .zdl} only.
  * {@link #migrationSourcesForSheet} + {@link #retireBoardEntityInkLocked} clear
- * that residue on first ensure.
+ * residue on first ensure.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
@@ -104,7 +105,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
      * orchestration still calls into it under {@link #lock}.
      */
     private final InkSheetStore sheetStore;
-    /** Notebook / link / legacy board meta LWW during pull (exception shelf). */
+    /** Notebook / link meta LWW during pull (exception shelf). */
     private final MetaPullApply metaPull;
     private int knownPageHeight;
     private int knownLegacyHeight;
@@ -157,18 +158,11 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         this.metaPull = new MetaPullApply(new MetaDeps());
     }
 
-    /** Bridge for {@link MetaPullApply} — Room/outbox/mirror/cache stay here. */
+    /** Bridge for {@link MetaPullApply} — Room/outbox stay here. */
     private final class MetaDeps implements MetaPullApply.Deps {
         @Override public ZettelDao dao() { return RoomBoardRepository.this.dao; }
-        @Override public InkFileStore ink() { return RoomBoardRepository.this.ink; }
         @Override public boolean pendingOutbox(String entity, String id) {
             return pendingLocked(entity, id);
-        }
-        @Override public void removeCachedBoard(String boardId) {
-            cache.remove(boardId);
-        }
-        @Override public boolean notebookLogBacked(String notebookId) {
-            return notebookLogBackedLocked(notebookId);
         }
     }
 
@@ -531,8 +525,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
      * Ready wipe/delete only — paper slice tear (same spine as UI). Unmigrated /
      * paper-null ids refuse; open via {@link #ensureSheet} first so delete never
-     * BoardEntity-tombstones beside Ready. Remote BOARD tombstones stay in
-     * {@link MetaPullApply#applyRemoteBoard}.
+     * BoardEntity-tombstones beside Ready. Remote page deletes land via Ready
+     * {@code notebook_logs} pull (Hand-off requires Ready-cover).
      */
     private void mutateReadyPage(String boardId, boolean delete) {
         synchronized (lock) {
@@ -968,67 +962,30 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return sheetStore.localInkLogHash(sheetId);
     }
 
-    @Override
-    public String localBoardInkHash(String boardId) {
-        if (boardId == null) {
-            return "";
-        }
-        synchronized (lock) {
-            BoardEntity row = dao.board(boardId);
-            return row == null || row.inkHash == null ? "" : row.inkHash;
-        }
-    }
-
     /**
-     * Blobs are verified and staged (fsync'd) before the lock is taken; under
-     * the lock each applied board only renames its staged file. Log-backed
-     * notebooks skip board blob staging — Ready {@code .zdl} owns ink.
+     * Log blobs are verified and staged (fsync'd) before the lock is taken.
+     * Remote BOARD ink is ignored — Hand-off requires Ready-cover; catch-up
+     * restores via {@code notebook_logs} only.
      */
     @Override
     public void applyPull(PullPage page) throws IOException {
-        HashMap<String, MetaPullApply.Staged> staged = new HashMap<>();
         HashMap<String, InkSheetStore.StagedLog> stagedLogs = new HashMap<>();
-        try {
-            for (NotebookLogEntity remote : page.logs) {
-                byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink log");
-                if (bytes == null) {
-                    continue;
-                }
-                // Replay once before the lock so a torn log never becomes the notebook.
-                stagedLogs.put(remote.id, new InkSheetStore.StagedLog(bytes, NotebookPaper.replay(bytes)));
+        for (NotebookLogEntity remote : page.logs) {
+            byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink log");
+            if (bytes == null) {
+                continue;
             }
-            for (BoardEntity remote : page.boards) {
-                String sheetId = NotebookPaper.sheetId(remote.notebookId);
-                // Same-page logs install first under lock — do not stage doomed .zdi.
-                if (stagedLogs.containsKey(sheetId)) {
-                    continue;
-                }
-                synchronized (lock) {
-                    if (dao.notebookLog(sheetId) != null || ink.hasLog(sheetId)) {
-                        continue;
-                    }
-                }
-                byte[] bytes = verifiedPullBytes(page, remote.inkHash, remote.deletedAt, remote.id, "ink blob");
-                if (bytes == null) {
-                    continue;
-                }
-                staged.put(remote.id, new MetaPullApply.Staged(
-                        ink.stage(remote.id, "pull", bytes), bytes));
-            }
-            // Same Ready return as local deleteNotebook — before tombstone so
-            // pages() still sees the sheet. Ensure-fail with inked BoardEntity
-            // is logged; remote LWW tombstone still applies (no BoardEntity reseat).
-            for (NotebookEntity remote : page.notebooks) {
-                if (remoteNotebookDeleteWins(remote)) {
-                    returnReadyPagesToScratchpad(remote.id);
-                }
-            }
-            applyPullLocked(page, staged, stagedLogs);
-        } finally {
-            for (MetaPullApply.Staged s : staged.values()) {
-                ink.discard(s.file());
+            // Replay once before the lock so a torn log never becomes the notebook.
+            stagedLogs.put(remote.id, new InkSheetStore.StagedLog(bytes, NotebookPaper.replay(bytes)));
+        }
+        // Same Ready return as local deleteNotebook — before tombstone so
+        // pages() still sees the sheet.
+        for (NotebookEntity remote : page.notebooks) {
+            if (remoteNotebookDeleteWins(remote)) {
+                returnReadyPagesToScratchpad(remote.id);
             }
         }
+        applyPullLocked(page, stagedLogs);
         if (!page.isEmpty()) {
             boolean post;
             synchronized (refreshLock) {
@@ -1104,10 +1061,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         remoteListeners.remove(listener);
     }
 
-    private void applyPullLocked(PullPage page, Map<String, MetaPullApply.Staged> staged,
-                                 Map<String, InkSheetStore.StagedLog> stagedLogs) throws IOException {
+    private void applyPullLocked(PullPage page, Map<String, InkSheetStore.StagedLog> stagedLogs)
+            throws IOException {
         synchronized (lock) {
-            // Omitted-blob policy lives in MetaPullApply / InkSheetStore (hash match ⇒ keep local).
+            // Omitted-blob policy lives in InkSheetStore (hash match ⇒ keep local).
             ArrayList<Runnable> mirrorOps = new ArrayList<>();
             try {
                 db.runInTransaction(() -> {
@@ -1122,14 +1079,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                                 forgetDeletedNotebookUiLocked(remote.id);
                             }
                         }
-                        // Logs before boards: Ready .zdl SoT installs first so
-                        // MetaPullApply can no-op board ink on log-backed notebooks
-                        // in the same pull page (no transient .zdi dual).
+                        // Ready .zdl is the only remote ink SoT on catch-up / Hand-off.
                         for (NotebookLogEntity remote : page.logs) {
                             sheetStore.applyRemoteLogLocked(remote, stagedLogs, mirrorOps);
-                        }
-                        for (BoardEntity remote : page.boards) {
-                            metaPull.applyRemoteBoard(remote, staged);
                         }
                         for (PageLinkEntity remote : page.links) {
                             metaPull.applyRemoteLink(remote);
@@ -1490,6 +1442,66 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
+    @Override
+    public boolean reorderNotebook(String notebookId, String beforeSiblingId) {
+        if (notebookId == null || notebookId.equals(beforeSiblingId)) {
+            return false;
+        }
+        synchronized (lock) {
+            NotebookEntity row = dao.notebook(notebookId);
+            if (row == null || row.deletedAt != null) {
+                return false;
+            }
+            ArrayList<NotebookEntity> siblings = new ArrayList<>();
+            for (NotebookEntity each : dao.liveNotebooks()) {
+                if (Objects.equals(each.parentId, row.parentId)) {
+                    siblings.add(each);
+                }
+            }
+            int from = indexOfNotebook(siblings, notebookId);
+            if (from < 0) {
+                return false;
+            }
+            int insertAt = siblings.size();
+            if (beforeSiblingId != null) {
+                NotebookEntity before = dao.notebook(beforeSiblingId);
+                if (before == null || before.deletedAt != null
+                        || !Objects.equals(before.parentId, row.parentId)) {
+                    return false;
+                }
+                insertAt = indexOfNotebook(siblings, beforeSiblingId);
+                if (insertAt < 0) {
+                    return false;
+                }
+            }
+            // Destination index in the list with {@code row} removed.
+            int dest = insertAt > from ? insertAt - 1 : insertAt;
+            if (dest == from) {
+                return true;
+            }
+            siblings.remove(from);
+            String left = dest > 0 ? siblings.get(dest - 1).position : null;
+            String right = dest < siblings.size() ? siblings.get(dest).position : null;
+            String next = Positions.between(left, right);
+            if (next.equals(row.position)) {
+                return true;
+            }
+            row.position = next;
+            row.updatedAt = clock.getAsLong();
+            saveNotebookQueued(row);
+            return true;
+        }
+    }
+
+    private static int indexOfNotebook(List<NotebookEntity> rows, String id) {
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).id.equals(id)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private void seedNotebooks() {
         long now = clock.getAsLong();
         for (Notebook notebook : Notebook.values()) {
@@ -1658,7 +1670,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         try {
             JSONObject root = new JSONObject();
             root.put("schema_version", ZettelDatabase.SCHEMA_VERSION);
-            root.put("ink_format", "zdi/" + InkCodec.VERSION);
+            // Documents mirrors Ready .zdl only (v137+); catalog matches that SoT.
+            root.put("ink_format", "zdl");
             root.put("generated_at", clock.getAsLong());
             JSONArray notebooks = new JSONArray();
             for (NotebookEntity row : dao.liveNotebooks()) {
@@ -1669,23 +1682,23 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         .put("parent_id", row.parentId == null ? JSONObject.NULL : row.parentId));
             }
             root.put("notebooks", notebooks);
-            JSONArray boards = new JSONArray();
-            for (BoardEntity row : dao.liveBoardsForIndex()) {
-                JSONObject b = new JSONObject()
+            JSONArray logs = new JSONArray();
+            for (NotebookLogEntity row : dao.liveNotebookLogs()) {
+                JSONObject log = new JSONObject()
                         .put("id", row.id)
                         .put("notebook_id", row.notebookId == null ? JSONObject.NULL : row.notebookId)
-                        .put("position", row.position)
                         .put("ink_hash", row.inkHash == null ? JSONObject.NULL : row.inkHash)
                         .put("ink_bytes", row.inkBytes)
-                        .put("file", row.inkHash == null ? JSONObject.NULL : "ink/" + row.id + ".zdi")
+                        .put("slice_height", row.sliceHeight)
+                        .put("file", row.inkHash == null ? JSONObject.NULL : "ink/" + row.id + ".zdl")
                         .put("created_at", row.createdAt)
                         .put("updated_at", row.updatedAt);
                 if (row.conflictOf != null) {
-                    b.put("conflict_of", row.conflictOf);
+                    log.put("conflict_of", row.conflictOf);
                 }
-                boards.put(b);
+                logs.put(log);
             }
-            root.put("boards", boards);
+            root.put("logs", logs);
             JSONArray links = new JSONArray();
             for (PageLinkEntity row : dao.livePageLinks()) {
                 links.put(new JSONObject()

@@ -60,10 +60,10 @@ public final class SyncWorker extends Worker {
                 return Result.success();
             }
             SyncConfig.clearWriterBlockMessage(getApplicationContext());
-            Log.i(TAG, "sync ok: pushed " + r.pushed + ", pulled " + r.pulledBoards + " boards"
+            Log.i(TAG, "sync ok: pushed " + r.pushed + ", pulled " + r.pulledNotebooks + " notebooks"
                     + (r.restoredFromCloud ? " (restored from cloud first)" : ""));
             LaunchLog.mark("sync ok in " + (SystemClock.uptimeMillis() - started) + " ms: pushed " + r.pushed
-                    + ", pulled " + r.pulledBoards + " pages and " + r.pulledNotebooks + " notebooks"
+                    + ", pulled " + r.pulledNotebooks + " notebooks"
                     + (r.restoredFromCloud ? "; cloud seeded this device before upload" : ""));
             uploadLaunchLog(client, config);
             return Result.success();

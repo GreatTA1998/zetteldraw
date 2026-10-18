@@ -82,7 +82,7 @@ function withoutRev<T extends object>(row: T): Omit<T, "rev"> {
   return rest as Omit<T, "rev">;
 }
 
-/** Stale-rev LWW shelf for board or log ink (winner write / loser conflict_of). */
+/** Stale-rev LWW shelf for notebook_log ink (winner write / loser conflict_of). */
 function inkConflictDecision<
   T extends { id: string; updated_at: number; ink_hash: string | null; deleted_at: number | null },
 >(existing: T, row: Omit<T, "rev">, newId: () => string): Decision<T> {
@@ -97,17 +97,6 @@ function inkConflictDecision<
     : { status: "conflict_lost", write: null, restamp: true, copy };
 }
 
-function sameBoard(a: Omit<BoardRow, "rev">, b: Omit<BoardRow, "rev">): boolean {
-  return (
-    a.notebook_id === b.notebook_id &&
-    a.position === b.position &&
-    a.ink_hash === b.ink_hash &&
-    a.conflict_of === b.conflict_of &&
-    a.deleted_at === b.deleted_at &&
-    a.updated_at === b.updated_at
-  );
-}
-
 function sameNotebook(a: Omit<NotebookRow, "rev">, b: Omit<NotebookRow, "rev">): boolean {
   return (
     a.title === b.title &&
@@ -118,7 +107,7 @@ function sameNotebook(a: Omit<NotebookRow, "rev">, b: Omit<NotebookRow, "rev">):
   );
 }
 
-/** Shelve loser ink when it still has a body the winner does not share (board or log). */
+/** Shelve loser ink when it still has a body the winner does not share. */
 export function needsConflictCopy(
   loser: { ink_hash: string | null; deleted_at: number | null },
   winner: { ink_hash: string | null; deleted_at: number | null },
@@ -127,22 +116,6 @@ export function needsConflictCopy(
     return false;
   }
   return winner.deleted_at !== null || loser.ink_hash !== winner.ink_hash;
-}
-
-export function resolveBoard(
-  existing: BoardRow | null,
-  incoming: Incoming<BoardRow>,
-  newId: () => string,
-): Decision<BoardRow> {
-  const row = stripBase(incoming);
-  if (existing === null || incoming.base_rev === existing.rev) {
-    return { status: "applied", write: row, restamp: false, copy: null };
-  }
-  if (sameBoard(existing, row)) {
-    // A retried push whose first attempt already landed.
-    return { status: "applied", write: null, restamp: false, copy: null };
-  }
-  return inkConflictDecision(existing, row, newId);
 }
 
 function sameLog(a: Omit<LogRow, "rev">, b: Omit<LogRow, "rev">): boolean {

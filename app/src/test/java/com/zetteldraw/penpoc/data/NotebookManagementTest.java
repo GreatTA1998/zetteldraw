@@ -250,6 +250,59 @@ public class NotebookManagementTest {
     }
 
     @Test
+    public void reorderNotebookMovesAmongSiblingsAndQueuesUpsert() {
+        BoardRepository.NotebookInfo alpha = repo.createNotebook("alpha");
+        BoardRepository.NotebookInfo beta = repo.createNotebook("beta");
+        BoardRepository.NotebookInfo gamma = repo.createNotebook("gamma");
+        List<String> top = topLevelIds();
+        assertTrue(top.indexOf(alpha.id()) < top.indexOf(beta.id()));
+        assertTrue(top.indexOf(beta.id()) < top.indexOf(gamma.id()));
+
+        assertTrue(repo.reorderNotebook(gamma.id(), alpha.id()));
+        top = topLevelIds();
+        assertEquals(gamma.id(), top.get(top.indexOf(alpha.id()) - 1));
+        NotebookEntity moved = device.db.dao().notebook(gamma.id());
+        assertTrue(moved.position.compareTo(device.db.dao().notebook(alpha.id()).position) < 0);
+        assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.NOTEBOOK, gamma.id()).op);
+
+        assertTrue("already before alpha is a no-op", repo.reorderNotebook(gamma.id(), alpha.id()));
+        assertTrue(repo.reorderNotebook(gamma.id(), null));
+        top = topLevelIds();
+        assertEquals(gamma.id(), top.get(top.size() - 1));
+    }
+
+    @Test
+    public void reorderNotebookStaysInsideParentAndRejectsCrossParent() {
+        BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
+        BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
+        BoardRepository.NotebookInfo notes = repo.createNotebook("notes", shelf.id());
+        BoardRepository.NotebookInfo other = repo.createNotebook("other");
+
+        assertTrue(repo.reorderNotebook(notes.id(), chapter.id()));
+        List<BoardRepository.NotebookInfo> kids = new ArrayList<>();
+        for (BoardRepository.NotebookInfo each : repo.notebooks()) {
+            if (shelf.id().equals(each.parentId())) {
+                kids.add(each);
+            }
+        }
+        assertEquals(notes.id(), kids.get(0).id());
+        assertEquals(chapter.id(), kids.get(1).id());
+        assertFalse(repo.reorderNotebook(notes.id(), other.id()));
+        assertFalse(repo.reorderNotebook(notes.id(), notes.id()));
+        assertFalse(repo.reorderNotebook("missing", chapter.id()));
+    }
+
+    private List<String> topLevelIds() {
+        ArrayList<String> ids = new ArrayList<>();
+        for (BoardRepository.NotebookInfo each : repo.notebooks()) {
+            if (each.parentId() == null) {
+                ids.add(each.id());
+            }
+        }
+        return ids;
+    }
+
+    @Test
     public void placeRejectsSelfParentAndDescendants() {
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
         BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
