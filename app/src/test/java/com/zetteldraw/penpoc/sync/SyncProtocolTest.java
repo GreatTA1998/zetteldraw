@@ -58,6 +58,14 @@ public class SyncProtocolTest {
     }
 
     @Test
+    public void pushBodyNeverSerializesBoardInk() throws Exception {
+        // Tip never pushes BOARD (v136+); bag + serializer are gone.
+        SyncStore.PushBatch batch = new SyncStore.PushBatch();
+        JSONObject body = SyncProtocol.pushBody(batch, 4, "device-a");
+        assertEquals(0, body.getJSONArray("boards").length());
+    }
+
+    @Test
     public void pageLinkRoundTrips() throws Exception {
         PageLinkEntity link = new PageLinkEntity();
         link.id = "cccccccc-3333-4333-8333-333333333333";
