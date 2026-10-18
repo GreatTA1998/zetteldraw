@@ -55,18 +55,6 @@ public interface BoardRepository {
     boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince);
 
     /**
-     * Same as {@link #ensureSheet(String, int, int, long)} but may invoke
-     * {@code onStructure} with a slices-only projection after the log header
-     * parses. The shared UI open path does not use this — pages stay hidden
-     * until Ready ink; optional for tests / tooling only.
-     */
-    default boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
-                                long shortPagesSince,
-                                java.util.function.Consumer<java.util.List<Board>> onStructure) {
-        return ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
-    }
-
-    /**
      * Migrate every notebook that still has BoardEntity {@code .zdi} ink onto
      * Ready {@code .zdl} when {@code pageHeight} is known. Used before Prepare
      * transfer / Settings sync so unopened notebooks push LOG instead of BOARD.

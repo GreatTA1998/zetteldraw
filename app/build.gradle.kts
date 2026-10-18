@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v157: restore v145 wide multi-column Move/Place-under picker (lost in v148 rollback).
-        versionCode = 158
-        versionName = "4.37"
+        // Tip v159: delete structure-before-Ready dual (ensureSheet / replayStructure).
+        versionCode = 159
+        versionName = "4.38"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

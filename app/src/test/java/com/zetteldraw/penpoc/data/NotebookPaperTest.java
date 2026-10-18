@@ -48,15 +48,12 @@ public class NotebookPaperTest {
     }
 
     @Test
-    public void replayStructureSeesExtendGrownSlicesWithoutStrokes() throws Exception {
+    public void replaySeesExtendGrownSlicesWithStrokes() throws Exception {
         // Explicit blank pages — appendStroke no longer soft-grows slices.
         NotebookPaper paper = NotebookPaper.empty(100);
         TestInk.appendCovering(paper, line(null, 4f, 10f, 20f));
         TestInk.appendCovering(paper, line(null, 4f, 210f, 250f));
         assertEquals(3, paper.sliceCount());
-        NotebookPaper structure = NotebookPaper.replayStructure(paper.bytes());
-        assertEquals(3, structure.sliceCount());
-        assertTrue(structure.strokes().isEmpty());
         NotebookPaper ready = NotebookPaper.replay(paper.bytes());
         assertEquals(2, ready.strokes().size());
         assertEquals(3, ready.sliceCount());

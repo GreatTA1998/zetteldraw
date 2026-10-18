@@ -22,7 +22,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Dense open must not run parallel full {@code .zdl} replays. Concurrent
@@ -61,7 +60,6 @@ public class EnsureSheetSingleFlightTest {
         device.repo.invalidateOpenSheet(null);
 
         int before = RoomBoardRepository.logReplays.get();
-        AtomicInteger structureHits = new AtomicInteger();
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch done = new CountDownLatch(4);
         List<Boolean> results = java.util.Collections.synchronizedList(new ArrayList<>());
@@ -69,11 +67,7 @@ public class EnsureSheetSingleFlightTest {
             pool.execute(() -> {
                 try {
                     start.await(2, TimeUnit.SECONDS);
-                    boolean ok = device.repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L, pages -> {
-                        structureHits.incrementAndGet();
-                        assertTrue(pages.size() > 1);
-                    });
-                    results.add(ok);
+                    results.add(device.repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     results.add(false);
@@ -89,7 +83,6 @@ public class EnsureSheetSingleFlightTest {
         }
         assertEquals("one replay for four concurrent ensures", 1,
                 RoomBoardRepository.logReplays.get() - before);
-        assertTrue("structure callback at least once", structureHits.get() >= 1);
         assertTrue(device.repo.isSheetReady(null));
     }
 

@@ -1085,7 +1085,7 @@ public final class CanvasActivity extends Activity {
 
     /**
      * One ensure→pages→paint pass on the shared open spine (Scratchpad and every
-     * notebook). No page chrome until Ready — structure preview is not shown.
+     * notebook). No page chrome until Ready (ensureSheet is full-replay only).
      * Retry only when not shown and ensure is idle — never parallel full replays.
      * Caller guarantees {@code pageHeight > 0}.
      */
@@ -1110,8 +1110,8 @@ public final class CanvasActivity extends Activity {
                             rebuildNotebookTabs(notebooks);
                         }
                     });
-                    // Null structure callback: UI must not paint blank page chrome
-                    // while strokes are still replaying (v153 draw-on-blank race).
+                    // ensureSheet is Ready-only — no structure-before-strokes dual
+                    // (v153 draw-on-blank race deleted at the API, not just UI null).
                     ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight,
                             shortPagesSince);
                     if (!ready) {

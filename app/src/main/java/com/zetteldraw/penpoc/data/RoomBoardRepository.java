@@ -1721,13 +1721,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
-        return ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince, null);
-    }
-
-    @Override
-    public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
-                               long shortPagesSince,
-                               java.util.function.Consumer<java.util.List<Board>> onStructure) {
         notebookReads.incrementAndGet();
         if (pageHeight <= 0) {
             return false;
@@ -1737,14 +1730,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         knownShortPagesSince = shortPagesSince;
         // BoardStore JSON → Ready .zdl once height is real (never mid-open .zdi).
         importLegacyIfPresent(pageHeight, legacyPageHeight, shortPagesSince);
-        return sheetStore.ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince,
-                onStructure == null ? null : structure -> {
-                    List<Board> pages;
-                    synchronized (lock) {
-                        pages = projectLocked(notebookId, structure);
-                    }
-                    onStructure.accept(pages);
-                });
+        // One path: full Ready replay only — no slices-before-strokes structure dual.
+        return sheetStore.ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
     }
 
     @Override

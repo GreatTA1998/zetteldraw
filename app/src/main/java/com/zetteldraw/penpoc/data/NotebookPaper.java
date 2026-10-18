@@ -165,20 +165,8 @@ public final class NotebookPaper {
         return paper;
     }
 
+    /** Full Ready replay — strokes + structure. Only open path. */
     public static NotebookPaper replay(byte[] bytes) throws IOException {
-        return replayOps(bytes, true);
-    }
-
-    /**
-     * Slices-only paper: header + {@code EXTEND}/{@code TEAR} (skip stroke ops).
-     * For tests / tooling. The shared UI open path waits for full {@link #replay}
-     * (Ready) before showing any page chrome.
-     */
-    public static NotebookPaper replayStructure(byte[] bytes) throws IOException {
-        return replayOps(bytes, false);
-    }
-
-    private static NotebookPaper replayOps(byte[] bytes, boolean withStrokes) throws IOException {
         if (bytes == null || bytes.length < 12
                 || bytes[0] != MAGIC[0] || bytes[1] != MAGIC[1] || bytes[2] != MAGIC[2]) {
             throw new IOException("not a notebook ink log");
@@ -216,12 +204,7 @@ public final class NotebookPaper {
                 }
                 int start = in.position();
                 try {
-                    if (withStrokes) {
-                        paper.applyOp(op, ByteBuffer.wrap(bytes, start, len));
-                    } else if (op == OP_EXTEND || op == OP_TEAR) {
-                        paper.applyStructureOp(op, ByteBuffer.wrap(bytes, start, len));
-                    }
-                    // APPEND / DELETE / TRANSLATE skipped in structure pass.
+                    paper.applyOp(op, ByteBuffer.wrap(bytes, start, len));
                 } catch (IOException | BufferUnderflowException | NegativeArraySizeException e) {
                     // Heal-in-place: keep the good prefix, drop this op and the rest.
                     // Do not fail the whole notebook — hundreds of pages may already be Ready.
@@ -230,46 +213,11 @@ public final class NotebookPaper {
                 in.position(start + len);
                 good = in.position();
             }
-            if (withStrokes) {
-                paper.log = Arrays.copyOf(bytes, good);
-            } else {
-                paper.log = paper.headerBytes();
-            }
+            paper.log = Arrays.copyOf(bytes, good);
             return paper;
         } catch (BufferUnderflowException e) {
             // Header itself is unreadable — caller may quarantine + empty Ready.
             throw new IOException("corrupt notebook ink log", e);
-        }
-    }
-
-    /** Structure-only EXTEND / TEAR — no stroke materialization. */
-    private void applyStructureOp(int op, ByteBuffer in) throws IOException {
-        switch (op) {
-            case OP_EXTEND: {
-                String id = readId(in);
-                int height = in.getInt();
-                if (height <= 0) {
-                    throw new IOException("bad extend height");
-                }
-                heights.add(height);
-                sliceIds.add(id);
-                break;
-            }
-            case OP_TEAR: {
-                int kind = in.get() & 0xff;
-                int slice = in.getInt();
-                readIds(in); // recorded new ids — unused without strokes
-                if (slice < 0 || slice >= heights.size()) {
-                    break;
-                }
-                if (kind == TEAR_DELETE) {
-                    heights.remove(slice);
-                    sliceIds.remove(slice);
-                }
-                break;
-            }
-            default:
-                break;
         }
     }
 

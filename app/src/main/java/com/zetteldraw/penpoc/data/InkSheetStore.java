@@ -15,7 +15,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 /**
@@ -193,12 +192,10 @@ public final class InkSheetStore {
      * Switch this notebook onto its ink log. Returns true when Ready afterward.
      * Meta heal never queues; migration may queue. Single-flight per sheet:
      * concurrent callers join the same work (no parallel full replays).
-     *
-     * @param onStructure optional; receives a slices-only paper after header parse
-     *     so the shared open path can paint chrome before stroke replay finishes
+     * Full {@link NotebookPaper#replay} only — no slices-before-strokes dual.
      */
     public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
-                               long shortPagesSince, Consumer<NotebookPaper> onStructure) {
+                               long shortPagesSince) {
         if (pageHeight <= 0) {
             return false;
         }
@@ -227,8 +224,7 @@ public final class InkSheetStore {
         }
         boolean ok = false;
         try {
-            ok = ensureSheetBody(notebookId, sheetId, pageHeight, legacyPageHeight,
-                    shortPagesSince, onStructure);
+            ok = ensureSheetBody(notebookId, sheetId, pageHeight, legacyPageHeight, shortPagesSince);
         } finally {
             mine.complete(ok);
             synchronized (deps.lock()) {
@@ -240,14 +236,8 @@ public final class InkSheetStore {
         return ok;
     }
 
-    public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
-                               long shortPagesSince) {
-        return ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince, null);
-    }
-
     private boolean ensureSheetBody(String notebookId, String sheetId, int pageHeight,
-                                    int legacyPageHeight, long shortPagesSince,
-                                    Consumer<NotebookPaper> onStructure) {
+                                    int legacyPageHeight, long shortPagesSince) {
         byte[] existing;
         try {
             existing = deps.ink().readLog(sheetId);
@@ -257,13 +247,6 @@ public final class InkSheetStore {
         }
         if (existing != null) {
             try {
-                if (onStructure != null) {
-                    try {
-                        onStructure.accept(NotebookPaper.replayStructure(existing));
-                    } catch (RuntimeException e) {
-                        Log.w(TAG, "structure preview failed " + sheetId, e);
-                    }
-                }
                 RoomBoardRepository.logReplays.incrementAndGet();
                 NotebookPaper paper = NotebookPaper.replay(existing);
                 byte[] healed = paper.bytes();
