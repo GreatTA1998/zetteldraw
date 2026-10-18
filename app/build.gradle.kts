@@ -44,7 +44,7 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v142: drag-reorder notebook names on the Boox top nav strip.
+        // Tip v143: Ready-only paint — delete Board.strokes mutation dual.
         versionCode = 143
         versionName = "4.22"
         ndk {
