@@ -1,6 +1,7 @@
 package com.zetteldraw.penpoc.data;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -87,9 +88,16 @@ public class EnsureUnsyncedQueuedTest {
     public void skipsBoardQueueWhenNotebookLogBacked() throws Exception {
         Board page = Board.blank();
         TestInk.draw(page, 9f);
-        device.seedUnmigrated(page);
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        assertTrue(device.ensureReady());
+        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
+        legacy.scratchpad.add(page);
+        assertEquals(1, repo.importLegacy(legacy, Device.PAGE, Device.PAGE, 0L));
+        // Plant stale BOARD outbox against log-backed notebook.
+        OutboxEntry stale = new OutboxEntry();
+        stale.entity = OutboxEntry.BOARD;
+        stale.id = page.id;
+        stale.op = OutboxEntry.UPSERT;
+        stale.queuedAt = device.clock.get();
+        device.db.dao().upsertOutbox(stale);
         // Residue path: re-queue must not revive BOARD after Ready owns ink.
         assertEquals(0, repo.ensureUnsyncedQueued());
         assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
@@ -105,8 +113,9 @@ public class EnsureUnsyncedQueuedTest {
         device.db.dao().deleteOutbox(OutboxEntry.BOARD, page.id);
         assertEquals(0, repo.ensureUnsyncedQueued());
         assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        // Ink stays on BoardEntity until open / Prepare ensureReadyInkForBackup.
+        // Unmigrated residue stays local; tip never revives BOARD UPSERT.
         assertNotNull(device.db.dao().board(page.id).inkHash);
+        assertFalse(device.ensureReady());
     }
 
     @Test
@@ -119,26 +128,9 @@ public class EnsureUnsyncedQueuedTest {
         SyncStore.PushBatch batch = repo.pendingPush(50);
         assertTrue(batch.isEmpty());
         assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        // Local .zdi residue remains until open / Prepare migrate → LOG.
+        // Local .zdi residue remains; ensure refuses blank-wipe (fleet endgame).
         assertNotNull(device.db.dao().board(page.id).inkHash);
-    }
-
-    @Test
-    public void ensureReadyInkForBackupMigratesUnopenedBeforeQueue() throws Exception {
-        Board page = Board.blank();
-        TestInk.draw(page, 12f);
-        device.seedUnmigrated(page);
-        assertNull(device.db.dao().notebookLog(NotebookPaper.sheetId(null)));
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-
-        assertEquals(1, repo.ensureReadyInkForBackup(Device.PAGE, Device.PAGE, 0L));
-        assertNotNull(device.db.dao().notebookLog(NotebookPaper.sheetId(null)));
-        assertNull(device.db.dao().board(page.id).inkHash);
-        // Migrate queues LOG and retires BOARD outbox — ensureUnsynced must not revive BOARD.
-        assertNotNull(device.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(null)));
-        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        assertEquals(0, repo.ensureUnsyncedQueued());
-        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+        assertFalse(device.ensureReady());
     }
 
     @Test

@@ -14,7 +14,7 @@ import com.zetteldraw.penpoc.data.db.ZettelDao;
  * Remote BOARD ink is not adopted here: Hand-off unlocks only when Ready
  * {@code notebook_logs} cover every inked notebook, so catch-up restores via
  * {@link InkSheetStore#applyRemoteLogLocked} alone. Local BoardEntity
- * {@code .zdi} remains migration residue for {@code ensureSheet} / Prepare.
+ * {@code .zdi} is residue cleared on Ready install — not a migrate-on-open path.
  *
  * @see Lww
  * @see docs/ink-sot-rewrite.md

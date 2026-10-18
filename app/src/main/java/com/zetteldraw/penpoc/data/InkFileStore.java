@@ -11,10 +11,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 /**
- * App-private ink files: {@code <dir>/<boardId>.zdi}, written atomically.
- * Writing is split so the slow half can run without the repository lock:
- * {@link #stage} writes and fsyncs a temp file, {@link #commit} renames it
- * into place (a metadata-only step).
+ * App-private ink files. Ready SoT is {@code <dir>/<sheetId>.zdl}.
+ * {@code .zdi} page-file helpers remain only to retire leftover residue after
+ * Ready install. Writing is split so the slow half can run without the
+ * repository lock: {@link #stage} + {@link #commit}.
  */
 public class InkFileStore {
     private final File dir;
@@ -29,7 +29,7 @@ public class InkFileStore {
         return new File(dir, boardId + ".zdi");
     }
 
-    /** Notebook ink log. v19 only opens {@code .zdi} page files, so it never reads this. */
+    /** Notebook ink log ({@code .zdl}) — Ready SoT. */
     public File logFile(String sheetId) {
         return new File(dir, sheetId + ".zdl");
     }

@@ -71,8 +71,9 @@ final class Device {
     }
 
     /**
-     * Historical BOARD residue ({@code .zdi} + BOARD outbox) for migration /
-     * pull / retire tests. Production import is Ready-direct.
+     * Historical BOARD residue ({@code .zdi} + BOARD outbox) for refuse /
+     * pull / outbox-drop tests. Production import is Ready-direct; ensure
+     * refuses blank-wipe over this residue (fleet endgame).
      */
     void seedUnmigrated(Board page) throws IOException {
         if (page == null || page.isBlank() || db.dao().board(page.id) != null) {

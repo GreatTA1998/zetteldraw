@@ -53,15 +53,15 @@ public final class InkSheetStore {
         void mirrorLog(String sheetId, byte[] bytes);
 
         /**
-         * Legacy page-file sources when no {@code .zdl} exists yet. Empty list is
-         * fine (blank notebook). Null means migration must abort.
+         * True when live BoardEntity rows still hold {@code inkHash} for this
+         * notebook (historical {@code .zdi} residue). Fleet endgame refuses
+         * blank-wipe ensure rather than page-file migrate.
          */
-        List<NotebookPaper.SourcePage> migrationSources(
-                String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince);
+        boolean hasInkedBoardEntity(String notebookId);
 
         /**
          * After Ready {@code .zdl} install: clear BoardEntity {@code .zdi} ink for
-         * this notebook so page files are migration residue only — not a second SoT.
+         * this notebook so page files are residue only — not a second SoT.
          */
         void retireBoardEntityInk(String notebookId);
 
@@ -267,23 +267,22 @@ public final class InkSheetStore {
                 return false;
             } catch (IOException | RuntimeException e) {
                 // Header-level corruption: quarantine the file (keep bytes on disk),
-                // then try page-file migration or empty Ready so *this* sheet opens
-                // and other notebooks stay usable. Never wipe the library.
+                // then empty Ready so *this* sheet opens and other notebooks stay
+                // usable. Page-file .zdi migration is gone (fleet Ready-covered).
                 Log.e(TAG, "ink log will not replay " + sheetId + "; quarantining", e);
                 File quarantined = deps.ink().quarantineLog(sheetId);
                 LaunchLog.mark("quarantined ink log " + sheetId
                         + (quarantined == null ? "" : (" → " + quarantined.getName())));
-                List<NotebookPaper.SourcePage> recovered =
-                        deps.migrationSources(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
-                if (recovered != null && !recovered.isEmpty()) {
-                    if (installFromSources(notebookId, recovered, pageHeight, false)) {
-                        return true;
-                    }
-                }
                 return installEmptyReady(notebookId, pageHeight);
             }
         }
         synchronized (deps.lock()) {
+            if (deps.hasInkedBoardEntity(notebookId)) {
+                // Refuse blank-wipe over historical .zdi — Hand-off / catch-up
+                // restores via Ready logs only (fleet boards_with_ink == 0).
+                LaunchLog.mark("ensure refused: unmigrated BoardEntity ink " + sheetId);
+                return false;
+            }
             if (deps.dao().notebookLog(sheetId) != null) {
                 // Meta says log-backed but file gone — open blank locally; cloud
                 // blob untouched (queue=false). Hand-off only if user chooses later.
@@ -291,9 +290,8 @@ public final class InkSheetStore {
                 return installEmptyReady(notebookId, pageHeight);
             }
         }
-        List<NotebookPaper.SourcePage> sources =
-                deps.migrationSources(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
-        return installFromSources(notebookId, sources, pageHeight, true);
+        // First open of an empty notebook — Ready .zdl, queue LOG.
+        return installFromSources(notebookId, java.util.Collections.emptyList(), pageHeight, true);
     }
 
     /**
@@ -316,8 +314,8 @@ public final class InkSheetStore {
 
     /**
      * Write {@code .zdl} from {@link NotebookPaper.SourcePage}s and install Ready.
-     * Shared by page-file migration ({@link #ensureSheet}) and Ready-direct
-     * {@link RoomBoardRepository#importLegacy} — never writes {@code .zdi}.
+     * Used by Ready-direct {@link RoomBoardRepository#importLegacy} and empty
+     * first-open — never writes {@code .zdi}.
      */
     boolean installFromSources(String notebookId, List<NotebookPaper.SourcePage> sources,
                                int pageHeight, boolean queue) {

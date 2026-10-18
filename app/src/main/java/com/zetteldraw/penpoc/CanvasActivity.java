@@ -2703,16 +2703,9 @@ public final class CanvasActivity extends Activity {
         showOverlay(scroll, scrollLp, root);
     }
 
-    /**
-     * Migrate unopened BoardEntity ink onto Ready {@code .zdl}, then queue LOG.
-     * No BOARD UPSERT — unopened {@code .zdi} must hit open/Prepare first.
-     */
+    /** Queue Ready LOG / notebook meta for push. No BOARD UPSERT. */
     private void queueLocalInkForSync() {
-        RoomBoardRepository repo = ZettelData.repository(this);
-        if (pageHeight > 0) {
-            repo.ensureReadyInkForBackup(pageHeight, legacyPageHeight, shortPagesSince);
-        }
-        repo.ensureUnsyncedQueued();
+        ZettelData.repository(this).ensureUnsyncedQueued();
     }
 
     /**

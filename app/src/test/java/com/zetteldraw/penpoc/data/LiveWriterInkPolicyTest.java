@@ -103,7 +103,7 @@ public class LiveWriterInkPolicyTest {
 
     @Test
     public void livePushOnlyKeepsUnmigratedBoardResidue() throws Exception {
-        // Pull never adopts BOARD (live or catch-up); residue waits for Prepare.
+        // Pull never adopts BOARD (live or catch-up); residue stays local.
         Board page = Board.blank();
         TestInk.draw(page, 10f);
         device.seedUnmigrated(page);

@@ -168,54 +168,24 @@ public class NotebookManagementTest {
     }
 
     @Test
-    public void deleteUnmigratedNotebookMigratesThenReturnsViaReady() throws Exception {
-        // Proof: Ready ensure + Move returns unmigrated .zdi without BoardEntity reseat.
-        // Scratchpad is already Ready (tip state) so legacy reseat would be invisible.
-        assertTrue(device.ensureReady());
-        BoardRepository.NotebookInfo book = repo.createNotebook("legacy-book");
-        Board page = Board.blank();
-        TestInk.draw(page, 42f);
-        device.seedUnmigrated(page);
-        BoardEntity row = device.db.dao().board(page.id);
-        assertNotNull(row);
-        row.notebookId = book.id();
-        device.db.dao().upsertBoard(row);
-        assertFalse(repo.isSheetReady(book.id()));
-        assertFalse(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
-
-        repo.deleteNotebook(book.id());
-
-        assertNotNull(device.db.dao().notebook(book.id()).deletedAt);
-        assertTrue(repo.notebookPages(book.id()).isEmpty());
-        List<Board> scratch = repo.scratchpadPages();
-        assertTrue(RoomBoardRepositoryTest.ids(scratch).contains(page.id));
-        Board landed = scratch.get(RoomBoardRepositoryTest.ids(scratch).indexOf(page.id));
-        assertEquals(1, TestInk.strokesOf(landed).size());
-    }
-
-    @Test
     public void deleteRefusesWhenEnsureFailsWithInkedBoardEntity() throws Exception {
-        // Put-back: ensure fails while inked BoardEntity remains — do not tombstone
-        // and strand ink. Missing .zdl + meta now heals to empty Ready; corrupt
-        // page-file migration still aborts ensure (null sources).
+        // Fleet endgame: ensure refuses unmigrated BoardEntity ink — do not
+        // tombstone and strand .zdi (no blank-wipe migrate-on-open).
         assertTrue(device.ensureReady());
-        BoardRepository.NotebookInfo book = repo.createNotebook("corrupt-book");
+        BoardRepository.NotebookInfo book = repo.createNotebook("residue-book");
         Board page = Board.blank();
         TestInk.draw(page, 7f);
         device.seedUnmigrated(page);
         BoardEntity row = device.db.dao().board(page.id);
         row.notebookId = book.id();
         device.db.dao().upsertBoard(row);
-        try (java.io.FileOutputStream out = new java.io.FileOutputStream(
-                new java.io.File(device.inkDir(), page.id + ".zdi"))) {
-            out.write(new byte[]{1, 2, 3, 4, 5});
-        }
         assertFalse(repo.ensureSheet(book.id(), Device.PAGE, Device.PAGE, 0L));
 
         repo.deleteNotebook(book.id());
 
         assertNull(device.db.dao().notebook(book.id()).deletedAt);
         assertEquals(book.id(), device.db.dao().board(page.id).notebookId);
+        assertNotNull(device.db.dao().board(page.id).inkHash);
     }
 
     @Test

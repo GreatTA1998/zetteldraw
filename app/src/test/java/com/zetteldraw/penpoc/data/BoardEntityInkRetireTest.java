@@ -27,7 +27,7 @@ import java.util.List;
 
 /**
  * After Ready {@code .zdl} install, BoardEntity {@code .zdi} must not remain a
- * second ink SoT. MetaPullApply board apply is a no-op when log-backed.
+ * second ink SoT. Page-file migrate-on-open is gone (fleet Ready-covered).
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
@@ -53,44 +53,40 @@ public class BoardEntityInkRetireTest {
     }
 
     @Test
-    public void ensureMigratesThenRetiresPageFiles() throws Exception {
+    public void importLegacyInstallsReadyAndRetiresPageFiles() throws Exception {
         Board page = Board.blank();
         TestInk.draw(page, 15f);
-        device.seedUnmigrated(page);
-        assertTrue(new File(inkDir, page.id + ".zdi").exists());
-        assertNotNull(device.db.dao().board(page.id).inkHash);
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
+        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
+        legacy.scratchpad.add(page);
 
-        assertTrue(device.ensureReady());
+        assertEquals(1, repo.importLegacy(legacy, Device.PAGE, Device.PAGE, 0L));
 
-        assertFalse("Ready must retire .zdi after migrate",
+        assertFalse("Ready must retire .zdi after install",
                 new File(inkDir, page.id + ".zdi").exists());
         BoardEntity row = device.db.dao().board(page.id);
         assertNotNull(row);
-        assertNull("inkHash cleared — migration residue only", row.inkHash);
+        assertNull("inkHash cleared — residue only", row.inkHash);
         assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
         assertTrue(new InkFileStore(inkDir).hasLog(NotebookPaper.sheetId(null)));
         List<Board> pages = repo.scratchpadPages();
-        // Migrated inked page only — no projected soft trailing blank.
         assertEquals(1, pages.size());
         assertEquals(page.id, pages.get(0).id);
         assertFalse(pages.get(0).isBlank());
     }
 
     @Test
-    public void movePageToNotebookRefusesUnmigratedPaperNull() throws Exception {
+    public void ensureRefusesUnmigratedBoardEntityInk() throws Exception {
         Board page = Board.blank();
         TestInk.draw(page, 11f);
         device.seedUnmigrated(page);
+        assertFalse("fleet endgame: no blank-wipe migrate",
+                device.ensureReady());
+        assertTrue(new File(inkDir, page.id + ".zdi").exists());
+        assertNotNull(device.db.dao().board(page.id).inkHash);
         BoardRepository.NotebookInfo dest = repo.createNotebook("move-refuse");
-        assertFalse("BoardEntity Move dual deleted — ensure first",
+        assertFalse("BoardEntity Move dual deleted — Ready first",
                 repo.movePageToNotebook(page.id, dest.id()));
         assertEquals(null, device.db.dao().board(page.id).notebookId);
-        assertTrue(device.ensureReady());
-        // Project Ready slices into cache (paper set) before Move.
-        assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
-        assertTrue(repo.movePageToNotebook(page.id, dest.id()));
-        assertTrue(RoomBoardRepositoryTest.ids(repo.notebookPages(dest.id())).contains(page.id));
     }
 
     @Test
@@ -107,26 +103,15 @@ public class BoardEntityInkRetireTest {
         assertNotNull(after);
         assertNull("BoardEntity wipe/delete dual deleted — no tombstone", after.deletedAt);
         assertEquals(before.inkHash, after.inkHash);
-        // seedUnmigrated queues UPSERT — must not become DELETE.
         OutboxEntry out = device.db.dao().outbox(OutboxEntry.BOARD, page.id);
         assertNotNull(out);
         assertEquals(OutboxEntry.UPSERT, out.op);
         assertTrue(new File(inkDir, page.id + ".zdi").exists());
-        assertTrue(device.ensureReady());
-        if (device.repo.scratchpadPages().isEmpty()) {
-            device.repo.createPage(null);
-        }
-        assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
-        repo.deletePage(page.id);
-        assertFalse(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
     }
 
     @Test
     public void logBackedNotebookIgnoresRemoteBoardInk() throws Exception {
         assertTrue(device.ensureReadyWithPage(null));
-        if (device.repo.scratchpadPages().isEmpty()) {
-            device.repo.createPage(null);
-        }
         Board ready = repo.scratchpadPages().get(0);
         TestInk.draw(ready, 20f);
         repo.saveInk(ready);
@@ -139,7 +124,6 @@ public class BoardEntityInkRetireTest {
         assertNotNull(log);
         byte[] logBefore = new InkFileStore(inkDir).readLog(sheetId);
 
-        // Pull has no BOARD channel — Ready .zdl must stay sole catch-up ink.
         SyncStore.PullPage pull = new SyncStore.PullPage();
         pull.cursor = Math.max(1, log.rev) + 50;
         repo.applyPull(pull);

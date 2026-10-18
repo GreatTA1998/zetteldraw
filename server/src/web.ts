@@ -413,9 +413,9 @@ export interface BackupMissing {
  * (the Boox source of truth after v20) is missing from S3 — this check catches that.
  *
  * Uncovered live BOARD ink (no Ready {@code notebook_logs} for the same notebook)
- * must not unlock Hand-off: Prepare / {@code ensureReadyInkForBackup} must cover
- * every inked notebook onto Ready {@code .zdl} first. Covered BOARD rows are
- * migration residue and are excluded from {@link BackupStatus#boards_with_ink}.
+ * must not unlock Hand-off: every inked notebook must already have Ready
+ * {@code .zdl} cover. Covered BOARD rows are residue and are excluded from
+ * {@link BackupStatus#boards_with_ink}.
  */
 export interface BackupStatus {
   ok: boolean;
