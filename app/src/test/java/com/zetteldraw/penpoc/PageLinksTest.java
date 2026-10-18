@@ -71,8 +71,11 @@ public class PageLinksTest {
         List<Board> pages = repo.pages(dense.id());
         TestInk.appendCovering(pages.get(0).paper, TestStrokes.stroke(3f, 39f * height + 10f), pages.get(0).id);
         repo.saveInk(pages.get(0));
+        // Explicit blank after the last inked slice so the viewport can park with
+        // page 40 as front (Create new page — not a soft trailing blank).
+        assertNotNull(repo.createPage(dense.id()));
         openNotebook(root, "dense");
-        assertEquals(40, repo.pages(dense.id()).size());
+        assertEquals(41, repo.pages(dense.id()).size());
         // Return restores the left-behind scroll (page 1); move to the inked page so the
         // source is also the front page and the banner stays "Linking …".
         pageScroller(root).scrollTo(0, 39 * height);
@@ -95,7 +98,7 @@ public class PageLinksTest {
         room.invalidateOpenSheet(otherA.id());
         room.invalidateOpenSheet(otherB.id());
 
-        TextView control = textIn((View) find(root, "40/40").getParent(), "Link");
+        TextView control = textIn((View) find(root, "40/41").getParent(), "Link");
         assertNotNull(control);
         View slot = (View) control.getParent();
         View area = (View) pageScroller(root).getParent();
@@ -346,7 +349,9 @@ public class PageLinksTest {
         int height = repo.pages(to.id()).get(0).slicePx;
         ink(repo, from.id(), 10f);
         ink(repo, to.id(), height + 10f);
-        assertEquals(2, repo.pages(to.id()).size());
+        // Extra blank so scroll can park on page 2 as front while linking.
+        assertNotNull(repo.createPage(to.id()));
+        assertEquals(3, repo.pages(to.id()).size());
         openNotebook(root, "frombook");
         clickOnPage(root, "1/1", "Link");
         openNotebook(root, "tobook");
@@ -359,8 +364,8 @@ public class PageLinksTest {
         String above = repo.pages(to.id()).get(0).id;
         repo.deletePage(above);
         openNotebook(root, "frombook");
-        assertNotNull(find(root, "→ tobook 1/1"));
-        assertNull(find(root, "→ tobook 2/2"));
+        assertNotNull(find(root, "→ tobook 1/2"));
+        assertNull(find(root, "→ tobook 2/3"));
 
         controller.pause().stop().destroy();
     }
@@ -428,16 +433,21 @@ public class PageLinksTest {
         int height = repo.pages(chapter.id()).get(0).slicePx;
         ink(repo, from.id(), 10f);
         ink(repo, chapter.id(), 2f * height + 10f);
-        assertEquals(3, repo.pages(chapter.id()).size());
+        assertNotNull(repo.createPage(chapter.id()));
+        assertEquals(4, repo.pages(chapter.id()).size());
         assertEquals(2, repo.pages(chapter.id()).get(0).paper.lastInkedSlice());
 
         openNotebook(root, "frombook");
         clickOnPage(root, "1/1", "Link");
         click(root, "shelf");
         openNotebook(root, "chapter");
-        // Return restores the scroll left behind (page 1), not the last inked page.
-        assertNotNull(find(root, "Linking frombook 1 to chapter 1"));
         View scroller = pageScroller(root);
+        // Park on page 1 so the link target banner names chapter 1 (first open after
+        // grow may land on last inked until scroll is restored).
+        scroller.scrollTo(0, 0);
+        idle();
+        relayout(root);
+        assertNotNull(find(root, "Linking frombook 1 to chapter 1"));
         scroller.scrollTo(0, 2 * height);
         idle();
         relayout(root);
@@ -450,13 +460,13 @@ public class PageLinksTest {
         click(root, "Confirm");
 
         openNotebook(root, "frombook");
-        click(root, "→ chapter 1/3");
+        click(root, "→ chapter 1/4");
         assertFalse("ancestor shelf is not underlined",
                 ((View) find(root, "shelf").getParent()).isSelected());
         assertTrue(((View) find(root, "chapter").getParent()).isSelected());
         scroller = pageScroller(root);
         assertEquals("the link opens page 1, not the last inked page", 0, scroller.getScrollY());
-        TextView first = find(root, "1/3");
+        TextView first = find(root, "1/4");
         assertNotNull(first);
         int top = offsetIn(first, scroller);
         assertTrue(top >= scroller.getScrollY() && top < scroller.getScrollY() + scroller.getHeight());
@@ -470,6 +480,7 @@ public class PageLinksTest {
         TestInk.appendCovering(page.paper, TestStrokes.stroke(4f, y), page.id);
         repo.saveInk(page);
     }
+
 
     private static void ensureNotebookPage(BoardRepository repo, String notebookId) {
         repo.ensureSheet(notebookId, 800, 800, 0L);

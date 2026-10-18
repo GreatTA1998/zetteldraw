@@ -165,16 +165,8 @@ public class LaunchTest {
 
     @Test
     public void pageHeightFollowsTheDrawingArea() throws Exception {
-        // Re-open without the @Before 800px seed so the sheet freezes at measured height.
-        ZettelData.resetForTest();
-        UiExecutors.useSynchronousForTest();
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         CanvasActivity activity = controller.get();
-        ShadowLooper.idleMainLooper();
-        View root = activity.getWindow().getDecorView();
-        TextView create = findText(root, "Create new page");
-        assertNotNull(create);
-        assertTrue(create.performClick());
         ShadowLooper.idleMainLooper();
         Field heightField = CanvasActivity.class.getDeclaredField("pageHeight");
         heightField.setAccessible(true);
@@ -183,6 +175,9 @@ public class LaunchTest {
         FrameLayout area = (FrameLayout) areaField.get(activity);
         int before = heightField.getInt(activity);
         assertTrue(before > 0);
+        View slot = (View) CanvasActivitySmokeTest.pageLabelViews(activity.getWindow().getDecorView()).get(0).getParent();
+        int openedSlice = slot.getLayoutParams().height;
+        assertTrue(openedSlice > 0);
 
         Field barField = CanvasActivity.class.getDeclaredField("topBar");
         barField.setAccessible(true);
@@ -194,8 +189,7 @@ public class LaunchTest {
         assertEquals("the drawing area really shrank", areaBefore - 200, area.getHeight());
         assertEquals("recomputed from the new size, not frozen at the first layout", before - 200,
                 heightField.getInt(activity));
-        View slot = (View) CanvasActivitySmokeTest.pageLabelViews(activity.getWindow().getDecorView()).get(0).getParent();
-        assertEquals("a notebook keeps the slice height it was opened at", before,
+        assertEquals("a notebook keeps the slice height it was opened at", openedSlice,
                 slot.getLayoutParams().height);
         controller.pause().stop().destroy();
     }

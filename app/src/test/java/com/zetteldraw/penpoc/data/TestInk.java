@@ -50,7 +50,8 @@ public final class TestInk {
 
     /**
      * Append stroke after ensuring slices cover {@code bottom}. First new slice
-     * may use {@code adoptId} (test substitute for deleted soft-tail growTo).
+     * may use {@code adoptId} only when that id is not already on the paper
+     * (test substitute for deleted soft-tail growTo — never duplicate a Ready id).
      */
     public static void appendCovering(NotebookPaper paper, InkRenderer.InkStroke stroke, String adoptId) {
         if (paper == null || stroke == null) {
@@ -58,7 +59,9 @@ public final class TestInk {
         }
         float bottom = stroke.bounds.bottom;
         while (bottom >= paper.origin(paper.sliceCount())) {
-            String id = adoptId != null ? adoptId : java.util.UUID.randomUUID().toString();
+            String id = (adoptId != null && paper.indexOfSliceId(adoptId) < 0)
+                    ? adoptId
+                    : java.util.UUID.randomUUID().toString();
             adoptId = null;
             paper.appendBlankPage(id);
         }
