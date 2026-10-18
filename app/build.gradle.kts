@@ -45,8 +45,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Tip v150: safe-boot escape — catch open OOM/Error, crash-loop breaker skips Scratchpad.
-        versionCode = 150
-        versionName = "4.29"
+        versionCode = 151
+        versionName = "4.30"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

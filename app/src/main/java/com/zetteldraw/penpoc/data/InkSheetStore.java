@@ -201,7 +201,7 @@ public final class InkSheetStore {
                 return isSheetReady(notebookId);
             } catch (Error e) {
                 // Legitimate huge replay / OOM: leave .zdl intact (no quarantine).
-                // Caller must safe-boot to library shell — never wipe the library.
+                // Caller escapes to empty chrome — never wipe the library.
                 Log.e(TAG, "ink log replay Error; leaving file intact " + sheetId, e);
                 LaunchLog.mark("ink log Error leave intact " + sheetId + ": " + e);
                 return false;
@@ -300,19 +300,21 @@ public final class InkSheetStore {
     }
 
     void installSheet(String notebookId, String sheetId, NotebookPaper paper, int flushed, boolean queue) {
+        // Disk I/O outside the repo lock so main-thread pages()/isSheetReady
+        // are not blocked on large .zdl reads during ensureSheet.
+        byte[] bytes;
+        try {
+            bytes = deps.ink().readLog(sheetId);
+        } catch (IOException e) {
+            return;
+        }
+        if (bytes == null) {
+            bytes = paper.bytes();
+        }
         synchronized (deps.lock()) {
             OpenSheet open = new OpenSheet(sheetId, notebookId, paper, flushed);
             open.ready = true;
             sheets.put(sheetId, open);
-            byte[] bytes;
-            try {
-                bytes = deps.ink().readLog(sheetId);
-            } catch (IOException e) {
-                return;
-            }
-            if (bytes == null) {
-                bytes = paper.bytes();
-            }
             ensureNotebookLogMetaLocked(open, bytes, queue);
             if (queue && bytes != null) {
                 deps.mirrorLog(sheetId, bytes);

@@ -316,7 +316,7 @@ public class CanvasActivitySmokeTest {
         idle();
     }
 
-    /** v150 library-first cold start: tap Scratchpad to ensure+paint ink. */
+    /** Ensure Scratchpad is selected (cold start already opens it; re-tap is fine). */
     private static void loadScratchpad(View root) {
         clickDesc(root, "Scratchpad");
     }

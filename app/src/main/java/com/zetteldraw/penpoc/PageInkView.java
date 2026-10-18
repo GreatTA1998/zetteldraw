@@ -297,7 +297,11 @@ final class PageInkView extends FrameLayout {
         if (renderToken != null && renderingLayout == next.layout) {
             return;
         }
-        if (next.layout != shown.layout && !shown.isEmpty() && !shown.mapsLike(next)) {
+        // New layout (including cold open / after clearShown when shown is empty):
+        // snapshot visible slices on main, paint off-main, then install.
+        // Empty shown mapsLike vacuously, so treat isEmpty as needing pre-render —
+        // otherwise Ready cold open runs renderSlice on the UI thread (v146 ANR).
+        if (next.layout != shown.layout && (shown.isEmpty() || !shown.mapsLike(next))) {
             List<RenderJob> jobs = missingBitmaps(next);
             if (!jobs.isEmpty()) {
                 Object token = new Object();
@@ -307,7 +311,9 @@ final class PageInkView extends FrameLayout {
                 UiExecutors.renderer.execute(() -> {
                     long started = SystemClock.uptimeMillis();
                     for (RenderJob job : jobs) {
-                        job.bitmap = renderPage(job.strokes, width, job.height);
+                        job.bitmap = job.paper
+                                ? renderPaperSnapshot(job.strokes, width, job.height, job.paperOrigin)
+                                : renderPage(job.strokes, width, job.height);
                     }
                     LaunchLog.once("render", "first screen of pages rendered: " + jobs.size() + " pages in "
                             + (SystemClock.uptimeMillis() - started) + " ms");
@@ -326,9 +332,11 @@ final class PageInkView extends FrameLayout {
         if (current) {
             renderToken = null;
         }
+        // Accept by layout token. Do not require sameStrokes(page.strokes, …) —
+        // Ready clears page.strokes in projectLocked.
         boolean usable = current && next != null && next.layout == renderingLayout;
         for (RenderJob job : jobs) {
-            if (usable && sameStrokes(job.page.strokes, job.strokes)) {
+            if (usable) {
                 putBitmap(job.page.id, job.bitmap);
             } else {
                 job.bitmap.recycle();
@@ -347,7 +355,11 @@ final class PageInkView extends FrameLayout {
         }
     }
 
-    /** Visible pages of {@code next} with no cached bitmap, with stroke snapshots taken here on the main thread. */
+    /**
+     * Visible pages of {@code next} with no cached bitmap. Ready slices snapshot
+     * {@link NotebookPaper#touching} (+ paperOrigin); legacy Board.strokes duals
+     * snapshot {@code page.strokes}. Snapshots are taken here on the main thread.
+     */
     private List<RenderJob> missingBitmaps(InkViewport next) {
         ArrayList<RenderJob> jobs = new ArrayList<>();
         if (surfaceView.getWidth() <= 0 || next.isEmpty()) {
@@ -357,42 +369,40 @@ final class PageInkView extends FrameLayout {
         for (int index = next.firstVisible(); index <= last; index++) {
             Board page = next.page(index);
             int height = next.layout.heights[index];
-            // Paper ink is drawn from the sheet in the on-screen slice only.
-            // Snapshotting page.strokes here would cache a blank bitmap.
-            if (page.paper != null) {
+            Bitmap cached = bitmaps.get(page.id);
+            if (cached != null && cached.getHeight() == height) {
                 continue;
             }
-            Bitmap cached = bitmaps.get(page.id);
-            if (cached == null || cached.getHeight() != height) {
-                jobs.add(new RenderJob(page, new ArrayList<>(page.strokes), height));
-                paintedPageIds.add(page.id);
+            if (page.paper != null) {
+                syncPaperOrigin(page);
+                jobs.add(new RenderJob(page,
+                        new ArrayList<>(page.paper.touching(page.sliceIndex)),
+                        page.paperOrigin,
+                        height,
+                        true));
+            } else {
+                jobs.add(new RenderJob(page, new ArrayList<>(page.strokes), 0f, height, false));
             }
+            paintedPageIds.add(page.id);
         }
         return jobs;
-    }
-
-    private static boolean sameStrokes(List<InkRenderer.InkStroke> now, List<InkRenderer.InkStroke> snapshot) {
-        if (now.size() != snapshot.size()) {
-            return false;
-        }
-        for (int i = 0; i < now.size(); i++) {
-            if (now.get(i) != snapshot.get(i)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private static final class RenderJob {
         final Board page;
         final List<InkRenderer.InkStroke> strokes;
+        final float paperOrigin;
         final int height;
+        final boolean paper;
         Bitmap bitmap;
 
-        RenderJob(Board page, List<InkRenderer.InkStroke> strokes, int height) {
+        RenderJob(Board page, List<InkRenderer.InkStroke> strokes, float paperOrigin,
+                int height, boolean paper) {
             this.page = page;
             this.strokes = strokes;
+            this.paperOrigin = paperOrigin;
             this.height = height;
+            this.paper = paper;
         }
     }
 
@@ -1967,26 +1977,42 @@ final class PageInkView extends FrameLayout {
         }
     }
 
-    /** One slice of the paper, drawn in the slice's own bitmap. */
+    /** One slice of the paper, drawn in the slice's own bitmap. Main-thread / cache miss path. */
     private Bitmap renderSlice(Board page, int width, int height, Set<String> exclude) {
         paintedPageIds.add(page.id);
-        Bitmap bitmap = Bitmap.createBitmap(Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888);
-        bitmap.eraseColor(Color.WHITE);
         if (page.paper == null) {
-            return bitmap;
+            Bitmap blank = Bitmap.createBitmap(Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888);
+            blank.eraseColor(Color.WHITE);
+            return blank;
         }
         syncPaperOrigin(page);
-        Canvas canvas = new Canvas(bitmap);
-        canvas.save();
-        canvas.clipRect(0, 0, width, height);
-        canvas.translate(0f, -page.paperOrigin);
         ArrayList<InkRenderer.InkStroke> rest = new ArrayList<>();
         for (InkRenderer.InkStroke stroke : page.paper.touching(page.sliceIndex)) {
             if (exclude == null || !exclude.contains(stroke.id)) {
                 rest.add(stroke);
             }
         }
-        InkRenderer.drawAll(canvas, paint, rest);
+        return renderPaperSnapshot(rest, width, height, page.paperOrigin);
+    }
+
+    /**
+     * Any thread: draw a paper-slice snapshot with translate {@code -paperOrigin}
+     * (same geometry as {@link #renderSlice}). {@code strokes} must not change while this runs.
+     */
+    static Bitmap renderPaperSnapshot(List<InkRenderer.InkStroke> strokes, int width, int height,
+            float paperOrigin) {
+        Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
+        ink.setStyle(Paint.Style.STROKE);
+        ink.setColor(Color.BLACK);
+        ink.setStrokeCap(Paint.Cap.ROUND);
+        ink.setStrokeJoin(Paint.Join.ROUND);
+        Bitmap bitmap = Bitmap.createBitmap(Math.max(1, width), Math.max(1, height), Bitmap.Config.ARGB_8888);
+        bitmap.eraseColor(Color.WHITE);
+        Canvas canvas = new Canvas(bitmap);
+        canvas.save();
+        canvas.clipRect(0, 0, width, height);
+        canvas.translate(0f, -paperOrigin);
+        InkRenderer.drawAll(canvas, ink, strokes);
         canvas.restore();
         return bitmap;
     }

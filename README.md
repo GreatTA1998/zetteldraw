@@ -49,6 +49,8 @@ Tests that lock the guarantees (names encode the claim):
 
 Race invariants assume the process stays alive. They do **not** mean an unbounded Scratchpad fits in ~256 MB heap.
 
+**Cold start:** opens Scratchpad by default (product). Dense Ready first paint runs on `UiExecutors.renderer` so `renderSlice` is not done on the UI thread (`ReadyFirstPaintTest`). v150 library-shell-only was emergency recovery, not the lasting product.
+
 | Envelope | Expectation on tip **v69+** |
 | --- | --- |
 | **~100 pages** / light–moderate ink (log ≲ few MB) | **Safe** for open, draw, lasso, Move, sync/Prepare |
