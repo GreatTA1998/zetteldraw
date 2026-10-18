@@ -52,9 +52,11 @@ public class EnsureSheetSingleFlightTest {
     @Test
     public void concurrentEnsureSheetReplaysOnce() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(Device.PAGE);
+        // Explicit slices covering each stroke Y — no soft grow-on-append.
         for (int i = 0; i < 24; i++) {
-            paper.appendStroke(TestInk.stroke(10f, i * Device.PAGE + 20f, 12));
+            TestInk.appendCovering(paper, TestInk.stroke(10f, i * Device.PAGE + 20f, 12));
         }
+        assertTrue(paper.sliceCount() > 1);
         writeLog(NotebookPaper.sheetId(null), paper.bytes());
         device.repo.invalidateOpenSheet(null);
 

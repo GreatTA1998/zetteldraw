@@ -123,7 +123,7 @@ public final class NotebookPaper {
     /**
      * Build a log from page-local strokes. Each page contributes its real
      * height, so a 1420 page followed by a 1680 page does not move a point.
-     * The caller leaves the trailing blank and hidden conflict copies out.
+     * The caller leaves hidden conflict copies out (and any legacy soft blank).
      */
     public static NotebookPaper migrate(List<SourcePage> pages, int newSliceHeight) {
         int frozen = newSliceHeight;

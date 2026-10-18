@@ -127,12 +127,20 @@ public class LaunchTest {
 
     @Test
     public void aFirstLoadThatNeverReturnsIsLoadedAgainOnRetry() {
+        // setUp seeds createPage so the sheet is Ready; drop in-memory Ready so boot
+        // cannot take the snappy open path and must use the (stuck) loader + retry.
+        RoomBoardRepository repo = ZettelData.repository(app);
+        repo.invalidateOpenSheet(null);
+        assertFalse(repo.isSheetReady(null));
         UiExecutors.loader = task -> { };
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         ShadowLooper.idleMainLooper();
-        assertTrue("the stuck load shows nothing yet", CanvasActivitySmokeTest.pageLabels(root).isEmpty());
+        // Stuck load: no page chrome labels (Create new page alone is not page chrome).
+        assertTrue("the stuck load shows no page chrome yet",
+                CanvasActivitySmokeTest.pageLabels(root).isEmpty());
         ShadowLooper.idleMainLooper(1_100, TimeUnit.MILLISECONDS);
+        // Retry re-ensures the seeded createPage slice.
         assertEquals("[1/1]", CanvasActivitySmokeTest.pageLabels(root).toString());
         assertNotNull("tabs came with it", findText(root, "comedy"));
         controller.pause().stop().destroy();

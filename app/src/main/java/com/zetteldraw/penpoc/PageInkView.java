@@ -206,9 +206,9 @@ final class PageInkView extends FrameLayout {
     }
 
     /**
-     * A longer page list that does not move any page already shown (a trailing
-     * blank was appended). Keeps the pen live and skips the full-frame flash
-     * that {@link #setPages} uses when geometry remaps.
+     * A longer page list that does not move any page already shown (Create new
+     * page appended a real slice). Keeps the pen live and skips the full-frame
+     * flash that {@link #setPages} uses when geometry remaps.
      */
     void extendPages(List<Board> next, int[] pageHeights, int gap) {
         InkViewport view = new InkViewport(new InkViewport.Layout(next, pageHeights, gap), target().scrollY);
@@ -408,7 +408,7 @@ final class PageInkView extends FrameLayout {
 
     private void install(InkViewport next) {
         boolean newLayout = next.layout != shown.layout;
-        // Existing pages still sit where they did (e.g. a trailing blank was
+        // Existing pages still sit where they did (e.g. Create new page
         // appended). Keep the picture and the pen; a full frame would flash.
         boolean keepPicture = !shown.isEmpty() && shown.mapsLike(next);
         shown = next;

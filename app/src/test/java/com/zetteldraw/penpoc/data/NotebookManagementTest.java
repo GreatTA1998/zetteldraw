@@ -13,7 +13,6 @@ import com.zetteldraw.penpoc.Board;
 import com.zetteldraw.penpoc.Notebook;
 import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
-import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
 
 import org.junit.After;
@@ -196,7 +195,9 @@ public class NotebookManagementTest {
 
     @Test
     public void deleteRefusesWhenEnsureFailsWithInkedBoardEntity() throws Exception {
-        // Put-back: missing .zdl + meta row blocks ensure; do not tombstone and strand ink.
+        // Put-back: ensure fails while inked BoardEntity remains — do not tombstone
+        // and strand ink. Missing .zdl + meta now heals to empty Ready; corrupt
+        // page-file migration still aborts ensure (null sources).
         assertTrue(device.ensureReady());
         BoardRepository.NotebookInfo book = repo.createNotebook("corrupt-book");
         Board page = Board.blank();
@@ -205,15 +206,10 @@ public class NotebookManagementTest {
         BoardEntity row = device.db.dao().board(page.id);
         row.notebookId = book.id();
         device.db.dao().upsertBoard(row);
-        NotebookLogEntity meta = new NotebookLogEntity();
-        meta.id = NotebookPaper.sheetId(book.id());
-        meta.notebookId = book.id();
-        meta.inkHash = "dead";
-        meta.inkBytes = 1;
-        meta.sliceHeight = Device.PAGE;
-        meta.createdAt = device.tick();
-        meta.updatedAt = meta.createdAt;
-        device.db.dao().upsertNotebookLog(meta);
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(
+                new java.io.File(device.inkDir(), page.id + ".zdi"))) {
+            out.write(new byte[]{1, 2, 3, 4, 5});
+        }
         assertFalse(repo.ensureSheet(book.id(), Device.PAGE, Device.PAGE, 0L));
 
         repo.deleteNotebook(book.id());

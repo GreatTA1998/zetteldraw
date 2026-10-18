@@ -87,7 +87,7 @@ public class SyncEndToEndTest {
         assertTrue(b.ensureReady(notebook.id()));
         assertEquals(title, titleOn(b, notebook.id()));
         List<Board> onB = b.repo.notebookPages(notebook.id());
-        assertEquals("the page plus the notebook's trailing blank", 2, onB.size());
+        assertEquals("moved page only — no soft trailing blank", 1, onB.size());
         assertEquals(page.id, onB.get(0).id);
         TestInk.assertSameInk(page.strokes, onB.get(0).strokes);
 

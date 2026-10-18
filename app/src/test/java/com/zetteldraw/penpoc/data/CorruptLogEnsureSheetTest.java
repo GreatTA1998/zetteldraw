@@ -1,7 +1,6 @@
 package com.zetteldraw.penpoc.data;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
@@ -51,7 +50,8 @@ public class CorruptLogEnsureSheetTest {
     public void ensureSheetHealsAbsurdStrokeTailAndKeepsPriorInk() throws Exception {
         String sheetId = NotebookPaper.sheetId(null);
         NotebookPaper paper = NotebookPaper.empty(Device.PAGE);
-        paper.appendStroke(TestInk.stroke(10f, 20f, 8));
+        // Seed a real slice — appendStroke alone no longer grows pages.
+        TestInk.appendCovering(paper, TestInk.stroke(10f, 20f, 8));
         byte[] base = paper.bytes();
         ByteArrayOutputStream payload = new ByteArrayOutputStream();
         DataOutputStream out = new DataOutputStream(payload);
@@ -72,6 +72,7 @@ public class CorruptLogEnsureSheetTest {
 
         assertTrue(device.ensureReady());
         assertTrue(device.repo.isSheetReady(null));
+        assertEquals(1, device.repo.scratchpadPages().size());
         assertEquals(1, device.repo.scratchpadPages().get(0).paper.strokes().size());
         // Healed rewrite shorter than corrupt seed.
         assertTrue(new File(device.inkDir(), sheetId + ".zdl").length() <= base.length);
@@ -94,7 +95,8 @@ public class CorruptLogEnsureSheetTest {
         // Original moved aside — not deleted.
         File[] corrupt = device.inkDir().listFiles((dir, name) -> name.contains(".zdl.corrupt"));
         assertTrue(corrupt != null && corrupt.length >= 1);
-        assertFalse(device.repo.scratchpadPages().isEmpty());
+        // Empty Ready is valid — Create new page only; do not require a slice.
+        assertTrue(device.repo.scratchpadPages().isEmpty());
     }
 
     @Test

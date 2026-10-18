@@ -55,12 +55,12 @@ public class CollectionNavTest {
     }
 
     @Test
-    public void fingerprintMismatchFallsBackToFirstOpenTrailingBlank() {
+    public void fingerprintMismatchFallsBackToFirstOpenLastPage() {
         List<Board> pages = pages(5);
         nav.rememberScroll("scratchpad", 350, 5, pages.get(2).id);
         List<Board> shorter = pages(3);
         int y = nav.resolveTargetY("scratchpad", null, shorter, true, layout);
-        assertEquals("count mismatch ⇒ first-open trailing blank, not stale Y", 200, y);
+        assertEquals("count mismatch ⇒ first-open last page, not stale Y", 200, y);
     }
 
     @Test
