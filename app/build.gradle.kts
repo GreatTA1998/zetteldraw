@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v137: Documents .zdi mirror gone — Ready .zdl mirror only.
-        versionCode = 137
-        versionName = "4.16"
+        // Tip v147: Ready async first-paint; re-delete dead Board.strokes duals.
+        versionCode = 147
+        versionName = "4.26"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
@@ -81,6 +81,10 @@ android {
             isIncludeAndroidResources = true
             all {
                 it.systemProperty("zd.repoRoot", rootProject.projectDir.absolutePath)
+                // Forwarded for DenseZdlFixtureWriter (emulator crash harness seed).
+                System.getProperty("zd.dense.slices")?.let { v -> it.systemProperty("zd.dense.slices", v) }
+                System.getProperty("zd.dense.strokes")?.let { v -> it.systemProperty("zd.dense.strokes", v) }
+                System.getProperty("zd.dense.out")?.let { v -> it.systemProperty("zd.dense.out", v) }
             }
         }
     }

@@ -252,14 +252,6 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     const scope = scopeOf(req.principal);
     await assertCanPush(deps.pool, scope, body.device_id);
     const results = await push(deps.pool, deps.storage, body, scope);
-    if (deps.thumbs) {
-      const stored = new Set(results.filter((r) => r.entity === "board" && r.status !== "missing_blob").map((r) => r.id));
-      for (const board of body.boards) {
-        if (board.ink_hash && board.deleted_at === null && stored.has(board.id)) {
-          deps.thumbs.enqueue(board.ink_hash);
-        }
-      }
-    }
     req.log.info(
       {
         device: body.device_id,
