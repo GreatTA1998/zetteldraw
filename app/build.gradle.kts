@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v156: Create new page — no top border (avoids clash with dashed separator).
-        versionCode = 156
-        versionName = "4.35"
+        // Tip v157: restore v145 wide multi-column Move/Place-under picker (lost in v148 rollback).
+        versionCode = 157
+        versionName = "4.36"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

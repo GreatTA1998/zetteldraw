@@ -30,7 +30,7 @@ Seed top-level notebooks: comedy, journal, actions.life, miscellaneous. Scratchp
 
 **Drawing area.** Continuous vertical scroll of pages split by a dashed line. Finger scrolls; stylus draws. Every list ends with one trailing blank. First stroke on the blank stores it and grows a new blank. Page chrome: top-left **k/n**; bottom-left link refs then **Link · Reorder**; bottom-right **Move · ⋮**.
 
-**Mode UIs.** Link and Reorder use a **bottom snackbar** with Confirm/Cancel and normal nav (bars + scroll). Do **not** fold temporary mode chrome into the top bars or rename the standing Link / Move / Reorder labels. Move and Place under use the **shared hierarchy notebook menu** (tall indented tree), not snackbar+nav.
+**Mode UIs.** Link and Reorder use a **bottom snackbar** with Confirm/Cancel and normal nav (bars + scroll). Do **not** fold temporary mode chrome into the top bars or rename the standing Link / Move / Reorder labels. Move and Place under use the **shared hierarchy notebook menu** (wide multi-column packed tree over the drawing area), not snackbar+nav.
 
 **Blank pages.** Link / Reorder / Move visible but disabled (same alpha). On the trailing blank, **⋮** stays visible with that disabled look; taps no-op.
 
