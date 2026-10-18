@@ -2,11 +2,11 @@ package com.zetteldraw.penpoc;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
 
-import com.zetteldraw.penpoc.data.NotebookPaper;
 import com.zetteldraw.penpoc.data.TestStrokes;
 
 import org.junit.Test;
@@ -22,24 +22,7 @@ import java.util.Set;
 @Config(sdk = 33, application = Application.class)
 public class InkHistoryTest {
     private final InkHistory history = new InkHistory();
-    private final NotebookPaper paper = NotebookPaper.empty(1000);
-    private final Board page = paperBoard(paper);
-
-    private static Board paperBoard(NotebookPaper paper) {
-        Board board = Board.blank();
-        board.paper = paper;
-        board.sliceIndex = 0;
-        board.slicePx = 1000;
-        return board;
-    }
-
-    private static List<String> ids(NotebookPaper paper) {
-        ArrayList<String> ids = new ArrayList<>();
-        for (InkRenderer.InkStroke stroke : paper.strokes()) {
-            ids.add(stroke.id);
-        }
-        return ids;
-    }
+    private final Board page = new Board("p", 1L);
 
     @Test
     public void strokesUndoAndRedoInOrder() {
@@ -49,76 +32,82 @@ public class InkHistoryTest {
         assertFalse(history.canRedo());
 
         assertEquals(Set.of(page), history.undo());
-        assertEquals(List.of(a.id), ids(paper));
+        assertEquals(List.of(a), page.strokes);
         history.undo();
-        assertTrue(paper.strokes().isEmpty());
+        assertTrue(page.strokes.isEmpty());
         assertFalse(history.canUndo());
         assertTrue(history.undo().isEmpty());
 
         history.redo();
         history.redo();
-        assertEquals(List.of(a.id, b.id), ids(paper));
+        assertEquals(List.of(a, b), page.strokes);
         assertFalse(history.canRedo());
     }
 
     @Test
-    public void eraseUndoPutsStrokesBack() {
+    public void eraseUndoPutsStrokesBackWhereTheyWere() {
         InkRenderer.InkStroke a = draw(10f);
         InkRenderer.InkStroke b = draw(20f);
         InkRenderer.InkStroke c = draw(30f);
-        paper.deleteIds(List.of(b.id, c.id));
-        history.record(InkHistory.Edit.of(InkHistory.Part.paperRemoved(page, List.of(b, c))));
-        assertEquals(List.of(a.id), ids(paper));
+        InkRenderer.InkStroke d = draw(40f);
+        List<InkHistory.Placed> removed = new ArrayList<>();
+        removed.add(new InkHistory.Placed(b, 1));
+        removed.add(new InkHistory.Placed(d, 3));
+        page.strokes.remove(d);
+        page.strokes.remove(b);
+        history.record(InkHistory.Edit.of(InkHistory.Part.removed(page, removed)));
 
         history.undo();
-        assertEquals(Set.of(a.id, b.id, c.id), Set.copyOf(ids(paper)));
+        assertEquals(List.of(a, b, c, d), page.strokes);
         history.redo();
-        assertEquals(List.of(a.id), ids(paper));
+        assertEquals(List.of(a, c), page.strokes);
     }
 
     @Test
-    public void eraseAcrossTwoPapersIsOneStep() {
-        NotebookPaper otherPaper = NotebookPaper.empty(1000);
-        Board other = paperBoard(otherPaper);
+    public void eraseAcrossTwoPagesIsOneStep() {
+        Board other = new Board("q", 2L);
         InkRenderer.InkStroke a = draw(10f);
         InkRenderer.InkStroke x = TestStrokes.stroke(50f, 50f);
-        otherPaper.appendStroke(x);
-        paper.deleteIds(List.of(a.id));
-        otherPaper.deleteIds(List.of(x.id));
+        other.strokes.add(x);
         InkHistory.Edit erase = new InkHistory.Edit();
-        erase.add(InkHistory.Part.paperRemoved(page, List.of(a)));
-        erase.add(InkHistory.Part.paperRemoved(other, List.of(x)));
+        page.strokes.clear();
+        other.strokes.clear();
+        erase.add(InkHistory.Part.removed(page, List.of(new InkHistory.Placed(a, 0))));
+        erase.add(InkHistory.Part.removed(other, List.of(new InkHistory.Placed(x, 0))));
         history.record(erase);
 
         assertEquals(Set.of(page, other), history.undo());
-        assertEquals(List.of(a.id), ids(paper));
-        assertEquals(List.of(x.id), ids(otherPaper));
+        assertEquals(List.of(a), page.strokes);
+        assertEquals(List.of(x), other.strokes);
     }
 
     @Test
-    public void lassoShiftUndoRestoresPointsAndRedoMovesAgain() {
+    public void lassoMoveUndoRestoresPointsAndRedoMovesAgain() {
         InkRenderer.InkStroke a = draw(10f);
-        draw(200f);
-        paper.translate(List.of(a.id), 30f, 40f);
-        history.record(InkHistory.Edit.of(InkHistory.Part.paperShifted(page, List.of(a.id), 30f, 40f)));
-        assertEquals(a.points.get(0).x + 30f, paper.stroke(a.id).points.get(0).x, 0.001f);
+        InkRenderer.InkStroke b = draw(200f);
+        Lasso.Move move = Lasso.move(page, Set.of(a.id), 30f, 40f);
+        InkRenderer.InkStroke moved = page.strokes.get(0);
+        history.record(InkHistory.Edit.of(move.historyPart()));
+        assertEquals(a.id, moved.id);
 
         history.undo();
-        assertEquals(a.points.get(0).x, paper.stroke(a.id).points.get(0).x, 0.001f);
-        assertEquals(a.points.get(0).y, paper.stroke(a.id).points.get(0).y, 0.001f);
+        assertSame(a, page.strokes.get(0));
+        assertSame(b, page.strokes.get(1));
         history.redo();
-        assertEquals(a.points.get(0).y + 40f, paper.stroke(a.id).points.get(0).y, 0.001f);
+        assertSame(moved, page.strokes.get(0));
     }
 
     @Test
     public void editsApplyByIdAfterOtherChanges() {
         InkRenderer.InkStroke a = draw(10f);
-        draw(20f);
-        paper.deleteIds(List.of(a.id));
+        InkRenderer.InkStroke b = draw(20f);
+        page.strokes.remove(a);
         assertEquals(Set.of(page), history.undo());
-        assertTrue("undoing b's stroke still removes b", paper.strokes().isEmpty());
+        assertTrue("undoing b's stroke still removes b", page.strokes.isEmpty());
+        assertTrue("a is already gone: nothing to change", history.undo().isEmpty());
         history.redo();
-        assertEquals(1, paper.strokes().size());
+        assertEquals(List.of(a), page.strokes);
+        assertFalse(page.strokes.contains(b));
     }
 
     @Test
@@ -138,11 +127,10 @@ public class InkHistoryTest {
     @Test
     public void editsOnPagesThatLeftTheListAreDropped() {
         draw(10f);
-        NotebookPaper otherPaper = NotebookPaper.empty(1000);
-        Board other = paperBoard(otherPaper);
+        Board other = new Board("q", 2L);
         InkRenderer.InkStroke x = TestStrokes.stroke(50f, 50f);
-        otherPaper.appendStroke(x);
-        history.record(InkHistory.Edit.of(InkHistory.Part.paperAdded(other, x)));
+        other.strokes.add(x);
+        history.record(InkHistory.Edit.of(InkHistory.Part.added(other, x)));
         history.retainPages(Set.of(page.id));
         assertEquals(1, history.undoSize());
         history.clear();
@@ -151,8 +139,8 @@ public class InkHistoryTest {
 
     private InkRenderer.InkStroke draw(float x) {
         InkRenderer.InkStroke stroke = TestStrokes.stroke(x, x);
-        paper.appendStroke(stroke);
-        history.record(InkHistory.Edit.of(InkHistory.Part.paperAdded(page, stroke)));
+        page.strokes.add(stroke);
+        history.record(InkHistory.Edit.of(InkHistory.Part.added(page, stroke)));
         return stroke;
     }
 }

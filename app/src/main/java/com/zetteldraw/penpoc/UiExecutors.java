@@ -3,7 +3,7 @@ package com.zetteldraw.penpoc;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 
-/** Background threads the UI hands work to: page-list open/load, load retries, the surface. */
+/** Background threads the UI hands work to: page-list open/load, load retries, first-screen renders, the surface. */
 final class UiExecutors {
     static volatile Executor loader = single("zd-load");
     /** A retry must not queue behind a load that is stuck, so each may get a fresh thread. */
@@ -12,6 +12,7 @@ final class UiExecutors {
         thread.setDaemon(true);
         return thread;
     });
+    static volatile Executor renderer = single("zd-render");
     /** Each ink view gets its own {@link SurfaceWorker} thread; false runs surface work inline. */
     static volatile boolean surfaceThreads = true;
     /** Tests: runs every new {@link SurfaceWorker} on this executor instead. */
@@ -24,6 +25,7 @@ final class UiExecutors {
     static void useSynchronousForTest() {
         loader = Runnable::run;
         retryLoader = Runnable::run;
+        renderer = Runnable::run;
         surfaceThreads = false;
     }
 

@@ -66,6 +66,7 @@ public class LaunchTest {
         sync.setBoolean(null, false);
         UiExecutors.loader = Executors.newSingleThreadExecutor();
         UiExecutors.retryLoader = Executors.newCachedThreadPool();
+        UiExecutors.renderer = Executors.newSingleThreadExecutor();
     }
 
     @Test

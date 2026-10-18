@@ -152,6 +152,23 @@ public class LassoTest {
     }
 
     @Test
+    public void clampKeepsSelectionOnThePage() {
+        RectF bounds = new RectF(100f, 200f, 300f, 400f);
+        float[] ok = Lasso.clampOffset(bounds, 50f, -50f, 1000f, 1400f);
+        assertEquals(50f, ok[0], 0f);
+        assertEquals(-50f, ok[1], 0f);
+
+        float[] clamped = Lasso.clampOffset(bounds, -500f, 5000f, 1000f, 1400f);
+        assertEquals(-100f, clamped[0], 0f);
+        assertEquals(1000f, clamped[1], 0f);
+
+        RectF overEdge = new RectF(-10f, 0f, 50f, 50f);
+        float[] stuck = Lasso.clampOffset(overEdge, -30f, 0f, 1000f, 1400f);
+        assertEquals("already past the edge: not pushed further", 0f, stuck[0], 0f);
+        assertEquals(20f, Lasso.clampOffset(overEdge, 20f, 0f, 1000f, 1400f)[0], 0f);
+    }
+
+    @Test
     public void clampIntoFreezesWhenSelectionTallerThanViewport() {
         // Cross-page box taller than the visible band: old clamp froze dy at 0.
         RectF tall = new RectF(40f, 100f, 200f, 2000f);
@@ -175,5 +192,91 @@ public class LassoTest {
         assertEquals(-30f, ok[1], 0f);
         float[] hitBottom = Lasso.clampIntoAllowingOverflow(box, 0f, 5000f, 0f, 500f, 1000f, 1900f);
         assertEquals(900f, hitBottom[1], 0f);
+    }
+
+    @Test
+    public void moveRewritesPointsAndKeepsIdsAndOrder() {
+        Board page = Board.blank();
+        InkRenderer.InkStroke a = line(150f, 150f, 5);
+        InkRenderer.InkStroke b = line(500f, 500f, 5);
+        InkRenderer.InkStroke c = line(160f, 250f, 5);
+        page.strokes.addAll(List.of(a, b, c));
+        Set<String> ids = Lasso.idsOf(List.of(a, c));
+
+        Lasso.Move move = Lasso.move(page, ids, 40f, -30f);
+
+        assertNotNull(move);
+        assertEquals(2, move.size());
+        assertEquals(3, page.strokes.size());
+        assertEquals(a.id, page.strokes.get(0).id);
+        assertSame("unselected stroke untouched", b, page.strokes.get(1));
+        assertEquals(c.id, page.strokes.get(2).id);
+        for (int i = 0; i < a.points.size(); i++) {
+            assertEquals(a.points.get(i).x + 40f, page.strokes.get(0).points.get(i).x, 0f);
+            assertEquals(a.points.get(i).y - 30f, page.strokes.get(0).points.get(i).y, 0f);
+            assertEquals(a.points.get(i).pressure, page.strokes.get(0).points.get(i).pressure, 0f);
+            assertEquals(a.points.get(i).timestamp, page.strokes.get(0).points.get(i).timestamp);
+        }
+        assertEquals("original points not mutated", 150f, a.points.get(0).x, 0f);
+        assertEquals(a.bounds.left + 40f, page.strokes.get(0).bounds.left, 0.001f);
+        assertEquals(c.bounds.top - 30f, page.strokes.get(2).bounds.top, 0.001f);
+
+        List<InkRenderer.InkStroke> reselect = Lasso.select(page.strokes, square());
+        assertEquals("hit-testing uses the moved points", 2, reselect.size());
+    }
+
+    @Test
+    public void zeroOffsetOrNoMatchIsNotAMove() {
+        Board page = Board.blank();
+        InkRenderer.InkStroke a = line(150f, 150f, 5);
+        page.strokes.add(a);
+        assertNull(Lasso.move(page, Lasso.idsOf(List.of(a)), 0f, 0f));
+        assertNull(Lasso.move(page, Set.of("missing"), 10f, 10f));
+        assertSame(a, page.strokes.get(0));
+    }
+
+    @Test
+    public void undoRestoresExactPoints() {
+        Board page = Board.blank();
+        InkRenderer.InkStroke a = line(150.3f, 150.7f, 5);
+        InkRenderer.InkStroke b = line(500f, 500f, 5);
+        page.strokes.addAll(List.of(a, b));
+        Lasso.Move move = Lasso.move(page, Lasso.idsOf(List.of(a)), 33.33f, 17.77f);
+        assertNotSame(a, page.strokes.get(0));
+
+        assertTrue(move.historyPart().revert());
+
+        assertSame(a, page.strokes.get(0));
+        assertSame(b, page.strokes.get(1));
+        assertFalse("second undo is a no-op", move.historyPart().revert());
+    }
+
+    @Test
+    public void undoKeepsLaterEditsAndSkipsErasedStrokes() {
+        Board page = Board.blank();
+        InkRenderer.InkStroke a = line(150f, 150f, 5);
+        InkRenderer.InkStroke c = line(150f, 250f, 5);
+        page.strokes.addAll(List.of(a, c));
+        Lasso.Move move = Lasso.move(page, Lasso.idsOf(List.of(a, c)), 10f, 10f);
+        page.strokes.remove(1);
+        InkRenderer.InkStroke drawnAfter = line(700f, 700f, 3);
+        page.strokes.add(drawnAfter);
+
+        assertTrue(move.historyPart().revert());
+
+        assertEquals(2, page.strokes.size());
+        assertSame(a, page.strokes.get(0));
+        assertSame(drawnAfter, page.strokes.get(1));
+    }
+
+    @Test
+    public void undoAfterWipeDoesNothing() {
+        Board page = Board.blank();
+        InkRenderer.InkStroke a = line(150f, 150f, 5);
+        page.strokes.add(a);
+        Lasso.Move move = Lasso.move(page, Lasso.idsOf(List.of(a)), 10f, 10f);
+        page.strokes.clear();
+        assertFalse(move.historyPart().revert());
+        assertTrue(page.isBlank());
     }
 }

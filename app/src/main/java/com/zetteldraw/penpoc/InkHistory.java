@@ -6,12 +6,14 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
- * Undo / redo for ink edits (pen strokes, eraser deletes, lasso moves on the notebook paper), by
+ * Undo / redo for ink edits (pen strokes, eraser deletes, lasso moves), by
  * stroke id so an edit still applies cleanly when other strokes changed in
  * between. One capped stack for the open page list; in memory only.
  */
@@ -121,11 +123,26 @@ final class InkHistory {
         }
     }
 
-    /** What one edit did to one notebook paper: strokes added, removed, or shifted by id. */
+    /** A stroke and where it sat in its page's list. */
+    static final class Placed {
+        final InkRenderer.InkStroke stroke;
+        final int index;
+
+        Placed(InkRenderer.InkStroke stroke, int index) {
+            this.stroke = stroke;
+            this.index = index;
+        }
+    }
+
+    /** What one edit did to one page: strokes added, removed, or replaced (moved) by id. */
     static final class Part {
         private enum PaperKind { NONE, ADD, REMOVE, SHIFT }
 
         final Board page;
+        private final List<Placed> added;
+        private final List<Placed> removed;
+        private final Map<String, InkRenderer.InkStroke> before;
+        private final Map<String, InkRenderer.InkStroke> after;
         /** Paper edits append an inverse record. They do not rewrite the log. */
         private final PaperKind paperKind;
         private final List<InkRenderer.InkStroke> paperStrokes;
@@ -133,14 +150,40 @@ final class InkHistory {
         private final float paperDx;
         private final float paperDy;
 
-        private Part(Board page, PaperKind paperKind, List<InkRenderer.InkStroke> paperStrokes,
-                     List<String> paperIds, float paperDx, float paperDy) {
+        private Part(Board page, List<Placed> added, List<Placed> removed,
+                     Map<String, InkRenderer.InkStroke> before, Map<String, InkRenderer.InkStroke> after) {
+            this(page, added, removed, before, after, PaperKind.NONE, List.of(), List.of(), 0f, 0f);
+        }
+
+        private Part(Board page, List<Placed> added, List<Placed> removed,
+                     Map<String, InkRenderer.InkStroke> before, Map<String, InkRenderer.InkStroke> after,
+                     PaperKind paperKind, List<InkRenderer.InkStroke> paperStrokes, List<String> paperIds,
+                     float paperDx, float paperDy) {
             this.page = page;
+            this.added = added;
+            this.removed = removed;
+            this.before = before;
+            this.after = after;
             this.paperKind = paperKind;
             this.paperStrokes = paperStrokes;
             this.paperIds = paperIds;
             this.paperDx = paperDx;
             this.paperDy = paperDy;
+        }
+
+        static Part added(Board page, InkRenderer.InkStroke stroke) {
+            return new Part(page, List.of(new Placed(stroke, page.strokes.indexOf(stroke))),
+                    List.of(), Map.of(), Map.of());
+        }
+
+        /** {@code removed} in ascending original index. */
+        static Part removed(Board page, List<Placed> removed) {
+            return new Part(page, List.of(), removed, Map.of(), Map.of());
+        }
+
+        static Part moved(Board page, Map<String, InkRenderer.InkStroke> before,
+                          Map<String, InkRenderer.InkStroke> after) {
+            return new Part(page, List.of(), List.of(), before, after);
         }
 
         /** Pen-up on the paper. Undo deletes the stroke by id. Redo appends it again. */
@@ -165,19 +208,31 @@ final class InkHistory {
 
         private static Part paper(Board page, PaperKind kind, List<InkRenderer.InkStroke> strokes,
                                   List<String> ids, float dx, float dy) {
-            return new Part(page, kind, strokes, ids, dx, dy);
+            return new Part(page, List.of(), List.of(), Map.of(), Map.of(), kind, strokes, ids, dx, dy);
         }
 
         boolean isEmpty() {
-            return paperKind == PaperKind.NONE;
+            return added.isEmpty() && removed.isEmpty() && before.isEmpty() && paperKind == PaperKind.NONE;
         }
 
         boolean revert() {
-            return applyPaper(true);
+            if (paperKind != PaperKind.NONE) {
+                return applyPaper(true);
+            }
+            boolean changed = removeIds(added);
+            changed |= replace(before);
+            changed |= insert(removed);
+            return changed;
         }
 
         boolean apply() {
-            return applyPaper(false);
+            if (paperKind != PaperKind.NONE) {
+                return applyPaper(false);
+            }
+            boolean changed = removeIds(removed);
+            changed |= replace(after);
+            changed |= insert(added);
+            return changed;
         }
 
         private boolean applyPaper(boolean undo) {
@@ -218,6 +273,51 @@ final class InkHistory {
                 ids.add(stroke.id);
             }
             return ids;
+        }
+
+        private boolean removeIds(List<Placed> strokes) {
+            if (strokes.isEmpty()) {
+                return false;
+            }
+            HashSet<String> ids = new HashSet<>();
+            for (Placed placed : strokes) {
+                ids.add(placed.stroke.id);
+            }
+            return page.strokes.removeIf(stroke -> ids.contains(stroke.id));
+        }
+
+        private boolean replace(Map<String, InkRenderer.InkStroke> byId) {
+            boolean changed = false;
+            for (int i = 0; i < page.strokes.size(); i++) {
+                InkRenderer.InkStroke next = byId.get(page.strokes.get(i).id);
+                if (next != null && next != page.strokes.get(i)) {
+                    page.strokes.set(i, next);
+                    changed = true;
+                }
+            }
+            return changed;
+        }
+
+        private boolean insert(List<Placed> strokes) {
+            boolean changed = false;
+            for (Placed placed : strokes) {
+                if (indexOfId(placed.stroke.id) >= 0) {
+                    continue;
+                }
+                int at = placed.index < 0 ? page.strokes.size() : Math.min(placed.index, page.strokes.size());
+                page.strokes.add(at, placed.stroke);
+                changed = true;
+            }
+            return changed;
+        }
+
+        private int indexOfId(String id) {
+            for (int i = 0; i < page.strokes.size(); i++) {
+                if (page.strokes.get(i).id.equals(id)) {
+                    return i;
+                }
+            }
+            return -1;
         }
     }
 }

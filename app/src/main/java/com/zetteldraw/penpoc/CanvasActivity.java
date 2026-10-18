@@ -977,10 +977,16 @@ public final class CanvasActivity extends Activity {
         collectionNav.rememberScroll(collectionId, y, count, anchor);
     }
 
-    /** True when the on-screen list came from a Ready sheet. */
+    /** True when the on-screen list came from a Ready sheet (or true legacy boards). */
     private boolean collectionShownReady() {
-        return currentPages != null && !currentPages.isEmpty()
-                && repository.isSheetReady(notebookKey(collectionId));
+        if (currentPages == null || currentPages.isEmpty()) {
+            return false;
+        }
+        if (repository.isSheetReady(notebookKey(collectionId))) {
+            return true;
+        }
+        // Pre-migration lists have no paper on boards.
+        return currentPages.get(0).paper == null;
     }
 
     private CollectionNav.PageLayout pageLayout() {
@@ -3184,8 +3190,26 @@ public final class CanvasActivity extends Activity {
         return pageGap;
     }
 
+    /**
+     * Pages are {@link #pageHeight} tall, except a page from before v10 whose
+     * ink reaches below that: it keeps the old full-window height, so nothing
+     * is cropped or shifted.
+     */
     private int heightOf(Board page) {
-        return page.slicePx > 0 ? page.slicePx : pageHeight;
+        if (page.slicePx > 0) {
+            return page.slicePx;
+        }
+        if (page.createdAt >= shortPagesSince) {
+            return pageHeight;
+        }
+        float bottom = 0f;
+        for (InkRenderer.InkStroke stroke : page.strokes) {
+            bottom = Math.max(bottom, stroke.bounds.bottom + stroke.maxWidth);
+        }
+        if (bottom <= pageHeight) {
+            return pageHeight;
+        }
+        return Math.max(legacyPageHeight, (int) Math.ceil(bottom));
     }
 
     /**

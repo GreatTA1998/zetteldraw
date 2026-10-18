@@ -24,7 +24,6 @@ import com.onyx.android.sdk.data.note.TouchPoint;
 import com.onyx.android.sdk.pen.TouchHelper;
 import com.onyx.android.sdk.pen.data.TouchPointList;
 import com.zetteldraw.penpoc.data.BoardRepository;
-import com.zetteldraw.penpoc.data.NotebookPaper;
 import com.zetteldraw.penpoc.data.TestStrokes;
 import com.zetteldraw.penpoc.data.ZettelData;
 
@@ -55,7 +54,6 @@ public class ToolSwitchTest {
     private final Context context = ApplicationProvider.getApplicationContext();
     private final List<Runnable> worker = new ArrayList<>();
     private final Pen pen = new Pen();
-    private final NotebookPaper paper = NotebookPaper.empty(1000);
 
     @Before
     public void setUp() {
@@ -135,8 +133,8 @@ public class ToolSwitchTest {
 
     @Test
     public void finishingALassoMoveKeepsLassoToolAndDash() {
-        Board page = paperPage();
-        paper.appendStroke(TestStrokes.stroke(200f, 200f));
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(200f, 200f));
         PageInkView ink = show(laidOut(page));
         ink.setListener(new PageInkView.Listener() {
             @Override
@@ -202,8 +200,8 @@ public class ToolSwitchTest {
 
     @Test
     public void leavingLassoForPenWritesFountainLast() {
-        Board page = paperPage();
-        paper.appendStroke(TestStrokes.stroke(200f, 200f));
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(200f, 200f));
         PageInkView ink = show(laidOut(page));
         settle();
         ink.setTool(PageInkView.Tool.LASSO);
@@ -244,14 +242,14 @@ public class ToolSwitchTest {
 
     @Test
     public void selectingEraserKeepsStrokesAndRepaintsFrozenInk() {
-        Board page = paperPage();
-        paper.appendStroke(TestStrokes.stroke(80f, 120f));
-        paper.appendStroke(TestStrokes.stroke(220f, 340f));
-        paper.appendStroke(TestStrokes.stroke(400f, 500f));
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(80f, 120f));
+        page.strokes.add(TestStrokes.stroke(220f, 340f));
+        page.strokes.add(TestStrokes.stroke(400f, 500f));
         PageInkView ink = show(laidOut(page));
         settle();
         int framesBefore = ink.fullFramesPainted();
-        assertEquals(3, paper.strokes().size());
+        assertEquals(3, page.strokes.size());
         assertTrue(pen.render);
 
         ink.setTool(PageInkView.Tool.ERASER);
@@ -259,7 +257,7 @@ public class ToolSwitchTest {
         settle();
 
         assertEquals(PageInkView.Tool.ERASER, ink.tool());
-        assertEquals("selecting the eraser must not delete strokes", 3, paper.strokes().size());
+        assertEquals("selecting the eraser must not delete strokes", 3, page.strokes.size());
         assertFalse(pen.brush);
         assertFalse(pen.render);
         assertTrue("turning scribble render off must re-push frozen bitmaps",
@@ -269,9 +267,9 @@ public class ToolSwitchTest {
 
     @Test
     public void aPenStrokeAlreadyDownStaysAPenStrokeWhenEraserIsTapped() {
-        Board page = paperPage();
+        Board page = new Board("a", 1L);
         InkRenderer.InkStroke existing = TestStrokes.stroke(200f, 200f);
-        paper.appendStroke(existing);
+        page.strokes.add(existing);
         PageInkView ink = laidOut(page);
         ShadowLooper.idleMainLooper();
 
@@ -284,14 +282,14 @@ public class ToolSwitchTest {
         ink.rawInput().onRawDrawingTouchPointListReceived(list(path));
 
         assertEquals(PageInkView.Tool.ERASER, ink.tool());
-        assertEquals("the pen stroke is kept and the ink under it is not erased", 2, paper.strokes().size());
-        assertSame(existing, paper.strokes().get(0));
+        assertEquals("the pen stroke is kept and the ink under it is not erased", 2, page.strokes.size());
+        assertSame(existing, page.strokes.get(0));
     }
 
     @Test
     public void anEraserStrokeAlreadyDownStaysAnEraseWhenPenIsTapped() {
-        Board page = paperPage();
-        paper.appendStroke(TestStrokes.stroke(200f, 200f));
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(200f, 200f));
         PageInkView ink = laidOut(page);
         ShadowLooper.idleMainLooper();
 
@@ -304,13 +302,13 @@ public class ToolSwitchTest {
         ink.rawInput().onRawDrawingTouchPointListReceived(list(path));
 
         assertEquals(PageInkView.Tool.PEN, ink.tool());
-        assertEquals("the stroke that started as the eraser still erases", 0, paper.strokes().size());
+        assertEquals("the stroke that started as the eraser still erases", 0, page.strokes.size());
     }
 
     @Test
     public void sideButtonEraseIsNotSavedAsAPenStrokeWhenTheButtonIsAlreadyUp() {
-        Board page = paperPage();
-        paper.appendStroke(TestStrokes.stroke(200f, 200f));
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(200f, 200f));
         PageInkView ink = laidOut(page);
         ShadowLooper.idleMainLooper();
 
@@ -321,13 +319,13 @@ public class ToolSwitchTest {
         ink.rawInput().onRawDrawingTouchPointListReceived(list(path));
 
         assertEquals(PageInkView.Tool.PEN, ink.tool());
-        assertEquals("a side-button erase is not stored as a fountain stroke", 0, paper.strokes().size());
+        assertEquals("a side-button erase is not stored as a fountain stroke", 0, page.strokes.size());
     }
 
     @Test
     public void aLassoStrokeAlreadyDownIsNotStoredAsAPenStroke() {
-        Board page = paperPage();
-        paper.appendStroke(TestStrokes.stroke(200f, 200f));
+        Board page = new Board("a", 1L);
+        page.strokes.add(TestStrokes.stroke(200f, 200f));
         PageInkView ink = laidOut(page);
         ShadowLooper.idleMainLooper();
         ink.setTool(PageInkView.Tool.LASSO);
@@ -344,7 +342,7 @@ public class ToolSwitchTest {
         ink.rawInput().onRawDrawingTouchPointListReceived(list(outline));
 
         assertEquals(PageInkView.Tool.PEN, ink.tool());
-        assertEquals("the lasso outline is not inked as a pen stroke", 1, paper.strokes().size());
+        assertEquals("the lasso outline is not inked as a pen stroke", 1, page.strokes.size());
     }
 
     @Test
@@ -549,14 +547,6 @@ public class ToolSwitchTest {
         assertEquals(TouchHelper.STROKE_STYLE_DASH, pen.strokeStyle);
 
         controller.pause().stop().destroy();
-    }
-
-    private Board paperPage() {
-        Board page = new Board("a", 1L);
-        page.paper = paper;
-        page.sliceIndex = 0;
-        page.slicePx = 1000;
-        return page;
     }
 
     private PageInkView laidOut(Board... pages) {
