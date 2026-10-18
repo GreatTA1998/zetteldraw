@@ -53,6 +53,13 @@ public class LaunchTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+        // Seed one real blank page (replaces the old soft trailing blank) so cold
+        // launch still has a page list to show; empty Ready only shows Create.
+        RoomBoardRepository repo = ZettelData.repository(app);
+        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            assertNotNull(repo.createPage(null));
+        }
     }
 
     @After
@@ -158,8 +165,16 @@ public class LaunchTest {
 
     @Test
     public void pageHeightFollowsTheDrawingArea() throws Exception {
+        // Re-open without the @Before 800px seed so the sheet freezes at measured height.
+        ZettelData.resetForTest();
+        UiExecutors.useSynchronousForTest();
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         CanvasActivity activity = controller.get();
+        ShadowLooper.idleMainLooper();
+        View root = activity.getWindow().getDecorView();
+        TextView create = findText(root, "Create new page");
+        assertNotNull(create);
+        assertTrue(create.performClick());
         ShadowLooper.idleMainLooper();
         Field heightField = CanvasActivity.class.getDeclaredField("pageHeight");
         heightField.setAccessible(true);

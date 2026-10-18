@@ -46,7 +46,7 @@ public class EnsureUnsyncedQueuedTest {
 
     @Test
     public void requeuesInkedRevZeroLogMissingFromOutbox() throws Exception {
-        assertTrue(device.ensureReady());
+        assertTrue(device.ensureReadyWithPage(null));
         Board page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 7f);
         device.tick();

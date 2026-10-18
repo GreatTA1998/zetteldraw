@@ -11,6 +11,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
 import com.zetteldraw.penpoc.data.ZettelData;
@@ -43,6 +44,14 @@ public class ScreenshotRenderTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+
+        BoardRepository _repo = ZettelData.repository(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext());
+        _repo.ensureSheet(null, 800, 800, 0L);
+        if (_repo.scratchpadPages().isEmpty()) {
+            _repo.createPage(null);
+        }
+
     }
 
     @Test
@@ -78,11 +87,14 @@ public class ScreenshotRenderTest {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         assertTrue(repo.ensureSheet(Notebook.JOURNAL.uuid, 800, 800, 0L));
+        if (repo.pages(Notebook.JOURNAL.uuid).isEmpty()) {
+            repo.createPage(Notebook.JOURNAL.uuid);
+        }
         Board page = repo.pages(Notebook.JOURNAL.uuid).get(0);
-        page.paper.appendStroke(TestStrokes.stroke(200f, page.paperOrigin + 300f), page.id);
+        TestInk.appendCovering(page.paper, TestStrokes.stroke(200f, page.paperOrigin + 300f), page.id);
         repo.saveInk(page);
-        Board next = repo.pages(Notebook.JOURNAL.uuid).get(1);
-        next.paper.appendStroke(TestStrokes.stroke(300f, next.paperOrigin + 300f), next.id);
+        Board next = repo.createPage(Notebook.JOURNAL.uuid);
+        TestInk.appendCovering(next.paper, TestStrokes.stroke(300f, next.paperOrigin + 300f), next.id);
         repo.saveInk(next);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();

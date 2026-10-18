@@ -119,11 +119,11 @@ public class SyncRefreshStormTest {
 
     @Test
     public void pulledReadyLogReachesScreensViaListenerNotBoardStrokeSwap() throws Exception {
-        Board page = repo.scratchpadPages().get(0);
+        Board page = repo.createPage(null);
         String sliceId = page.id;
         NotebookPaper remotePaper = NotebookPaper.empty(PAGE_HEIGHT);
         List<InkRenderer.InkStroke> ink = Collections.singletonList(TestInk.stroke(300f, 300f, 5));
-        remotePaper.appendStroke(ink.get(0), sliceId);
+        TestInk.appendCovering(remotePaper, ink.get(0), sliceId);
         byte[] bytes = remotePaper.bytes();
         NotebookLogEntity remote = new NotebookLogEntity();
         remote.id = NotebookPaper.SCRATCHPAD_ID;
@@ -163,7 +163,7 @@ public class SyncRefreshStormTest {
         response.put("notebooks", new JSONArray());
         response.put("boards", new JSONArray());
         NotebookPaper paper = NotebookPaper.empty(PAGE_HEIGHT);
-        paper.appendStroke(TestInk.stroke(10f * rev, 20f, 4), "slice-" + rev);
+        TestInk.appendCovering(paper, TestInk.stroke(10f * rev, 20f, 4), "slice-" + rev);
         byte[] bytes = paper.bytes();
         String hash = InkFileStore.sha256(bytes);
         response.put("logs", new JSONArray().put(new JSONObject()
@@ -255,7 +255,7 @@ public class SyncRefreshStormTest {
     private static final class SyncProtocolPages {
         static SyncStore.PullPage logPage(long rev) throws Exception {
             NotebookPaper paper = NotebookPaper.empty(PAGE_HEIGHT);
-            paper.appendStroke(TestInk.stroke(10f * rev, 20f, 4), "p" + rev);
+            TestInk.appendCovering(paper, TestInk.stroke(10f * rev, 20f, 4), "p" + rev);
             byte[] bytes = paper.bytes();
             NotebookLogEntity log = new NotebookLogEntity();
             log.id = NotebookPaper.SCRATCHPAD_ID;

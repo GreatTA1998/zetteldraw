@@ -15,6 +15,7 @@ import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
 import com.zetteldraw.penpoc.data.ZettelData;
@@ -47,6 +48,14 @@ public class PageChromeOpticalTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+
+        BoardRepository _repo = ZettelData.repository(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext());
+        _repo.ensureSheet(null, 800, 800, 0L);
+        if (_repo.scratchpadPages().isEmpty()) {
+            _repo.createPage(null);
+        }
+
     }
 
     @Test
@@ -54,6 +63,10 @@ public class PageChromeOpticalTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("chrome");
+        repo.ensureSheet(book.id(), 800, 800, 0L);
+        if (repo.pages(book.id()).isEmpty()) {
+            repo.createPage(book.id());
+        }
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
@@ -170,7 +183,7 @@ public class PageChromeOpticalTest {
     private static void ink(BoardRepository repo, String notebookId, float y) {
         List<Board> pages = repo.pages(notebookId);
         Board page = pages.get(pages.size() - 1);
-        page.paper.appendStroke(TestStrokes.stroke(4f, y), page.id);
+        TestInk.appendCovering(page.paper, TestStrokes.stroke(4f, y), page.id);
         repo.saveInk(page);
     }
 

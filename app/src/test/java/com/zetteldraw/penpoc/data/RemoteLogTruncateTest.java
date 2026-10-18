@@ -50,9 +50,12 @@ public class RemoteLogTruncateTest {
     @Test
     public void installSheetRegistersNotebookLogEvenForDiskReplay() throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         for (int i = 0; i < 8; i++) {
-            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(blank.paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         repo.saveInk(blank);
         for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
@@ -66,6 +69,9 @@ public class RemoteLogTruncateTest {
         device.db.dao().deleteNotebookLog(sheetId);
         device.db.dao().deleteOutbox(OutboxEntry.LOG, sheetId);
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         assertNotNull("disk install must create notebook_logs so pull LWW runs",
                 device.db.dao().notebookLog(sheetId));
         assertTrue(repo.scratchpadPages().size() > 5);
@@ -133,9 +139,12 @@ public class RemoteLogTruncateTest {
     @Test
     public void diskReplayDoesNotQueueTruncatedLogForPush() throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         for (int i = 0; i < 6; i++) {
-            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(blank.paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         repo.saveInk(blank);
         for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
@@ -160,6 +169,9 @@ public class RemoteLogTruncateTest {
         String sheetId = NotebookPaper.sheetId(null);
         new InkFileStore(device.inkDir()).writeLog(sheetId, shortBytes);
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         int shortPages = repo.scratchpadPages().size();
         assertTrue(shortPages < 30);
 
@@ -243,9 +255,12 @@ public class RemoteLogTruncateTest {
     @Test
     public void longerScratchpadPullDoesNotTouchOtherNotebookLog() throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         for (int i = 0; i < 8; i++) {
-            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(blank.paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         repo.saveInk(blank);
         for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
@@ -255,7 +270,7 @@ public class RemoteLogTruncateTest {
         assertTrue(repo.ensureSheet(otherId, PAGE, PAGE, 0L));
         Board otherBlank = repo.pages(otherId).get(0);
         for (int i = 0; i < 5; i++) {
-            otherBlank.paper.appendStroke(TestInk.stroke(12f, i * PAGE + 30f, 6));
+            TestInk.appendCovering(otherBlank.paper, TestInk.stroke(12f, i * PAGE + 30f, 6));
         }
         repo.saveInk(otherBlank);
         for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
@@ -294,9 +309,12 @@ public class RemoteLogTruncateTest {
 
     private int seedDenseScratchpad(int inkedSlices) throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         for (int i = 0; i < inkedSlices; i++) {
-            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(blank.paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         repo.saveInk(blank);
         for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
@@ -310,7 +328,7 @@ public class RemoteLogTruncateTest {
     private static byte[] shortLogBytes(int slices) throws Exception {
         NotebookPaper shortPaper = NotebookPaper.empty(PAGE);
         for (int i = 0; i < slices; i++) {
-            shortPaper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(shortPaper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         return shortPaper.bytes();
     }

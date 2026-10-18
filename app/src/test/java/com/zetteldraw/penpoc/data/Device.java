@@ -50,13 +50,24 @@ final class Device {
         db.close();
     }
 
-    /** Installs a Ready sheet for Scratchpad (or {@code notebookId}). */
+    /** Ready sheet only — no auto page (Create new page is explicit). */
     boolean ensureReady() {
         return ensureReady(null);
     }
 
     boolean ensureReady(String notebookId) {
         return repo.ensureSheet(notebookId, PAGE, PAGE, 0L);
+    }
+
+    /** Ready + one blank page (legacy soft-blank stand-in for ink helpers). */
+    boolean ensureReadyWithPage(String notebookId) {
+        if (!ensureReady(notebookId)) {
+            return false;
+        }
+        if (repo.pages(notebookId).isEmpty()) {
+            return repo.createPage(notebookId) != null;
+        }
+        return true;
     }
 
     /**

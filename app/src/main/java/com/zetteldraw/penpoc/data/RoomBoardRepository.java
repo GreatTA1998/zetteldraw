@@ -88,11 +88,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private final Object lock = new Object();
     private final HashMap<String, Board> cache = new HashMap<>();
     private final AtomicBoolean indexPending = new AtomicBoolean();
-    /**
-     * Unsaved trailing blank per list ({@link #listKey}), owned by Ready
-     * {@link #projectLocked} — never seeded from BoardEntity inkHash walks.
-     */
-    private final HashMap<String, Board> trailingBlanks = new HashMap<>();
     private long lastQueuedAt;
     private final CopyOnWriteArrayList<Runnable> remoteListeners = new CopyOnWriteArrayList<>();
     private final Object refreshLock = new Object();
@@ -141,7 +136,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             lastQueuedAt = dao.maxQueuedAt();
             db.runInTransaction(this::seedNotebooks);
-            // Trailing blank is Ready/projectLocked-owned — no BoardEntity seed blank.
             int inked = 0;
             List<BoardEntity> live = dao.liveBoardsForIndex();
             for (BoardEntity row : live) {
@@ -205,11 +199,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             for (Board board : cache.values()) {
                 if (sheetId.equals(board.sheetId)) {
                     board.paper = paper;
-                }
-            }
-            for (Board blank : trailingBlanks.values()) {
-                if (sheetId.equals(blank.sheetId)) {
-                    blank.paper = paper;
                 }
             }
         }
@@ -280,6 +269,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public boolean placePageBefore(String boardId, String beforeBoardId) {
+        if (beforeBoardId == null) {
+            return false;
+        }
         Board before;
         synchronized (lock) {
             before = cache.get(beforeBoardId);
@@ -290,17 +282,17 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public boolean placePageBefore(String boardId, String beforeBoardId, String destNotebookId) {
-        if (boardId == null || beforeBoardId == null || boardId.equals(beforeBoardId)) {
+        if (boardId == null || boardId.equals(beforeBoardId)) {
             return false;
         }
         Board moving;
         Board before;
         synchronized (lock) {
             moving = cache.get(boardId);
-            before = cache.get(beforeBoardId);
+            before = beforeBoardId == null ? null : cache.get(beforeBoardId);
         }
-        if (moving == null || before == null || moving.paper == null) {
-            LaunchLog.mark("place-before refused: missing source/target board or paper");
+        if (moving == null || moving.paper == null) {
+            LaunchLog.mark("place-before refused: missing source board or paper");
             return false;
         }
         String destSheetId = NotebookPaper.sheetId(destNotebookId);
@@ -321,14 +313,15 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             // sheet — never when a stale on-screen target shares the source paper.
             boolean sameNotebook = moving.paper == dest.paper
                     && java.util.Objects.equals(moving.sheetId, destSheetId);
-            // Stale cross-notebook target (wrong paper) → treat as trailing append.
-            boolean beforeIsTrailing = (!sameNotebook && before.paper != dest.paper)
-                    || isTrailingBlankBoard(before, dest.paper);
-            int beforeIndex = beforeIsTrailing ? -1 : dest.paper.indexOfSliceId(beforeBoardId);
-            if (!beforeIsTrailing && beforeIndex < 0) {
+            // null before, or stale cross-notebook target → append.
+            boolean append = beforeBoardId == null
+                    || (!sameNotebook && (before == null || before.paper != dest.paper))
+                    || (before != null && dest.paper.indexOfSliceId(beforeBoardId) < 0);
+            int beforeIndex = append ? -1 : dest.paper.indexOfSliceId(beforeBoardId);
+            if (!append && beforeIndex < 0) {
                 return false;
             }
-            if (beforeIsTrailing && sameNotebook) {
+            if (append && sameNotebook) {
                 int last = dest.paper.sliceCount() - 1;
                 if (last < 0 || sourceIndex == last) {
                     return false;
@@ -338,7 +331,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             int destStrokes = dest.paper.strokes().size();
             try {
                 // One paper spine: same-paper tearMove* reorders; cross tears.
-                if (beforeIsTrailing) {
+                if (append) {
                     moving.paper.tearMoveAfter(sourceIndex, dest.paper, dest.paper.sliceCount() - 1);
                 } else {
                     moving.paper.tearMoveBefore(sourceIndex, dest.paper, beforeIndex);
@@ -364,15 +357,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
             syncSliceIndex(dest.paper, boardId);
             if (!sameNotebook) {
-                // Reseat source boards so Move chrome / isBlank agree mid-reload.
                 syncAllSliceIndices(moving.paper);
-                // Adopted trailing blank keeps its id as the slice; drop it from
-                // the source list so Move-back cannot placePageBefore(id, id).
-                String sourceKey = listKey(notebookIdOfSheet(sourceSheetId));
-                Board sourceBlank = trailingBlanks.get(sourceKey);
-                if (sourceBlank != null && boardId.equals(sourceBlank.id)) {
-                    trailingBlanks.remove(sourceKey);
-                }
             }
             // One persist spine: hold → dest-first rewrite → release → (cross) flush.
             sheetStore.setPairFlushHeld(sourceSheetId, destSheetId, true);
@@ -407,20 +392,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         + " onDest=" + onDest + " onSource=" + onSource);
             }
         }
-    }
-
-    /**
-     * Trailing blank is not a paper slice yet ({@code sliceIndex == sliceCount}),
-     * or its id is absent from the sheet. Never trust a cached sliceIndex alone.
-     */
-    private static boolean isTrailingBlankBoard(Board before, NotebookPaper paper) {
-        if (before == null || paper == null) {
-            return true;
-        }
-        if (paper.indexOfSliceId(before.id) < 0) {
-            return before.sliceIndex < 0 || before.sliceIndex >= paper.sliceCount() || before.isBlank();
-        }
-        return false;
     }
 
     /** Refresh the Board.sliceIndex for this id after a tear/reorder. */
@@ -503,13 +474,41 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         if (knownPageHeight > 0) {
             ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
         }
-        List<Board> destPages = pages(notebookId);
-        if (destPages.isEmpty()) {
-            LaunchLog.mark("movePageToNotebook refused: dest empty after ensure " + notebookId);
+        if (!isSheetReady(notebookId)) {
+            LaunchLog.mark("movePageToNotebook refused: dest not Ready " + notebookId);
             return false;
         }
-        Board trailing = destPages.get(destPages.size() - 1);
-        return placePageBefore(boardId, trailing.id, notebookId);
+        return placePageBefore(boardId, null, notebookId);
+    }
+
+    @Override
+    public Board createPage(String notebookId) {
+        if (knownPageHeight > 0) {
+            ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
+        }
+        synchronized (lock) {
+            String sheetId = NotebookPaper.sheetId(notebookId);
+            InkSheetStore.OpenSheet sheet = sheetStore.get(sheetId);
+            if (sheet == null || !sheet.ready || sheet.paper == null) {
+                LaunchLog.mark("createPage refused: not Ready "
+                        + (notebookId == null ? "scratchpad" : notebookId));
+                return null;
+            }
+            String id = sheet.paper.appendBlankPage();
+            Board board = cache.get(id);
+            if (board == null) {
+                board = new Board(id, clock.getAsLong());
+                cache.put(id, board);
+            }
+            board.paper = sheet.paper;
+            board.sheetId = sheetId;
+            board.sliceIndex = sheet.paper.sliceCount() - 1;
+            board.paperOrigin = sheet.paper.origin(board.sliceIndex);
+            board.slicePx = sheet.paper.heightAt(board.sliceIndex);
+            board.strokes.clear();
+            writer.execute(() -> sheetStore.flushSheetOrFalse(sheetId));
+            return board;
+        }
     }
 
     @Override
@@ -679,7 +678,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                 promoteChildrenLocked(notebookId, promoteTo);
             });
             forgetDeletedNotebookUiLocked(notebookId);
-            // Scratchpad trailing blank refreshed on next Ready pages(null).
             scheduleIndex();
         }
     }
@@ -712,9 +710,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return true;
         }
         ensureSheet(null, height, legacy, knownShortPagesSince);
-        // Refresh Scratchpad trailing blank before Moves (adopted blank may still
-        // sit in trailingBlanks after the page was filed elsewhere).
-        pages(null);
         ArrayList<String> inked = new ArrayList<>();
         for (Board page : pages(notebookId)) {
             if (!page.isBlank()) {
@@ -753,12 +748,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    /** Drop trailing-blank cache + Ready sheet after a notebook is tombstoned. */
+    /** Drop Ready sheet after a notebook is tombstoned. */
     private void forgetDeletedNotebookUiLocked(String notebookId) {
-        Board blank = trailingBlanks.remove(listKey(notebookId));
-        if (blank != null) {
-            cache.remove(blank.id);
-        }
         sheetStore.invalidate(notebookId);
     }
 
@@ -1318,10 +1309,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     dao.upsertBoard(row);
                 }
             });
-            for (Board blank : trailingBlanks.values()) {
-                cache.remove(blank.id);
-            }
-            trailingBlanks.clear();
         }
         for (Map.Entry<String, ArrayList<Board>> entry : groups.entrySet()) {
             String notebookId = entry.getKey().isEmpty() ? null : entry.getKey();
@@ -1534,10 +1521,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             }
         }
         return false;
-    }
-
-    private static String listKey(String notebookId) {
-        return notebookId == null ? "" : notebookId;
     }
 
     private List<BoardEntity> rowsLocked(String notebookId) {
@@ -1827,9 +1810,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             rows = new ArrayList<>(rowsLocked(notebookId));
             // Strip one stored trailing blank (inkHash-null tail) so migration
-            // does not materialize an empty last slice — Ready owns the blank.
-            if (!rows.isEmpty() && rows.get(rows.size() - 1).inkHash == null
-                    && !trailingBlanks.containsKey(listKey(notebookId))) {
+            // does not materialize an empty last slice from the old dual.
+            if (!rows.isEmpty() && rows.get(rows.size() - 1).inkHash == null) {
                 rows.remove(rows.size() - 1);
             }
         }
@@ -1857,13 +1839,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return sources;
     }
 
+    /** Ready slices only — no ephemeral trailing blank. */
     private List<Board> projectLocked(String notebookId, NotebookPaper paper) {
         String sheetId = NotebookPaper.sheetId(notebookId);
         ArrayList<Board> pages = new ArrayList<>();
-        HashSet<String> sliceIds = new HashSet<>();
         for (int i = 0; i < paper.sliceCount(); i++) {
             String id = paper.sliceId(i);
-            sliceIds.add(id);
             Board board = cache.get(id);
             if (board == null) {
                 BoardEntity row = dao.board(id);
@@ -1877,33 +1858,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             board.slicePx = paper.heightAt(i);
             board.strokes.clear();
             pages.add(board);
-        }
-        boolean needBlank = pages.isEmpty() || !pages.get(pages.size() - 1).isBlank();
-        String key = listKey(notebookId);
-        if (needBlank) {
-            Board blank = trailingBlanks.get(key);
-            // Trailing blank must not be a live slice (here or after Move onto
-            // another sheet). First ink adopts its id; Move must not leave that
-            // id as this list's blank or placePageBefore(id, id) no-ops.
-            if (blank != null && (sliceIds.contains(blank.id)
-                    || (blank.paper != null && blank.paper != paper)
-                    || (blank.paper != null && blank.paper.indexOfSliceId(blank.id) >= 0)
-                    || !blank.isBlank())) {
-                trailingBlanks.remove(key);
-                blank = null;
-            }
-            if (blank == null) {
-                blank = Board.blank();
-                trailingBlanks.put(key, blank);
-                cache.put(blank.id, blank);
-            }
-            blank.paper = paper;
-            blank.sheetId = sheetId;
-            blank.sliceIndex = paper.sliceCount();
-            blank.paperOrigin = paper.origin(paper.sliceCount());
-            blank.slicePx = paper.sliceHeight;
-            blank.strokes.clear();
-            pages.add(blank);
         }
         return pages;
     }

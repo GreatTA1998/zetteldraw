@@ -344,14 +344,14 @@ public class PageMoveScratchpadToSubNotebookTest {
     }
 
     private Board inkNearBottom(String notebookId, String strokeId) {
-        List<Board> pages = repo.pages(notebookId);
-        Board blank = pages.get(pages.size() - 1);
+        Board blank = repo.createPage(notebookId);
         assertTrue(blank.isBlank());
-        blank.paper.appendStroke(nearBottom(strokeId, blank.paperOrigin), blank.id);
+        TestInk.appendCovering(blank.paper, nearBottom(strokeId, blank.paperOrigin), blank.id);
         repo.saveInk(blank);
         List<Board> after = repo.pages(notebookId);
-        Board inked = after.get(after.size() - 2);
+        Board inked = after.get(after.size() - 1);
         assertFalse(inked.isBlank());
+        assertEquals(blank.id, inked.id);
         return inked;
     }
 

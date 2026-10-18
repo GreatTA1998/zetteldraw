@@ -71,12 +71,11 @@ public class PageMoveSafetyTest {
         repo.placePageBefore(p3.id, p2.id);
 
         List<Board> after = repo.pages(book);
-        assertEquals(5, after.size());
+        assertEquals(4, after.size());
         assertEquals(p1.id, after.get(0).id);
         assertEquals(p3.id, after.get(1).id);
         assertEquals(p2.id, after.get(2).id);
         assertEquals(p4.id, after.get(3).id);
-        assertTrue(after.get(4).isBlank());
         assertEquals(strokeIds, strokeIdsOn(book));
         assertAllSliceIdsPresent(book, p1.id, p2.id, p3.id, p4.id);
     }
@@ -91,31 +90,27 @@ public class PageMoveSafetyTest {
         repo.placePageBefore(last.id, p1.id);
 
         List<Board> after = repo.pages(book);
-        assertEquals(4, after.size());
+        assertEquals(3, after.size());
         assertEquals(last.id, after.get(0).id);
         assertEquals(p1.id, after.get(1).id);
         assertEquals(p2.id, after.get(2).id);
-        assertTrue(after.get(3).isBlank());
         assertNotNull(after.get(0).paper.stroke("last"));
         assertEquals(strokes, strokeIdsOn(book));
     }
 
     @Test
-    public void placeSecondToLastOntoTrailingBlankAppendsWithoutDroppingLast() {
+    public void placeSecondToLastAppendsWithoutDroppingLast() {
         Board p1 = inkNearBottom(book, "a");
         Board secondLast = inkNearBottom(book, "b");
         Board last = inkNearBottom(book, "c");
-        Board blank = repo.pages(book).get(repo.pages(book).size() - 1);
-        assertTrue(blank.isBlank());
 
-        repo.placePageBefore(secondLast.id, blank.id);
+        repo.placePageBefore(secondLast.id, null, book);
 
         List<Board> after = repo.pages(book);
-        assertEquals(4, after.size());
+        assertEquals(3, after.size());
         assertEquals(p1.id, after.get(0).id);
         assertEquals(last.id, after.get(1).id);
         assertEquals(secondLast.id, after.get(2).id);
-        assertTrue(after.get(3).isBlank());
         assertNotNull(after.get(1).paper.stroke("c"));
         assertNotNull(after.get(2).paper.stroke("b"));
     }
@@ -137,7 +132,7 @@ public class PageMoveSafetyTest {
         List<Board> dest = repo.pages(other);
         assertEquals(sourceId, dest.get(0).id);
         assertEquals(anchor.id, dest.get(1).id);
-        assertTrue(dest.get(2).isBlank());
+        assertEquals(2, dest.size());
         for (String id : sourceStrokes) {
             assertNotNull("dest must hold source stroke " + id, dest.get(0).paper.stroke(id));
         }
@@ -150,18 +145,15 @@ public class PageMoveSafetyTest {
         inkNearBottom(other, "stay");
         Board first = inkNearBottom(null, "keep");
         Board last = inkNearBottom(null, "tail");
-        Board destBlank = repo.pages(other).get(repo.pages(other).size() - 1);
-
-        repo.placePageBefore(last.id, destBlank.id);
+        repo.placePageBefore(last.id, null, other);
 
         List<Board> scratch = repo.pages(null);
-        assertEquals(2, scratch.size());
+        assertEquals(1, scratch.size());
         assertEquals(first.id, scratch.get(0).id);
-        assertTrue(scratch.get(1).isBlank());
         assertNotNull(scratch.get(0).paper.stroke("keep"));
         List<Board> dest = repo.pages(other);
-        assertEquals(last.id, dest.get(dest.size() - 2).id);
-        assertNotNull(dest.get(dest.size() - 2).paper.stroke("tail"));
+        assertEquals(last.id, dest.get(dest.size() - 1).id);
+        assertNotNull(dest.get(dest.size() - 1).paper.stroke("tail"));
     }
 
     @Test
@@ -220,16 +212,17 @@ public class PageMoveSafetyTest {
     @Test
     public void denseLastPagePlaceBeforeKeepsEveryStroke() {
         Board early = inkNearBottom(book, "early");
-        Board blank = repo.pages(book).get(repo.pages(book).size() - 1);
+        Board blank = repo.createPage(book);
         String adopted = blank.id;
         float origin = blank.paperOrigin;
         for (int i = 0; i < DENSE; i++) {
-            blank.paper.appendStroke(
+            TestInk.appendCovering(
+                    blank.paper,
                     denseStroke("d" + i, 12f + (i % 40), origin + 40f + (i % 15) * 40f),
                     i == 0 ? adopted : null);
         }
         repo.saveInk(blank);
-        Board denseLast = repo.pages(book).get(repo.pages(book).size() - 2);
+        Board denseLast = repo.pages(book).get(repo.pages(book).size() - 1);
         assertEquals(denseLast.id, adopted);
         assertEquals(DENSE, denseLast.paper.touching(denseLast.sliceIndex).size());
 
@@ -246,14 +239,14 @@ public class PageMoveSafetyTest {
     }
 
     private Board inkNearBottom(String notebookId, String strokeId) {
-        List<Board> pages = repo.pages(notebookId);
-        Board blank = pages.get(pages.size() - 1);
+        Board blank = repo.createPage(notebookId);
         assertTrue(blank.isBlank());
-        blank.paper.appendStroke(nearBottom(strokeId, blank.paperOrigin), blank.id);
+        TestInk.appendCovering(blank.paper, nearBottom(strokeId, blank.paperOrigin), blank.id);
         repo.saveInk(blank);
         List<Board> after = repo.pages(notebookId);
-        Board inked = after.get(after.size() - 2);
+        Board inked = after.get(after.size() - 1);
         assertFalse(inked.isBlank());
+        assertEquals(blank.id, inked.id);
         return inked;
     }
 

@@ -49,11 +49,14 @@ public class SheetReadyPagesTest {
     @Test
     public void pagesWithoutReadySheetReturnsEmptyWhenLogExists() throws Exception {
         repo.ensureSheet(null, PAGE, PAGE, 0L);
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         NotebookPaper paper = blank.paper;
         // Grow well past a typical stale Room board-row count.
         for (int i = 0; i < 40; i++) {
-            paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         assertTrue(paper.sliceCount() >= 40);
         repo.saveInk(blank);
@@ -73,6 +76,9 @@ public class SheetReadyPagesTest {
         assertEquals("log present ⇒ refuse legacy BoardEntity list", 0, beforeEnsure.size());
 
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         assertTrue(repo.isSheetReady(null));
         List<Board> after = repo.scratchpadPages();
         assertEquals("Ready projection restores full slice list", fullCount, after.size());
@@ -81,9 +87,12 @@ public class SheetReadyPagesTest {
     @Test
     public void pagesRefusesLegacyWhenZdlExistsEvenWithoutNotebookLogRow() throws Exception {
         repo.ensureSheet(null, PAGE, PAGE, 0L);
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         for (int i = 0; i < 12; i++) {
-            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(blank.paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         repo.saveInk(blank);
         for (int i = 0; i < 10 && repo.pendingWrites() > 0; i++) {
@@ -99,10 +108,13 @@ public class SheetReadyPagesTest {
     @Test
     public void switchNotebookDuringReadyDoesNotTruncateScratchpad() throws Exception {
         repo.ensureSheet(null, PAGE, PAGE, 0L);
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         NotebookPaper paper = blank.paper;
         for (int i = 0; i < 35; i++) {
-            paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         paper.tearDelete(1);
         repo.saveInk(blank);
@@ -120,6 +132,9 @@ public class SheetReadyPagesTest {
         assertFalse(repo.isSheetReady(null));
         assertEquals(0, repo.scratchpadPages().size());
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         assertEquals(scratchpadCount, repo.scratchpadPages().size());
     }
 }

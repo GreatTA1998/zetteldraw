@@ -33,8 +33,13 @@ public final class CollectionOpen {
             Integer keepScroll,
             boolean scratchpad,
             CollectionNav.PageLayout layout) {
-        if (nav == null || collectionId == null || pages == null || pages.isEmpty() || layout == null) {
+        if (nav == null || collectionId == null || pages == null || layout == null) {
             return null;
+        }
+        // Empty Ready list is valid (Create new page only) — scroll Y is 0.
+        if (pages.isEmpty()) {
+            nav.rememberScroll(collectionId, 0, 0, null);
+            return new Bind(pages, 0);
         }
         int target = nav.resolveTargetY(collectionId, keepScroll, pages, scratchpad, layout);
         String anchor = nav.anchorPageId(pages, target, layout);

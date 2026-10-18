@@ -44,9 +44,16 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
+<<<<<<< HEAD
         // Tip v150: safe-boot escape — catch open OOM/Error, crash-loop breaker skips Scratchpad.
         versionCode = 154
         versionName = "4.33"
+=======
+        // WIP on tip v153: Create new page button — delete soft trailing blank dual.
+        // Version bump deferred until sibling draw-gate tips; then rebase and tip.
+        versionCode = 153
+        versionName = "4.32"
+>>>>>>> 1a0be1b (v147 WIP: Create new page — delete soft trailing blank (on tip v146))
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

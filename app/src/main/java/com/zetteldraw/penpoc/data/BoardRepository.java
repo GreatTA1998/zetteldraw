@@ -17,11 +17,16 @@ public interface BoardRepository {
 
     /**
      * One page list: the Scratchpad ({@code notebookId == null}) or a notebook,
-     * oldest first. It always ends with one blank page that is not stored;
-     * its first {@link #saveInk} stores it at the next position and a new
-     * blank follows. Empty for a deleted or unknown notebook.
+     * oldest first. Ready slices only — no ephemeral trailing blank. Empty when
+     * the sheet has no slices yet (tap Create new page) or the notebook is gone.
      */
     List<Board> pages(String notebookId);
+
+    /**
+     * Append one real blank slice to a Ready sheet and flush. Returns the new
+     * page, or null when the sheet is not Ready.
+     */
+    Board createPage(String notebookId);
 
     default List<Board> scratchpadPages() {
         return pages(null);
@@ -85,10 +90,9 @@ public interface BoardRepository {
     }
 
     /**
-     * Append the page as the newest inked page of the notebook (before its
-     * trailing blank). Ready sheets only — same {@link #placePageBefore} spine
-     * as the UI Move menu (slice id preserved, dest-first disk). Paper-null /
-     * unmigrated ids return false.
+     * Append the page as the newest page of the notebook. Ready sheets only —
+     * same {@link #placePageBefore} spine as the UI Move menu (slice id
+     * preserved, dest-first disk). Paper-null / unmigrated ids return false.
      *
      * @return false when nothing changed (not Ready, missing source/dest, etc.)
      */
@@ -110,11 +114,11 @@ public interface BoardRepository {
      * Place {@code boardId} immediately before {@code beforeBoardId} in
      * {@code destNotebookId} ({@code null} = Scratchpad).
      * Same notebook and cross-notebook both use paper {@code tearMove*} (same
-     * paper reorders in place; other notebook tears across). When the target is
-     * a trailing blank <em>or</em> belongs to a different sheet than
-     * {@code destNotebookId}, the page is appended at the end of the destination
-     * (so a stale midline page from the notebook you just left cannot steal the
-     * move). Dense pages stay atomic.
+     * paper reorders in place; other notebook tears across). When
+     * {@code beforeBoardId} is null <em>or</em> the target belongs to a different
+     * sheet than {@code destNotebookId}, the page is appended at the end of the
+     * destination (so a stale midline page from the notebook you just left
+     * cannot steal the move). Dense pages stay atomic.
      *
      * @return false when nothing changed (missing source/dest, blank source, etc.)
      */
@@ -128,9 +132,8 @@ public interface BoardRepository {
 
     /**
      * Delete one Ready page (paper slice tear + log flush). Sync is the notebook
-     * log outbox, not a BoardEntity tombstone. Every list ends in exactly one
-     * blank page; that page cannot be deleted (a no-op). Links naming this page
-     * are tombstoned with it. Paper-null / unmigrated ids refuse — ensure first.
+     * log outbox, not a BoardEntity tombstone. Links naming this page are
+     * tombstoned with it. Paper-null / unmigrated ids refuse — ensure first.
      */
     void deletePage(String boardId);
 
@@ -146,7 +149,7 @@ public interface BoardRepository {
     /**
      * Where this page sits right now, read from the lists already in memory.
      * Null when the page is gone. {@code notebookId} null is the Scratchpad.
-     * {@code index} is 0-based and {@code count} includes the trailing blank.
+     * {@code index} is 0-based; {@code count} is Ready slice count.
      */
     PagePlace placeOf(String pageId);
 

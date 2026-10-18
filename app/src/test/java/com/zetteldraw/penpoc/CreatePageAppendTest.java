@@ -30,13 +30,12 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * First ink on the trailing blank must grow a new blank without a full-frame
- * pen-off flash (the old reloadPages path).
+ * Appending a page (Create new page / extendPages) must not full-frame flash.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class, qualifiers = "w600dp-h1000dp",
         shadows = IdleSurfaceViewShadow.class)
-public class TrailingBlankAppendTest {
+public class CreatePageAppendTest {
     private final Context context = ApplicationProvider.getApplicationContext();
     private final List<Runnable> worker = new ArrayList<>();
 
@@ -90,34 +89,6 @@ public class TrailingBlankAppendTest {
         assertTrue("a real remap still paints a new picture", ink.fullFramesPainted() > frames);
     }
 
-    @Test
-    public void firstScratchpadStrokeGrowsABlankWithoutAFullFrameFlash() {
-        ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
-        View root = controller.get().getWindow().getDecorView();
-        idle();
-        PageInkView ink = findInk(root);
-        ink.onSurface(true);
-        ink.dispatchWindowVisibilityChanged(View.VISIBLE);
-        settle();
-        assertTrue(ink.penOn());
-        int frames = ink.fullFramesPainted();
-        BoardRepository repo = ZettelData.repository(controller.get());
-        assertEquals(1, repo.scratchpadPages().size());
-
-        ArrayList<TouchPoint> stroke = new ArrayList<>();
-        for (int i = 0; i < 6; i++) {
-            stroke.add(new TouchPoint(80f + i * 6f, 120f + i * 4f, 0.5f, 1f, 0, 0, 1L + i));
-        }
-        ink.addStroke(stroke);
-        idle();
-        settle();
-
-        assertEquals(2, repo.scratchpadPages().size());
-        assertEquals(Arrays.asList("1/2", "2/2"), pageLabels(root));
-        assertEquals("first ink must not flash a full frame", frames, ink.fullFramesPainted());
-        assertTrue("drawing stays live after the blank appears", ink.penOn());
-        controller.pause().stop().destroy();
-    }
 
     private PageInkView laidOut(Board... pages) {
         PageInkView ink = new PageInkView(context);

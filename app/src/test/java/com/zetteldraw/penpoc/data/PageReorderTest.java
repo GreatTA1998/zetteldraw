@@ -63,7 +63,7 @@ public class PageReorderTest {
         Board p3 = inkNearBottom(notebook, "c");
         Board p4 = inkNearBottom(notebook, "d");
         List<Board> before = repo.pages(notebook);
-        assertEquals(5, before.size());
+        assertEquals(4, before.size());
         assertEquals(p1.id, before.get(0).id);
         assertEquals(p2.id, before.get(1).id);
         assertEquals(p3.id, before.get(2).id);
@@ -73,12 +73,11 @@ public class PageReorderTest {
         assertTrue(repo.placePageBefore(p2.id, p4.id));
 
         List<Board> after = repo.pages(notebook);
-        assertEquals(5, after.size());
+        assertEquals(4, after.size());
         assertEquals(p1.id, after.get(0).id);
         assertEquals(p3.id, after.get(1).id);
         assertEquals(p2.id, after.get(2).id);
         assertEquals(p4.id, after.get(3).id);
-        assertTrue(after.get(4).isBlank());
         assertNotNull(after.get(0).paper.stroke("a"));
         assertNotNull(after.get(1).paper.stroke("c"));
         assertNotNull(after.get(2).paper.stroke("b"));
@@ -95,15 +94,12 @@ public class PageReorderTest {
 
         repo.placePageBefore(source.id, first.id);
 
-        List<Board> src = repo.pages(notebook);
-        assertEquals(1, src.size());
-        assertTrue(src.get(0).isBlank());
+        assertTrue(repo.pages(notebook).isEmpty());
         List<Board> dest = repo.pages(other);
-        assertEquals(4, dest.size());
+        assertEquals(3, dest.size());
         assertEquals(source.id, dest.get(0).id);
         assertEquals(first.id, dest.get(1).id);
         assertEquals(second.id, dest.get(2).id);
-        assertTrue(dest.get(3).isBlank());
         assertNotNull(dest.get(0).paper.stroke("moved"));
         assertNotNull(dest.get(1).paper.stroke("stay"));
     }
@@ -120,7 +116,7 @@ public class PageReorderTest {
         assertEquals(p3.id, after.get(0).id);
         assertEquals(p1.id, after.get(1).id);
         assertEquals(p2.id, after.get(2).id);
-        assertTrue(after.get(3).isBlank());
+        assertEquals(3, after.size());
     }
 
     @Test
@@ -128,10 +124,10 @@ public class PageReorderTest {
         String other = repo.createNotebook("dense-dest").id();
         repo.ensureSheet(other, PAGE, PAGE, 0L);
         Board anchor = inkNearBottom(other, "anchor");
-        Board blank = repo.pages(notebook).get(0);
+        Board blank = repo.createPage(notebook);
         String adopted = blank.id;
         for (int i = 0; i < DENSE_STROKES; i++) {
-            blank.paper.appendStroke(denseStroke("s" + i, 20f + (i % 50), 30f + (i % 20) * 35f),
+            TestInk.appendCovering(blank.paper, denseStroke("s" + i, 20f + (i % 50), 30f + (i % 20) * 35f),
                     i == 0 ? adopted : null);
         }
         repo.saveInk(blank);
@@ -160,21 +156,19 @@ public class PageReorderTest {
 
     @Test
     public void densePlaceBeforeTrailingKeepsEveryStroke() throws Exception {
-        Board blank = repo.pages(notebook).get(0);
+        Board blank = repo.createPage(notebook);
         String adopted = blank.id;
         for (int i = 0; i < DENSE_STROKES; i++) {
-            blank.paper.appendStroke(denseStroke("s" + i, 20f + (i % 50), 30f + (i % 20) * 35f),
+            TestInk.appendCovering(blank.paper, denseStroke("s" + i, 20f + (i % 50), 30f + (i % 20) * 35f),
                     i == 0 ? adopted : null);
         }
         repo.saveInk(blank);
         Board second = inkNearBottom(notebook, "anchor");
         Board dense = repo.pages(notebook).get(0);
         assertEquals(DENSE_STROKES, dense.paper.touching(0).size());
-        Board trailing = repo.pages(notebook).get(repo.pages(notebook).size() - 1);
-        assertTrue(trailing.isBlank());
 
-        // After second (= before trailing blank), same as old reorderPageAfter.
-        assertTrue(repo.placePageBefore(dense.id, trailing.id));
+        // Append after second.
+        assertTrue(repo.placePageBefore(dense.id, null, notebook));
 
         List<Board> pages = repo.pages(notebook);
         assertEquals(second.id, pages.get(0).id);
@@ -189,9 +183,9 @@ public class PageReorderTest {
     @Test
     public void tearMoveAfterSameIndexIsNoOp() {
         NotebookPaper paper = NotebookPaper.empty(PAGE);
-        paper.appendStroke(nearBottom("a", 0f), "s0");
-        paper.appendStroke(nearBottom("b", PAGE), "s1");
-        paper.appendStroke(nearBottom("c", 2f * PAGE), "s2");
+        TestInk.appendCovering(paper, nearBottom("a", 0f), "s0");
+        TestInk.appendCovering(paper, nearBottom("b", PAGE), "s1");
+        TestInk.appendCovering(paper, nearBottom("c", 2f * PAGE), "s2");
         byte[] logBefore = paper.bytes();
         // Same-paper tearMoveAfter is the Reorder primitive (no-op when already there).
         paper.tearMoveAfter(1, paper, 1);
@@ -205,14 +199,14 @@ public class PageReorderTest {
     }
 
     private Board inkNearBottom(String notebookId, String strokeId) {
-        List<Board> pages = repo.pages(notebookId);
-        Board blank = pages.get(pages.size() - 1);
+        Board blank = repo.createPage(notebookId);
         assertTrue(blank.isBlank());
-        blank.paper.appendStroke(nearBottom(strokeId, blank.paperOrigin), blank.id);
+        TestInk.appendCovering(blank.paper, nearBottom(strokeId, blank.paperOrigin), blank.id);
         repo.saveInk(blank);
         List<Board> after = repo.pages(notebookId);
-        Board inked = after.get(after.size() - 2);
+        Board inked = after.get(after.size() - 1);
         assertFalse(inked.isBlank());
+        assertEquals(blank.id, inked.id);
         return inked;
     }
 

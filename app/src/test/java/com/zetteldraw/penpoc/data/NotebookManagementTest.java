@@ -104,7 +104,7 @@ public class NotebookManagementTest {
 
         List<Board> scratch = repo.scratchpadPages();
         assertEquals(RoomBoardRepositoryTest.ids(keep, a, b), RoomBoardRepositoryTest.ids(scratch).subList(0, 3));
-        assertTrue(scratch.get(scratch.size() - 1).isBlank());
+        // no soft trailing blank
         assertEquals(1, TestInk.strokesOf(scratch.get(1)).size());
 
         device.reopen();
@@ -116,7 +116,7 @@ public class NotebookManagementTest {
         Board a = inked(10f);
         BoardRepository.NotebookInfo fresh = repo.createNotebook("fresh");
         repo.movePageToNotebook(a.id, fresh.id());
-        assertEquals(RoomBoardRepositoryTest.ids(a), RoomBoardRepositoryTest.ids(RoomBoardRepositoryTest.stored(repo.notebookPages(fresh.id()))));
+        assertEquals(RoomBoardRepositoryTest.ids(a), RoomBoardRepositoryTest.ids(repo.notebookPages(fresh.id())));
 
         repo.deleteNotebook(fresh.id());
         Board b = inked(20f);
@@ -232,8 +232,8 @@ public class NotebookManagementTest {
         Board parentPage = repo.pages(shelf.id()).get(0);
         Board childPage = repo.pages(chapter.id()).get(0);
         assertNotEquals(parentPage.sheetId, childPage.sheetId);
-        parentPage.paper.appendStroke(TestInk.stroke(11f, 20f, 4));
-        childPage.paper.appendStroke(TestInk.stroke(99f, 20f, 4));
+        TestInk.appendCovering(parentPage.paper, TestInk.stroke(11f, 20f, 4));
+        TestInk.appendCovering(childPage.paper, TestInk.stroke(99f, 20f, 4));
         repo.saveInk(parentPage);
         repo.saveInk(childPage);
 
@@ -364,7 +364,9 @@ public class NotebookManagementTest {
             device.ensureReady(Notebook.JOURNAL.uuid);
         }
         List<Board> pages = repo.scratchpadPages();
-        Board page = pages.get(pages.size() - 1);
+        Board page = pages.isEmpty() || !pages.get(pages.size() - 1).isBlank()
+                ? repo.createPage(null)
+                : pages.get(pages.size() - 1);
         TestInk.draw(page, x);
         device.tick();
         repo.saveInk(page);

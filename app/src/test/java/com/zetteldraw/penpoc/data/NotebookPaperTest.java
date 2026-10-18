@@ -64,9 +64,9 @@ public class NotebookPaperTest {
     public void lastInkedSliceIsRememberedWithoutWalkingPages() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(100);
         assertEquals(-1, paper.lastInkedSlice());
-        paper.appendStroke(line(null, 4f, 10f, 20f));
+        TestInk.appendCovering(paper, line(null, 4f, 10f, 20f));
         assertEquals(0, paper.lastInkedSlice());
-        paper.appendStroke(line(null, 4f, 210f, 250f));
+        TestInk.appendCovering(paper, line(null, 4f, 210f, 250f));
         assertEquals(2, paper.lastInkedSlice());
         assertEquals(3, paper.sliceCount());
         NotebookPaper again = NotebookPaper.replay(paper.bytes());
@@ -79,7 +79,7 @@ public class NotebookPaperTest {
     public void aStrokeCrossingTwoSlicesIsOneId() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(1420);
         InkRenderer.InkStroke stroke = line(null, 40f, 1400f, 1500f);
-        paper.appendStroke(stroke);
+        TestInk.appendCovering(paper, stroke);
 
         assertEquals(1, paper.strokes().size());
         assertEquals(stroke.id, paper.strokes().get(0).id);
@@ -101,7 +101,7 @@ public class NotebookPaperTest {
         points.add(new TouchPoint(30f, 40f, 0.6f, 1f, 0, 0, 1_008L));
         InkRenderer.InkStroke colored = InkRenderer.strokeOwning(
                 "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", points, 0xFF9ED9C8);
-        paper.appendStroke(colored);
+        TestInk.appendCovering(paper, colored);
         NotebookPaper again = NotebookPaper.replay(paper.bytes());
         assertEquals(android.graphics.Color.BLACK, again.strokes().get(0).color);
         assertEquals(colored.id, again.strokes().get(0).id);
@@ -115,8 +115,8 @@ public class NotebookPaperTest {
     @Test
     public void sliceOriginsMatchCumulativeHeightsForSeamAlignment() {
         NotebookPaper paper = NotebookPaper.empty(1420);
-        paper.appendStroke(line("a", 10f, 100f, 200f));
-        paper.appendStroke(line("b", 10f, 1500f, 1600f));
+        TestInk.appendCovering(paper, line("a", 10f, 100f, 200f));
+        TestInk.appendCovering(paper, line("b", 10f, 1500f, 1600f));
         assertEquals(2, paper.sliceCount());
         assertEquals(0f, paper.origin(0), 0f);
         assertEquals(1420f, paper.origin(1), 0f);
@@ -135,7 +135,7 @@ public class NotebookPaperTest {
     public void lassoDragAcrossTheMarkIsOneShiftAndUndoSubtractsIt() {
         NotebookPaper paper = NotebookPaper.empty(1420);
         InkRenderer.InkStroke stroke = line("stroke-1", 10f, 1400f, 1600f);
-        paper.appendStroke(stroke);
+        TestInk.appendCovering(paper, stroke);
         String id = paper.strokes().get(0).id;
 
         paper.translate(List.of(id), 25f, -30f);
@@ -157,8 +157,8 @@ public class NotebookPaperTest {
     @Test
     public void tearIsTheOnlySplit() {
         NotebookPaper paper = NotebookPaper.empty(1420);
-        paper.appendStroke(line("cross", 8f, 1400f, 1600f));
-        paper.appendStroke(line("above", 8f, 100f, 200f));
+        TestInk.appendCovering(paper, line("cross", 8f, 1400f, 1600f));
+        TestInk.appendCovering(paper, line("above", 8f, 100f, 200f));
         assertEquals("pen-up does not cut a crossing stroke", 2, paper.strokes().size());
 
         NotebookPaper.Tear deleted = paper.tearDelete(0);
@@ -170,8 +170,8 @@ public class NotebookPaperTest {
         assertTrue("delete closes the gap", stayed.points.get(stayed.points.size() - 1).y < 1420f);
 
         NotebookPaper wiped = NotebookPaper.empty(1420);
-        wiped.appendStroke(line("cross", 8f, 1300f, 1500f));
-        wiped.appendStroke(line("below", 8f, 1500f, 1600f));
+        TestInk.appendCovering(wiped, line("cross", 8f, 1300f, 1500f));
+        TestInk.appendCovering(wiped, line("below", 8f, 1500f, 1600f));
         float belowBefore = wiped.stroke("below").points.get(0).y;
         NotebookPaper.Tear wipe = wiped.tearWipe(0);
         assertEquals(1, wipe.newIds.size());
@@ -182,10 +182,10 @@ public class NotebookPaperTest {
     @Test
     public void moveCutsOnlyTheCrossingStrokeAndKeepsIdsOnTheRest() {
         NotebookPaper source = NotebookPaper.empty(1420);
-        source.appendStroke(line("cross", 4f, 1400f, 1500f));
-        source.appendStroke(line("low", 4f, 2000f, 2100f));
+        TestInk.appendCovering(source, line("cross", 4f, 1400f, 1500f));
+        TestInk.appendCovering(source, line("low", 4f, 2000f, 2100f));
         NotebookPaper dest = NotebookPaper.empty(1420);
-        dest.appendStroke(line("already", 1f, 10f, 20f));
+        TestInk.appendCovering(dest, line("already", 1f, 10f, 20f));
 
         // Id-preserving Move spine (same as placePageBefore → tearMove*).
         NotebookPaper.Tear moved = source.tearMoveAfter(0, dest, dest.sliceCount() - 1);
@@ -206,12 +206,12 @@ public class NotebookPaperTest {
     @Test
     public void aPullReplacesTheWholeLogAndCannotLeaveHalfAStroke() throws Exception {
         NotebookPaper local = NotebookPaper.empty(1420);
-        local.appendStroke(line("cross", 3f, 1400f, 1800f));
+        TestInk.appendCovering(local, line("cross", 3f, 1400f, 1800f));
         assertEquals(3, local.stroke("cross").points.size());
 
         NotebookPaper remote = NotebookPaper.empty(1680);
-        remote.appendStroke(line("other", 9f, 10f, 40f));
-        remote.appendStroke(line("second", 9f, 1700f, 1900f));
+        TestInk.appendCovering(remote, line("other", 9f, 10f, 40f));
+        TestInk.appendCovering(remote, line("second", 9f, 1700f, 1900f));
 
         NotebookPaper pulled = NotebookPaper.replay(remote.bytes());
         assertNull(pulled.stroke("cross"));
@@ -251,9 +251,9 @@ public class NotebookPaperTest {
     @Test
     public void appendDoesNotRewriteEarlierBytes() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(1420);
-        paper.appendStroke(line("first", 1f, 10f, 20f));
+        TestInk.appendCovering(paper, line("first", 1f, 10f, 20f));
         byte[] before = paper.bytes();
-        paper.appendStroke(line("second", 1f, 30f, 40f));
+        TestInk.appendCovering(paper, line("second", 1f, 30f, 40f));
         byte[] after = paper.bytes();
         assertTrue(after.length > before.length);
         byte[] prefix = new byte[before.length];
@@ -269,8 +269,8 @@ public class NotebookPaperTest {
     @Test
     public void eraserDeletesTheWholeCrossingStroke() {
         NotebookPaper paper = NotebookPaper.empty(1420);
-        paper.appendStroke(line("cross", 5f, 1410f, 1430f));
-        paper.appendStroke(line("other", 5f, 10f, 20f));
+        TestInk.appendCovering(paper, line("cross", 5f, 1410f, 1430f));
+        TestInk.appendCovering(paper, line("other", 5f, 10f, 20f));
         paper.deleteIds(List.of("cross"));
         assertNull(paper.stroke("cross"));
         assertEquals("other", paper.stroke("other").id);
@@ -283,7 +283,7 @@ public class NotebookPaperTest {
         for (int i = 0; i < 800; i++) {
             float y0 = 20f + (i % 40) * 30f;
             InkRenderer.InkStroke stroke = line("s" + i, 8f + (i % 10), y0, y0 + 40f);
-            paper.appendStroke(stroke);
+            TestInk.appendCovering(paper, stroke);
             if (i < 120) {
                 move.add(stroke.id);
             }
@@ -291,7 +291,7 @@ public class NotebookPaperTest {
         // Far pages: more strokes so refreshLastInked would be costly if it walked points.
         for (int i = 0; i < 400; i++) {
             float y0 = 5000f + i * 4f;
-            paper.appendStroke(line("far" + i, 4f, y0, y0 + 20f));
+            TestInk.appendCovering(paper, line("far" + i, 4f, y0, y0 + 20f));
         }
         int lastBefore = paper.lastInkedSlice();
 
@@ -314,9 +314,9 @@ public class NotebookPaperTest {
     @Test
     public void replayAfterTearKeepsSliceCountMatchingLivePaper() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(400);
-        paper.appendStroke(line("p0", 10f, 20f, 40f));
-        paper.appendStroke(line("p1", 10f, 420f, 440f));
-        paper.appendStroke(line("p2", 10f, 820f, 840f));
+        TestInk.appendCovering(paper, line("p0", 10f, 20f, 40f));
+        TestInk.appendCovering(paper, line("p1", 10f, 420f, 440f));
+        TestInk.appendCovering(paper, line("p2", 10f, 820f, 840f));
         assertEquals(3, paper.sliceCount());
         paper.tearDelete(1);
         assertEquals("live tear leaves inked slices + no empty tail", 2, paper.sliceCount());

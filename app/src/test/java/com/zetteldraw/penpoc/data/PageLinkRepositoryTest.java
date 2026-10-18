@@ -49,10 +49,10 @@ public class PageLinkRepositoryTest {
         repo.ensureSheet(from.id(), 400, 800, 1L);
         repo.ensureSheet(to.id(), 400, 800, 1L);
         Board source = repo.pages(from.id()).get(0);
-        source.paper.appendStroke(TestStrokes.stroke(1f, 10f), source.id);
+        TestInk.appendCovering(source.paper, TestStrokes.stroke(1f, 10f), source.id);
         repo.saveInk(source);
         Board target = repo.pages(to.id()).get(0);
-        target.paper.appendStroke(TestStrokes.stroke(1f, 10f), target.id);
+        TestInk.appendCovering(target.paper, TestStrokes.stroke(1f, 10f), target.id);
         repo.saveInk(target);
 
         assertNull(repo.createLink(source.id, source.id));
@@ -68,7 +68,7 @@ public class PageLinkRepositoryTest {
         assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.LINK, link.id()).op);
 
         Board sourceAgain = repo.pages(from.id()).get(repo.pages(from.id()).size() - 1);
-        sourceAgain.paper.appendStroke(TestStrokes.stroke(2f, 10f), sourceAgain.id);
+        TestInk.appendCovering(sourceAgain.paper, TestStrokes.stroke(2f, 10f), sourceAgain.id);
         repo.saveInk(sourceAgain);
         BoardRepository.PageLink second = repo.createLink(sourceAgain.id, target.id);
         repo.deletePage(target.id);

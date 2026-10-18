@@ -43,7 +43,7 @@ public final class Board {
         if (paper != null) {
             int index = paper.indexOfSliceId(id);
             if (index < 0) {
-                // Trailing blank (id not on paper yet) or orphaned chrome.
+                // Orphaned chrome (id no longer on this paper).
                 return true;
             }
             return !paper.containsInk(index);

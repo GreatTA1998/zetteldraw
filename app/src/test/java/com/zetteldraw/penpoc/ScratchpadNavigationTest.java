@@ -13,6 +13,7 @@ import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
@@ -30,7 +31,7 @@ import org.robolectric.shadows.ShadowLooper;
 import java.util.List;
 
 /**
- * Scratchpad landing page: first open → trailing blank; return restores left-behind
+ * Scratchpad landing page: first open → last Ready page; return restores left-behind
  * scroll (v73 navigation intent / effectiveScrollY).
  */
 @RunWith(RobolectricTestRunner.class)
@@ -49,7 +50,7 @@ public class ScratchpadNavigationTest {
     }
 
     @Test
-    public void firstScratchpadOpenLandsOnTrailingBlank() {
+    public void firstScratchpadOpenLandsOnLastReadyPage() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         int height = seedMultiPageScratchpad(app, repo);
@@ -65,21 +66,22 @@ public class ScratchpadNavigationTest {
         relayout(root);
 
         List<Board> pages = repo.scratchpadPages();
-        assertTrue("Scratchpad must be multi-page, was " + pages.size(), pages.size() > 2);
+        assertTrue("Scratchpad must be multi-page, was " + pages.size(), pages.size() >= 2);
         PageScroller scroller = (PageScroller) pageScroller(root);
         View column = pageColumn(root);
         assertTrue(column instanceof ViewGroup);
         ViewGroup slots = (ViewGroup) column;
-        assertEquals(pages.size(), slots.getChildCount());
-        View trailing = slots.getChildAt(slots.getChildCount() - 1);
-        int lastPageTop = offsetIn(trailing, scroller);
+        // Column may include the Create new page control after the last Ready slot.
+        assertTrue(slots.getChildCount() >= pages.size());
+        View lastPage = slots.getChildAt(pages.size() - 1);
+        int lastPageTop = offsetIn(lastPage, scroller);
         // ScrollView clamps to max = content - viewport; that may sit a few px
-        // above the last slot top when the trailing blank is shorter than the viewport.
+        // above the last slot top when the last page is shorter than the viewport.
         int maxY = Math.max(0, column.getHeight() - scroller.getHeight());
         int expected = Math.min(lastPageTop, maxY);
         assertTrue("first open must not stay on page 1 (Y=0); was " + scroller.getScrollY(),
-                scroller.getScrollY() > height);
-        assertEquals("first open → trailing blank (clamped last page)",
+                scroller.getScrollY() > height || pages.size() == 2);
+        assertEquals("first open → last Ready page (clamped)",
                 expected, scroller.getScrollY());
 
         controller.pause().stop().destroy();
@@ -263,12 +265,15 @@ public class ScratchpadNavigationTest {
         ActivityController<CanvasActivity> probe = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = probe.get().getWindow().getDecorView();
         idle();
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         int height = blank.slicePx;
         assertTrue(height > 40);
-        blank.paper.appendStroke(TestStrokes.stroke(12f, 20f), blank.id);
+        TestInk.appendCovering(blank.paper, TestStrokes.stroke(12f, 20f), blank.id);
         for (int i = 1; i < inkedSlices; i++) {
-            blank.paper.appendStroke(TestStrokes.stroke(12f, (float) i * height + 20f));
+            TestInk.appendCovering(blank.paper, TestStrokes.stroke(12f, (float) i * height + 20f));
         }
         if (inkedSlices > 2) {
             blank.paper.tearDelete(1);

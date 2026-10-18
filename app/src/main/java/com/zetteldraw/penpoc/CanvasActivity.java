@@ -144,6 +144,8 @@ public final class CanvasActivity extends Activity {
     private PageInkView inkView;
     private PageScroller scroller;
     private LinearLayout pageColumn;
+    /** Full-width control under the last real page (or alone when empty). */
+    private Button createPageButton;
     private HorizontalScrollView notebookScroll;
     private LinearLayout notebookStrip;
     private ImageButton scratchpadTab;
@@ -271,9 +273,8 @@ public final class CanvasActivity extends Activity {
                 if (slot != null) {
                     slot.syncEnabled();
                 }
-                // Erase or undo can empty the last page, redo can fill it: the trailing blank follows.
-                boolean last = !slots.isEmpty() && slots.get(slots.size() - 1) == slot;
-                if (slot != null && !loading() && (page.isBlank() || last)
+                // Wipe/delete/trim can change Ready slice count; reload when lists disagree.
+                if (slot != null && !loading()
                         && pagesIn(collectionId).size() != slots.size()) {
                     reloadPages(effectiveScrollY());
                 }
@@ -281,9 +282,9 @@ public final class CanvasActivity extends Activity {
 
             @Override
             public void onPageBecameNonEmpty(Board page) {
-                // The first stroke stored the trailing blank, and the repository added a new one.
-                if (slotFor(page.id) != null && !loading() && pagesIn(collectionId).size() != slots.size()) {
-                    reloadPages(effectiveScrollY());
+                PageSlot slot = slotFor(page.id);
+                if (slot != null) {
+                    slot.syncEnabled();
                 }
             }
 
@@ -335,6 +336,19 @@ public final class CanvasActivity extends Activity {
         scroller.setPasteLongPressListener(this::onPasteLongPress);
         pageColumn = new LinearLayout(this);
         pageColumn.setOrientation(LinearLayout.VERTICAL);
+        createPageButton = new Button(this, null, android.R.attr.borderlessButtonStyle);
+        createPageButton.setText(R.string.create_new_page);
+        createPageButton.setAllCaps(false);
+        createPageButton.setTextColor(Color.BLACK);
+        createPageButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        createPageButton.setGravity(Gravity.CENTER);
+        createPageButton.setMinHeight(dp(56));
+        createPageButton.setPadding(dp(12), dp(14), dp(12), dp(14));
+        GradientDrawable createBg = new GradientDrawable();
+        createBg.setColor(Color.WHITE);
+        createBg.setStroke(dp(1), Color.BLACK);
+        createPageButton.setBackground(createBg);
+        createPageButton.setOnClickListener(v -> onCreateNewPage());
         pageColumn.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if (pendingScrollY < 0) {
                 updateExcludeRects();
@@ -944,7 +958,7 @@ public final class CanvasActivity extends Activity {
         String notebook = notebookKey(id);
         if (pageHeight > 0 && repository.isSheetReady(notebook)) {
             List<Board> ready = repository.pages(notebook);
-            if (ready != null && !ready.isEmpty()) {
+            if (ready != null) {
                 ++loadGeneration;
                 // Same tab chrome as async finishLoad (boot snappy must not skip this).
                 rebuildNotebookTabs(repository.notebooks());
@@ -1129,10 +1143,7 @@ public final class CanvasActivity extends Activity {
                         return;
                     }
                     pages = repository.pages(notebook);
-                    if (pages.isEmpty()) {
-                        LaunchLog.mark("page list " + name + " empty after Ready ensure");
-                        return;
-                    }
+                    // Empty Ready sheet is valid — Create new page button only.
                     if (first) {
                         LaunchLog.mark("page list " + name + " read: " + pages.size() + " pages ("
                                 + inked(pages) + " inked), " + notebooks.size() + " notebooks in "
@@ -1221,10 +1232,7 @@ public final class CanvasActivity extends Activity {
             reopenAfterNotebookGone(loaded.notebooks());
             return;
         }
-        if (loaded.pages().isEmpty()) {
-            return;
-        }
-        // Same Ready paint spine as snappy open / reload / delete.
+        // Empty Ready list is valid — Create new page button only.
         // Ready first-paint runs off main via PageInkView / UiExecutors.renderer.
         showReady(loaded.id(), loaded.pages(), loaded.keepScroll());
         if (!firstListShown) {
@@ -1276,12 +1284,9 @@ public final class CanvasActivity extends Activity {
 
     private void reloadPages(int targetScrollY) {
         List<Board> pages = pagesIn(collectionId);
-        // Log-backed sheet vanished from cache mid-session — re-ensure, do not show [].
-        if (pages.isEmpty()) {
+        // Sheet vanished mid-session — re-ensure. Empty Ready list is fine.
+        if (pages.isEmpty() && !repository.isSheetReady(notebookKey(collectionId))) {
             startLoad(collectionId, targetScrollY, false);
-            return;
-        }
-        if (tryAppendTrailingBlank(pages, targetScrollY)) {
             return;
         }
         ++loadGeneration;
@@ -1295,68 +1300,20 @@ public final class CanvasActivity extends Activity {
         layoutPages(pages, targetScrollY);
     }
 
-    /**
-     * First ink on the trailing blank grows the list by exactly one new blank
-     * under an unchanged stack. Append that slot and extend the ink viewport
-     * instead of tearing every page down (which flashes and holds the pen off).
-     */
-    private boolean tryAppendTrailingBlank(List<Board> pages, int targetScrollY) {
-        if (loading() || currentPages == null || slots.isEmpty() || pageHeight <= 0) {
-            return false;
+    /** Explicit Create new page — appends a real Ready slice. */
+    private void onCreateNewPage() {
+        if (loading() || pageHeight <= 0) {
+            return;
         }
-        if (pages.size() != currentPages.size() + 1 || pages.size() != slots.size() + 1) {
-            return false;
+        Board created = repository.createPage(notebookKey(collectionId));
+        if (created == null) {
+            showHint(getString(R.string.create_page_failed), true);
+            return;
         }
-        if (targetScrollY != effectiveScrollY()) {
-            return false;
-        }
-        int gap = layoutGap(pages);
-        if (gap != layoutGap(currentPages)) {
-            return false;
-        }
-        for (int i = 0; i < currentPages.size(); i++) {
-            Board was = currentPages.get(i);
-            Board now = pages.get(i);
-            if (!was.id.equals(now.id) || heightOf(was) != heightOf(now) || slots.get(i).page != now) {
-                return false;
-            }
-        }
-        Board blank = pages.get(pages.size() - 1);
-        if (!blank.isBlank()) {
-            return false;
-        }
-        currentPages = pages;
-        int height = heightOf(blank);
-        int span = height + gap;
-        int top = slotTops[slots.size()];
-        int[] nextTops = new int[slotTops.length + 1];
-        System.arraycopy(slotTops, 0, nextTops, 0, slotTops.length);
-        nextTops[nextTops.length - 1] = top + span;
-        slotTops = nextTops;
-        if (slotStride > 0 && span != slotStride) {
-            slotStride = 0;
-        }
-        int total = pages.size();
-        for (int i = 0; i < slots.size(); i++) {
-            slots.get(i).setIndex(i + 1, total);
-        }
-        PageSlot slot = new PageSlot(this, blank, total, total);
-        slots.add(slot);
-        pageColumn.addView(slot, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, span));
-        // After the new blank is in slots so isTrailingBlank sees it as the tail.
-        for (PageSlot each : slots) {
-            each.syncEnabled();
-        }
-        int[] heights = new int[pages.size()];
-        for (int i = 0; i < pages.size(); i++) {
-            heights[i] = heightOf(pages.get(i));
-        }
-        inkView.extendPages(pages, heights, gap);
-        pageColumn.requestLayout();
-        refreshModeBar();
-        updateExcludeRects();
-        return true;
+        List<Board> pages = pagesIn(collectionId);
+        int target = CollectionNav.scrollYBefore(pages, Math.max(0, pages.size() - 1), pageLayout());
+        ++loadGeneration;
+        showReady(collectionId, pages, target);
     }
 
     /** Builds the page slots and ink layout for {@code pages}; needs a page height. */
@@ -1390,6 +1347,14 @@ public final class CanvasActivity extends Activity {
         for (PageSlot slot : slots) {
             slot.syncEnabled();
         }
+        // Short full-width Create new page control under the last real page.
+        LinearLayout.LayoutParams createLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        if (createPageButton.getParent() instanceof ViewGroup) {
+            ((ViewGroup) createPageButton.getParent()).removeView(createPageButton);
+        }
+        pageColumn.addView(createPageButton, createLp);
+        createPageButton.setEnabled(!loading());
         inkView.setPages(pages, heights, gap, targetScrollY);
         pendingScrollY = Math.max(0, targetScrollY);
         pageColumn.requestLayout();
@@ -1733,8 +1698,9 @@ public final class CanvasActivity extends Activity {
 
     private void confirmReorder() {
         PageSlot target = reorderTargetSlot();
+        boolean append = reorderAppendTarget();
         // Blocked while loading: slots can still show the previous notebook.
-        if (reorderSourceId == null || reorderConfirmBlocked(target)) {
+        if (reorderSourceId == null || reorderConfirmBlocked(target, append)) {
             refreshModeBar();
             return;
         }
@@ -1745,7 +1711,9 @@ public final class CanvasActivity extends Activity {
         // Flush any pending pen-up before the tear. Cross-notebook place holds
         // sheet flushes so these writer tasks cannot persist a source tear
         // before the destination rewrite (see RoomBoardRepository holdFlush).
-        repository.saveInk(target.page);
+        if (target != null) {
+            repository.saveInk(target.page);
+        }
         PageSlot onScreen = slotFor(sourceId);
         Board source = onScreen == null ? null : onScreen.page;
         if (source == null) {
@@ -1754,13 +1722,30 @@ public final class CanvasActivity extends Activity {
         if (source != null) {
             repository.saveInk(source);
         }
-        if (!repository.placePageBefore(sourceId, target.page.id, destNotebookId)) {
+        String beforeId = append ? null : target.page.id;
+        if (!repository.placePageBefore(sourceId, beforeId, destNotebookId)) {
             LaunchLog.mark("place-before Confirm refused; leave Reorder mode open");
             refreshModeBar();
             return;
         }
         cancelMode();
         openAfterReorder(sourceId, destNotebookId);
+    }
+
+    /**
+     * Midline is past the last real page (over the Create new page control) →
+     * Reorder Confirm appends instead of placing before a page.
+     */
+    private boolean reorderAppendTarget() {
+        if (slots.isEmpty() || slotTops.length != slots.size() + 1) {
+            return slots.isEmpty();
+        }
+        int viewport = scroller.getHeight();
+        if (viewport <= 0 && drawingArea != null) {
+            viewport = drawingArea.getHeight();
+        }
+        int mid = scroller.getScrollY() + Math.max(viewport, 1) / 2;
+        return mid >= slotTops[slots.size()];
     }
 
     private void openAfterReorder(String pageId, String notebookId) {
@@ -1873,10 +1858,11 @@ public final class CanvasActivity extends Activity {
         }
         if (reorderSourceId != null && reorderSourceRef != null) {
             PageSlot target = reorderTargetSlot();
-            if (reorderConfirmBlocked(target)) {
+            boolean append = reorderAppendTarget();
+            if (reorderConfirmBlocked(target, append)) {
                 modeText.setText(getString(R.string.reordering, reorderSourceRef));
                 setModeConfirmEnabled(false);
-            } else if (target.page.isBlank()) {
+            } else if (append) {
                 modeText.setText(getString(R.string.place_in, reorderSourceRef, nameOnScreen()));
                 setModeConfirmEnabled(true);
             } else {
@@ -1888,10 +1874,20 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Same gate for mode-bar Confirm and {@link #confirmReorder}: loading, no
-     * target, self, or same-notebook noop (already before / already last inked).
+     * target (unless append), self, or same-notebook noop.
      */
-    private boolean reorderConfirmBlocked(PageSlot target) {
-        if (loading() || target == null || target.page.id.equals(reorderSourceId)) {
+    private boolean reorderConfirmBlocked(PageSlot target, boolean append) {
+        if (loading()) {
+            return true;
+        }
+        if (append) {
+            int sourceIndex = reorderSourceIndex();
+            if (!java.util.Objects.equals(notebookKey(collectionId), reorderSourceNotebookId)) {
+                return false;
+            }
+            return sourceIndex >= 0 && sourceIndex == slots.size() - 1;
+        }
+        if (target == null || target.page.id.equals(reorderSourceId)) {
             return true;
         }
         if (!sameNotebookForReorder(target)) {
@@ -1901,17 +1897,8 @@ public final class CanvasActivity extends Activity {
         if (sourceIndex < 0) {
             return false;
         }
-        if (!target.page.isBlank()) {
-            int targetIndex = slots.indexOf(target);
-            return targetIndex > 0 && sourceIndex == targetIndex - 1;
-        }
-        int lastInked = -1;
-        for (int i = 0; i < slots.size(); i++) {
-            if (!slots.get(i).page.isBlank()) {
-                lastInked = i;
-            }
-        }
-        return sourceIndex == lastInked;
+        int targetIndex = slots.indexOf(target);
+        return targetIndex > 0 && sourceIndex == targetIndex - 1;
     }
 
     /**
@@ -2053,7 +2040,7 @@ public final class CanvasActivity extends Activity {
 
     /** Wipe and Delete for one page, anchored to its ⋮; each confirms in the same spot. */
     private void showPageMenu(PageSlot slot) {
-        if (isTrailingBlank(slot) || !slot.moreButton.isEnabled()) {
+        if (!slot.moreButton.isEnabled()) {
             return;
         }
         LinearLayout menu = panel();
@@ -2090,11 +2077,6 @@ public final class CanvasActivity extends Activity {
                 ? effectiveScrollY()
                 : CollectionNav.scrollYBefore(pages, Math.min(index, pages.size() - 1), pageLayout());
         showReady(collectionId, pages, target);
-    }
-
-    /** The blank page that ends every list: it has nothing to wipe, move or delete. */
-    private boolean isTrailingBlank(PageSlot slot) {
-        return !slots.isEmpty() && slots.get(slots.size() - 1) == slot && slot.page.isBlank();
     }
 
     /** Rename / Delete, dropped down from the notebook's own tab. */
@@ -3275,7 +3257,7 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Transparent stand-in for one page above the ink surface: carries the
-     * page's "k/n" number (top-left, n counting the trailing blank), Link and
+     * page's "k/n" number (top-left, Ready slice count), Link and
      * Reorder with stacked references (bottom-left), Move and ⋮ (bottom-right),
      * and the dashed separator below it. Slots are rebuilt whenever the list
      * changes, so n is always current.
@@ -3394,17 +3376,16 @@ public final class CanvasActivity extends Activity {
         }
 
         /**
-         * Blank pages: Link, Reorder, and Move greyed alike. Trailing blank:
-         * ⋮ stays visible and uses the same disabled alpha (no invisible chrome).
+         * Blank pages: Link, Reorder, and Move greyed alike. ⋮ stays enabled so
+         * Wipe / Delete work on stored blank slices.
          */
         void syncEnabled() {
             boolean blank = page.isBlank();
-            boolean trailing = isTrailingBlank(this);
             setChromeEnabled(linkButton, !blank);
             setChromeEnabled(reorderButton, !blank);
             setChromeEnabled(moveButton, !blank);
             moreButton.setVisibility(View.VISIBLE);
-            setChromeEnabled(moreButton, !trailing);
+            setChromeEnabled(moreButton, true);
         }
 
         private void setChromeEnabled(Button button, boolean enabled) {

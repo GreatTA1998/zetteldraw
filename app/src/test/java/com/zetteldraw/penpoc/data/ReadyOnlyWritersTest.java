@@ -76,6 +76,9 @@ public class ReadyOnlyWritersTest {
     @Test
     public void readySaveFlushesLogAndNeverCreatesZdi() throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board page = repo.scratchpadPages().get(0);
         assertNotNull(page.paper);
         assertNotNull(page.sheetId);
@@ -99,6 +102,9 @@ public class ReadyOnlyWritersTest {
     @Test
     public void logBackedPaperNullRefusesBoardEntityWriteBehind() throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board page = repo.scratchpadPages().get(0);
         String sheetId = page.sheetId;
         byte[] before = ink.readLog(sheetId);
@@ -155,6 +161,9 @@ public class ReadyOnlyWritersTest {
     @Test
     public void placePageBeforeRequiresPaperOnLogBackedSheets() throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         assertTrue(repo.ensureSheet(com.zetteldraw.penpoc.Notebook.COMEDY.uuid, PAGE, PAGE, 0L));
         Board source = repo.scratchpadPages().get(0);
         TestInk.draw(source, 10f);

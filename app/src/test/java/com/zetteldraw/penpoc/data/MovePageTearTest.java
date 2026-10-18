@@ -68,15 +68,11 @@ public class MovePageTearTest {
         String pageId = inked.id;
         assertTrue(repo.movePageToNotebook(pageId, doodles));
 
-        List<Board> scratch = repo.scratchpadPages();
-        assertEquals(1, scratch.size());
-        assertTrue("Scratchpad keeps only its trailing blank", scratch.get(0).isBlank());
-        assertNull(scratch.get(0).paper.stroke("mark"));
+        assertTrue(repo.scratchpadPages().isEmpty());
 
         List<Board> pages = repo.pages(doodles);
-        assertEquals("inked page plus trailing blank", 2, pages.size());
+        assertEquals(1, pages.size());
         assertFalse(pages.get(0).isBlank());
-        assertTrue(pages.get(1).isBlank());
         assertEquals("placePageBefore spine keeps slice id (links stay valid)",
                 pageId, pages.get(0).id);
         assertNotNull(pages.get(0).paper.stroke("mark"));
@@ -89,26 +85,23 @@ public class MovePageTearTest {
         Board first = inkNearBottom(null, "keep");
         Board second = inkNearBottom(null, "move");
         List<Board> before = repo.scratchpadPages();
-        assertEquals("two inked slices plus trailing blank", 3, before.size());
+        assertEquals(2, before.size());
         assertEquals(first.id, before.get(0).id);
         assertEquals(second.id, before.get(1).id);
-        assertTrue(before.get(2).isBlank());
         assertEquals(1, second.paper.lastInkedSlice());
 
         repo.movePageToNotebook(second.id, doodles);
 
         List<Board> scratch = repo.scratchpadPages();
-        assertEquals(2, scratch.size());
+        assertEquals(1, scratch.size());
         assertEquals(first.id, scratch.get(0).id);
         assertFalse(scratch.get(0).isBlank());
-        assertTrue(scratch.get(1).isBlank());
         assertNotNull(scratch.get(0).paper.stroke("keep"));
         assertNull(scratch.get(0).paper.stroke("move"));
 
         List<Board> pages = repo.pages(doodles);
-        assertEquals(2, pages.size());
+        assertEquals(1, pages.size());
         assertFalse(pages.get(0).isBlank());
-        assertTrue(pages.get(1).isBlank());
         assertNotNull(pages.get(0).paper.stroke("move"));
         assertEquals(0, pages.get(0).paper.lastInkedSlice());
         assertEquals(0, openScrollIndex(pages));
@@ -117,12 +110,12 @@ public class MovePageTearTest {
     @Test
     public void tearMoveNearBottomDoesNotNameTheTrailingBlankAsLastInked() {
         NotebookPaper source = NotebookPaper.empty(PAGE);
-        source.appendStroke(nearBottom("gone", 0f), "s0");
+        TestInk.appendCovering(source, nearBottom("gone", 0f), "s0");
         assertEquals("source last inked is the slice that holds the points",
                 0, source.lastInkedSlice());
 
         NotebookPaper dest = NotebookPaper.empty(PAGE);
-        dest.appendStroke(TestInk.stroke(4f, 20f, 4), "d0");
+        TestInk.appendCovering(dest, TestInk.stroke(4f, 20f, 4), "d0");
         source.tearMoveAfter(0, dest, dest.sliceCount() - 1);
 
         assertNull(source.stroke("gone"));
@@ -133,10 +126,10 @@ public class MovePageTearTest {
 
     @Test
     public void densePageMovesAtomicallyOntoDoodles() throws Exception {
-        Board blank = repo.scratchpadPages().get(0);
+        Board blank = repo.createPage(null);
         String adopted = blank.id;
         for (int i = 0; i < DENSE_STROKES; i++) {
-            blank.paper.appendStroke(denseStroke("s" + i, 20f + (i % 50), 30f + (i % 20) * 35f),
+            TestInk.appendCovering(blank.paper, denseStroke("s" + i, 20f + (i % 50), 30f + (i % 20) * 35f),
                     i == 0 ? adopted : null);
         }
         repo.saveInk(blank);
@@ -151,15 +144,11 @@ public class MovePageTearTest {
         assertTrue("dense move should finish without a main-thread stall (" + ms + " ms)",
                 ms < 5_000);
 
-        List<Board> scratch = repo.scratchpadPages();
-        assertEquals(1, scratch.size());
-        assertTrue(scratch.get(0).isBlank());
-        assertEquals(0, scratch.get(0).paper.strokes().size());
+        assertTrue(repo.scratchpadPages().isEmpty());
 
         List<Board> pages = repo.pages(doodles);
-        assertEquals(2, pages.size());
+        assertEquals(1, pages.size());
         assertFalse(pages.get(0).isBlank());
-        assertTrue(pages.get(1).isBlank());
         assertEquals(DENSE_STROKES, pages.get(0).paper.strokes().size());
         assertEquals(DENSE_STROKES, pages.get(0).paper.touching(0).size());
         assertEquals(0, pages.get(0).paper.lastInkedSlice());
@@ -173,15 +162,14 @@ public class MovePageTearTest {
 
     /** Stroke whose drawing pad crosses the next slice mark — the old lastInked trap. */
     private Board inkNearBottom(String notebookId, String strokeId) {
-        List<Board> pages = repo.pages(notebookId);
-        Board blank = pages.get(pages.size() - 1);
+        Board blank = repo.createPage(notebookId);
         assertTrue(blank.isBlank());
-        // Paper coordinates: the trailing blank starts at paperOrigin.
-        blank.paper.appendStroke(nearBottom(strokeId, blank.paperOrigin), blank.id);
+        TestInk.appendCovering(blank.paper, nearBottom(strokeId, blank.paperOrigin), blank.id);
         repo.saveInk(blank);
         List<Board> after = repo.pages(notebookId);
-        Board inked = after.get(after.size() - 2);
+        Board inked = after.get(after.size() - 1);
         assertFalse(inked.isBlank());
+        assertEquals(blank.id, inked.id);
         return inked;
     }
 

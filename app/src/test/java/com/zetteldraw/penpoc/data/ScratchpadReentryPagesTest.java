@@ -49,11 +49,14 @@ public class ScratchpadReentryPagesTest {
     @Test
     public void openScratchpadMultiPageSwitchNotebookAndBackKeepsPagesAndInk() throws Exception {
         repo.ensureSheet(null, PAGE, PAGE, 0L);
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         NotebookPaper paper = blank.paper;
-        paper.appendStroke(TestInk.stroke(10f, 20f, 8), blank.id);
-        paper.appendStroke(TestInk.stroke(10f, PAGE + 20f, 8));
-        paper.appendStroke(TestInk.stroke(10f, 2 * PAGE + 20f, 8));
+        TestInk.appendCovering(paper, TestInk.stroke(10f, 20f, 8), blank.id);
+        TestInk.appendCovering(paper, TestInk.stroke(10f, PAGE + 20f, 8));
+        TestInk.appendCovering(paper, TestInk.stroke(10f, 2 * PAGE + 20f, 8));
         assertEquals(3, paper.sliceCount());
         // A tear in the log is what v70's empty yIndex + trimTail destroyed on replay.
         paper.tearDelete(1);
@@ -71,6 +74,9 @@ public class ScratchpadReentryPagesTest {
         device.reopen();
         repo = device.repo;
         repo.ensureSheet(null, PAGE, PAGE, 0L);
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         List<Board> opened = repo.scratchpadPages();
         assertTrue("cold ensureSheet must not collapse to 1/1", opened.size() > 1);
         assertEquals(inkedBefore, inked(opened));

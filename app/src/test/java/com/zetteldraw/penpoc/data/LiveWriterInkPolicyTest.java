@@ -128,9 +128,12 @@ public class LiveWriterInkPolicyTest {
 
     private int seedDense(int inkedSlices) throws Exception {
         assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board blank = repo.scratchpadPages().get(0);
         for (int i = 0; i < inkedSlices; i++) {
-            blank.paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(blank.paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         repo.saveInk(blank);
         for (int i = 0; i < 20 && repo.pendingWrites() > 0; i++) {
@@ -166,7 +169,7 @@ public class LiveWriterInkPolicyTest {
     private static byte[] logBytes(int slices) throws Exception {
         NotebookPaper paper = NotebookPaper.empty(PAGE);
         for (int i = 0; i < slices; i++) {
-            paper.appendStroke(TestInk.stroke(10f, i * PAGE + 20f, 8));
+            TestInk.appendCovering(paper, TestInk.stroke(10f, i * PAGE + 20f, 8));
         }
         return paper.bytes();
     }

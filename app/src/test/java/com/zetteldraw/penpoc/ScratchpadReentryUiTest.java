@@ -9,6 +9,7 @@ import android.view.View;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
@@ -37,6 +38,14 @@ public class ScratchpadReentryUiTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+
+        BoardRepository _repo = ZettelData.repository(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext());
+        _repo.ensureSheet(null, 800, 800, 0L);
+        if (_repo.scratchpadPages().isEmpty()) {
+            _repo.createPage(null);
+        }
+
     }
 
     @Test
@@ -50,9 +59,9 @@ public class ScratchpadReentryUiTest {
         Board blank = repo.scratchpadPages().get(0);
         int height = blank.slicePx;
         assertTrue(height > 40);
-        blank.paper.appendStroke(TestStrokes.stroke(12f, 20f), blank.id);
-        blank.paper.appendStroke(TestStrokes.stroke(12f, height + 20f));
-        blank.paper.appendStroke(TestStrokes.stroke(12f, 2f * height + 20f));
+        TestInk.appendCovering(blank.paper, TestStrokes.stroke(12f, 20f), blank.id);
+        TestInk.appendCovering(blank.paper, TestStrokes.stroke(12f, height + 20f));
+        TestInk.appendCovering(blank.paper, TestStrokes.stroke(12f, 2f * height + 20f));
         blank.paper.tearDelete(1);
         repo.saveInk(blank);
         idle();

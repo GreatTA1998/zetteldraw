@@ -429,20 +429,14 @@ public final class NotebookPaper {
         return heights.size() + (int) ((paperY - y) / sliceHeight);
     }
 
-    /** Pen-up. One stroke, however many slices it crosses. Widths stay as measured. */
-    public void appendStroke(InkRenderer.InkStroke stroke) {
-        appendStroke(stroke, null);
-    }
-
     /**
-     * {@code adoptId} is the unsaved trailing blank's id, used for the first
-     * slice this stroke grows into so that slice keeps the id the screen already has.
+     * Pen-up. One stroke, however many slices it crosses. Widths stay as measured.
+     * Does not grow new slices — pages are created only via {@link #appendBlankPage}.
      */
-    public void appendStroke(InkRenderer.InkStroke stroke, String adoptId) {
+    public void appendStroke(InkRenderer.InkStroke stroke) {
         if (stroke == null || stroke.points.isEmpty()) {
             return;
         }
-        growTo(maxY(stroke), adoptId);
         strokes.add(stroke);
         noteStroke(stroke);
         append(record(OP_APPEND, strokePayload(stroke)));
@@ -470,33 +464,23 @@ public final class NotebookPaper {
 
     /**
      * Lasso release. One shift for every selected stroke, ids unchanged.
-     * Undo is {@code translate(ids, -dx, -dy)}.
+     * Undo is {@code translate(ids, -dx, -dy)}. Does not grow new slices.
      */
     public void translate(Collection<String> ids, float dx, float dy) {
-        translate(ids, dx, dy, null);
-    }
-
-    /**
-     * {@code adoptId} names the first slice this drag grows into, so the
-     * trailing blank the screen already shows keeps its id.
-     */
-    public void translate(Collection<String> ids, float dx, float dy, String adoptId) {
         if (ids == null || ids.isEmpty() || (dx == 0f && dy == 0f)) {
             return;
         }
         HashSet<String> want = new HashSet<>(ids);
-        float bottom = 0f;
         boolean any = false;
         for (InkRenderer.InkStroke stroke : strokes) {
             if (want.contains(stroke.id)) {
                 any = true;
-                bottom = Math.max(bottom, maxY(stroke) + dy);
+                break;
             }
         }
         if (!any) {
             return;
         }
-        growTo(bottom, adoptId);
         ArrayList<String> moved = new ArrayList<>();
         for (int i = 0; i < strokes.size(); i++) {
             InkRenderer.InkStroke stroke = strokes.get(i);
@@ -521,6 +505,23 @@ public final class NotebookPaper {
         }
     }
 
+    /**
+     * Explicit new page (Create new page). Appends one empty slice at frozen
+     * {@link #sliceHeight}; returns its id. Never used for pen-up / soft tails.
+     */
+    public String appendBlankPage() {
+        return appendBlankPage(UUID.randomUUID().toString());
+    }
+
+    /** Same as {@link #appendBlankPage()} with a caller-chosen id (tests / migrate). */
+    public String appendBlankPage(String id) {
+        if (id == null || id.isEmpty()) {
+            throw new IllegalArgumentException("slice id");
+        }
+        extend(id, sliceHeight);
+        return id;
+    }
+
     public Tear tearDelete(int slice) {
         return tear(slice, TEAR_DELETE);
     }
@@ -530,9 +531,8 @@ public final class NotebookPaper {
     }
 
     /**
-     * Same-notebook reorder must not drop a page or a stroke id. trimTail may
-     * only remove empty trailing slices that were empty before the reorder too;
-     * an inked slice id that was present before must still be present.
+     * Same-notebook reorder must not drop a page or a stroke id. Empty
+     * trailing slices are real pages (Create new page) and must stay.
      *
      * <p>Used by same-paper {@link #tearMoveInsert} (Reorder / place-before spine).
      * Not on the undo stack — history is stroke edits, not slice order.
@@ -548,9 +548,8 @@ public final class NotebookPaper {
             missing.removeAll(after);
             throw new IllegalStateException("reorder dropped strokes " + missing);
         }
-        // Empty trailing slices may trim, but never below the inked content we kept.
-        if (heights.size() > slicesBefore) {
-            throw new IllegalStateException("reorder grew slice count unexpectedly");
+        if (heights.size() != slicesBefore) {
+            throw new IllegalStateException("reorder changed slice count unexpectedly");
         }
     }
 
@@ -588,7 +587,6 @@ public final class NotebookPaper {
             noteStroke(moved);
         }
         rewriteLogFromStrokes();
-        trimTail();
         refreshLastInked();
     }
 
@@ -710,7 +708,6 @@ public final class NotebookPaper {
         if (!same) {
             closeGap(slice);
             rememberTear(slice, TEAR_DELETE, cut);
-            trimTail();
             refreshLastInked();
             return cut;
         }
@@ -724,8 +721,8 @@ public final class NotebookPaper {
             closeGap(slice);
         }
         rememberTear(slice, kind, cut);
-        // A wiped slice stays, so pages under it do not move. An empty tail does not.
-        trimTail();
+        // Wipe keeps the slice (pages under it do not move). Empty trailing
+        // slices are real Create-new-page blanks — never auto-trim.
         refreshLastInked();
         return cut;
     }
@@ -836,22 +833,6 @@ public final class NotebookPaper {
         }
     }
 
-    private void trimTail() {
-        while (!heights.isEmpty() && touching(heights.size() - 1).isEmpty()) {
-            heights.remove(heights.size() - 1);
-            sliceIds.remove(sliceIds.size() - 1);
-        }
-    }
-
-    /** Extend slices until {@code bottom} fits; first new slice may keep {@code adoptId}. */
-    private void growTo(float bottom, String adoptId) {
-        while (bottom >= origin(heights.size())) {
-            String id = adoptId != null ? adoptId : UUID.randomUUID().toString();
-            adoptId = null;
-            extend(id, sliceHeight);
-        }
-    }
-
     private void extend(String id, int height) {
         heights.add(height);
         sliceIds.add(id);
@@ -922,7 +903,6 @@ public final class NotebookPaper {
         if (kind != TEAR_WIPE) {
             closeGap(slice);
         }
-        trimTail();
     }
 
     private static List<Piece> split(InkRenderer.InkStroke stroke, float top, float bottom) {

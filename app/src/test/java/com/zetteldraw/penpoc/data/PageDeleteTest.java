@@ -1,7 +1,7 @@
 package com.zetteldraw.penpoc.data;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -58,7 +58,7 @@ public class PageDeleteTest {
         Board second = drawnScratchpadPage(a, 20f);
         relay(a, b);
         b.ensureReady();
-        assertEquals(3, b.repo.scratchpadPages().size());
+        assertEquals(2, b.repo.scratchpadPages().size());
 
         a.tick();
         String firstId = first.id;
@@ -85,26 +85,17 @@ public class PageDeleteTest {
 
         a.repo.deletePage(page.id);
         pages = a.repo.scratchpadPages();
-        assertEquals(2, pages.size());
-        assertTrue(pages.get(1).isBlank());
-
-        Board trailing = pages.get(1);
-        a.repo.deletePage(trailing.id);
-        pages = a.repo.scratchpadPages();
-        assertEquals("the trailing blank never goes away", 2, pages.size());
-        assertTrue(pages.get(1).isBlank());
+        assertEquals(1, pages.size());
+        assertFalse(pages.get(0).isBlank());
     }
 
     @Test
     public void deletingTheOnlyInkedPageLeavesOneBlankPage() {
         Board only = drawnScratchpadPage(a, 10f);
-        // Mint a fresh trailing blank so delete does not recycle the adopted id.
-        assertEquals(2, a.repo.scratchpadPages().size());
+        assertEquals(1, a.repo.scratchpadPages().size());
         a.repo.deletePage(only.id);
         List<Board> pages = a.repo.scratchpadPages();
-        assertEquals(1, pages.size());
-        assertTrue(pages.get(0).isBlank());
-        assertNotEquals(only.id, pages.get(0).id);
+        assertTrue(pages.isEmpty());
     }
 
     @Test
@@ -113,18 +104,16 @@ public class PageDeleteTest {
         BoardRepository.NotebookInfo notebook = a.repo.createNotebook("gone");
         a.ensureReady(notebook.id());
         a.repo.movePageToNotebook(page.id, notebook.id());
-        Board next = a.repo.notebookPages(notebook.id()).get(1);
+        Board next = a.repo.createPage(notebook.id());
         TestInk.draw(next, 30f);
         a.repo.saveInk(next);
         a.repo.wipePage(page.id);
-        assertEquals(3, a.repo.notebookPages(notebook.id()).size());
+        assertEquals(2, a.repo.notebookPages(notebook.id()).size());
 
         a.repo.deletePage(page.id);
         List<Board> pages = a.repo.notebookPages(notebook.id());
-        assertEquals(RoomBoardRepositoryTest.ids(next), RoomBoardRepositoryTest.ids(pages).subList(0, 1));
-        assertEquals("the notebook keeps its trailing blank", 2, pages.size());
-        assertTrue(pages.get(1).isBlank());
-        assertEquals(1, a.repo.scratchpadPages().size());
+        assertEquals(RoomBoardRepositoryTest.ids(next), RoomBoardRepositoryTest.ids(pages));
+        assertTrue(a.repo.scratchpadPages().isEmpty());
         assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(notebook.id())));
     }
 
@@ -133,7 +122,9 @@ public class PageDeleteTest {
             d.ensureReady();
         }
         List<Board> pages = d.repo.scratchpadPages();
-        Board page = pages.get(pages.size() - 1);
+        Board page = pages.isEmpty() || !pages.get(pages.size() - 1).isBlank()
+                ? d.repo.createPage(null)
+                : pages.get(pages.size() - 1);
         TestInk.draw(page, y);
         d.tick();
         d.repo.saveInk(page);

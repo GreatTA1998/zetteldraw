@@ -49,7 +49,7 @@ public class ConflictTest {
     public void setUp() throws Exception {
         device = new Device("a", tmp.newFolder("a"), 10_000_000L);
         repo = device.repo;
-        assertTrue(device.ensureReady());
+        assertTrue(device.ensureReadyWithPage(null));
     }
 
     @After
@@ -88,7 +88,7 @@ public class ConflictTest {
         assertNotNull(localBytes);
 
         NotebookPaper remotePaper = NotebookPaper.empty(PAGE);
-        remotePaper.appendStroke(TestInk.stroke(500f, 60f, 24), ready.id);
+        TestInk.appendCovering(remotePaper, TestInk.stroke(500f, 60f, 24), ready.id);
         byte[] remoteBytes = remotePaper.bytes();
         assertTrue("remote must not be shorter than local disk",
                 remoteBytes.length >= localBytes.length);
@@ -138,7 +138,7 @@ public class ConflictTest {
         String localHash = local.inkHash;
 
         NotebookPaper remotePaper = NotebookPaper.empty(PAGE);
-        remotePaper.appendStroke(TestInk.stroke(1f, 60f, 12), ready.id);
+        TestInk.appendCovering(remotePaper, TestInk.stroke(1f, 60f, 12), ready.id);
         byte[] remoteBytes = remotePaper.bytes();
         NotebookLogEntity remote = local.copy();
         remote.inkHash = InkFileStore.sha256(remoteBytes);

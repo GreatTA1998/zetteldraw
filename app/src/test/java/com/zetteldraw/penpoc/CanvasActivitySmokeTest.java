@@ -18,6 +18,7 @@ import android.widget.FrameLayout;
 import android.widget.TextView;
 
 import com.onyx.android.sdk.data.note.TouchPoint;
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.ZettelData;
 
@@ -42,6 +43,12 @@ public class CanvasActivitySmokeTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+        BoardRepository repo = ZettelData.repository(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext());
+        repo.ensureSheet(null, 800, 800, 0L);
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
     }
 
     @Test
@@ -136,15 +143,18 @@ public class CanvasActivitySmokeTest {
     }
 
     @Test
-    public void pageMenuWipesAndDeletesWithConfirmAndKeepsTheTrailingBlank() {
+    public void pageMenuWipesAndDeletesWithConfirmAndEmptySheetShowsCreate() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board first = repo.scratchpadPages().get(0);
-        first.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
+        TestInk.appendCovering(first.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
         repo.saveInk(first);
-        Board second = repo.scratchpadPages().get(1);
-        second.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, second.paperOrigin + 40f), second.id);
+        Board second = repo.createPage(null);
+        TestInk.appendCovering(second.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, second.paperOrigin + 40f), second.id);
         repo.saveInk(second);
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
@@ -152,11 +162,10 @@ public class CanvasActivitySmokeTest {
         idle();
         loadScratchpad(root);
         List<View> menus = byDescription(root, "Page options");
-        assertEquals("every page shows ⋮; trailing blank is disabled", 3, menus.size());
+        assertEquals("every Ready page shows enabled ⋮", 2, menus.size());
         assertTrue(menus.get(0).isEnabled());
         assertTrue(menus.get(1).isEnabled());
-        assertFalse("trailing blank ⋮ is visible but disabled", menus.get(2).isEnabled());
-        assertEquals(java.util.Arrays.asList("1/3", "2/3", "3/3"), pageLabels(root));
+        assertEquals(java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
         assertNull("Wipe lives in the menu now", find(root, "Wipe"));
 
         menus.get(0).performClick();
@@ -178,25 +187,20 @@ public class CanvasActivitySmokeTest {
         assertNotNull(find(root, "Delete this page?"));
         clickLast(root, "Delete");
         List<Board> pages = repo.scratchpadPages();
-        assertEquals(2, pages.size());
+        assertEquals(1, pages.size());
         assertEquals(second.id, pages.get(0).id);
-        assertTrue(pages.get(1).isBlank());
         menus = byDescription(root, "Page options");
-        assertEquals(2, menus.size());
-        assertTrue(menus.get(0).isEnabled());
-        assertFalse("trailing blank offers no Wipe or Delete", menus.get(1).isEnabled());
+        assertEquals(1, menus.size());
+        assertTrue("stored blank keeps enabled ⋮", menus.get(0).isEnabled());
 
         byDescription(root, "Page options").get(0).performClick();
         idle();
         click(root, "Delete page");
         clickLast(root, "Delete");
         pages = repo.scratchpadPages();
-        assertEquals("the inked last page goes; the blank takes its place", 1, pages.size());
-        assertTrue(pages.get(0).isBlank());
-        assertEquals("the count shrinks with the list", java.util.Arrays.asList("1/1"), pageLabels(root));
-        menus = byDescription(root, "Page options");
-        assertEquals(1, menus.size());
-        assertFalse("sole trailing blank keeps a disabled ⋮", menus.get(0).isEnabled());
+        assertTrue("empty Ready sheet is valid", pages.isEmpty());
+        assertTrue(pageLabels(root).isEmpty());
+        assertNotNull("Create new page remains", find(root, "Create new page"));
         controller.pause().stop().destroy();
     }
 
@@ -209,12 +213,16 @@ public class CanvasActivitySmokeTest {
         idle();
 
         click(root, "comedy");
-        List<View> emptyMenus = byDescription(root, "Page options");
-        assertEquals("empty notebook blank keeps a visible ⋮", 1, emptyMenus.size());
-        assertFalse("…disabled until there is something to wipe/delete", emptyMenus.get(0).isEnabled());
-        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
-        assertEquals(1, byDescription(root, "Page 1 of 1").size());
+        assertNotNull("empty notebook shows Create new page", find(root, "Create new page"));
+        assertTrue(pageLabels(root).isEmpty());
         assertNull("no empty-notebook hint any more", find(root, "No notebooks yet. Tap + to add one."));
+
+        click(root, "Create new page");
+        idle();
+        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
+        List<View> emptyMenus = byDescription(root, "Page options");
+        assertEquals(1, emptyMenus.size());
+        assertTrue("stored blank page keeps enabled ⋮", emptyMenus.get(0).isEnabled());
 
         PageInkView ink = findInk(root);
         ArrayList<TouchPoint> stroke = new ArrayList<>();
@@ -223,23 +231,21 @@ public class CanvasActivitySmokeTest {
         ink.addStroke(stroke);
         idle();
         List<Board> pages = repo.notebookPages(Notebook.COMEDY.uuid);
-        assertEquals(2, pages.size());
+        assertEquals(1, pages.size());
         assertFalse(pages.get(0).isBlank());
-        assertTrue(pages.get(1).isBlank());
         List<View> menus = byDescription(root, "Page options");
-        assertEquals("inked page + trailing blank both show ⋮", 2, menus.size());
+        assertEquals(1, menus.size());
         assertTrue(menus.get(0).isEnabled());
-        assertFalse(menus.get(1).isEnabled());
-        assertEquals("a new page updates every count", java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
+        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
 
         byDescription(root, "Page options").get(0).performClick();
         idle();
         click(root, "Delete page");
         clickLast(root, "Delete");
         pages = repo.notebookPages(Notebook.COMEDY.uuid);
-        assertEquals("the notebook keeps one blank page", 1, pages.size());
-        assertTrue(pages.get(0).isBlank());
-        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
+        assertTrue("empty Ready notebook is valid", pages.isEmpty());
+        assertTrue(pageLabels(root).isEmpty());
+        assertNotNull("Create new page remains", find(root, "Create new page"));
 
         clickDesc(root, "Scratchpad");
         assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
@@ -247,7 +253,7 @@ public class CanvasActivitySmokeTest {
     }
 
     @Test
-    public void penStrokesAndEraseUndoAndRedoAndTheTrailingBlankFollows() {
+    public void penStrokesAndEraseUndoAndRedoKeepPageCount() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
@@ -262,22 +268,22 @@ public class CanvasActivitySmokeTest {
         ink.addStroke(points(300f, 300f));
         idle();
         assertEquals(2, page.paper.strokes().size());
-        assertEquals("first ink grew a new blank page", 2, repo.scratchpadPages().size());
-        assertEquals(java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
+        assertEquals("ink does not mint a Create-new-page blank", 1, repo.scratchpadPages().size());
+        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
 
         clickDesc(root, "Undo");
         assertEquals(1, page.paper.strokes().size());
         clickDesc(root, "Undo");
         assertTrue(page.isBlank());
-        assertEquals("undoing to blank collapses the extra page", 1, repo.scratchpadPages().size());
+        assertEquals("undo to blank keeps the Ready slice", 1, repo.scratchpadPages().size());
         assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
         assertFalse(byDescription(root, "Undo").get(0).isEnabled());
 
         clickDesc(root, "Redo");
         clickDesc(root, "Redo");
         assertEquals(2, page.paper.strokes().size());
-        assertEquals("redo stores the page again and a blank follows", 2, repo.scratchpadPages().size());
-        assertEquals(java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
+        assertEquals("redo does not mint a blank either", 1, repo.scratchpadPages().size());
+        assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
         assertEquals(2, repo.scratchpadPages().get(0).paper.strokes().size());
 
         InkRenderer.InkStroke first = page.paper.strokes().get(0);
@@ -332,26 +338,24 @@ public class CanvasActivitySmokeTest {
         loadScratchpad(root);
 
         Board first = repo.scratchpadPages().get(0);
-        first.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
+        TestInk.appendCovering(first.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
         repo.saveInk(first);
-        clickDesc(root, "Scratchpad");
-        idle();
-        Board second = repo.scratchpadPages().get(1);
-        second.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, second.paperOrigin + 40f), second.id);
+        Board second = repo.createPage(null);
+        TestInk.appendCovering(second.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(40f, second.paperOrigin + 40f), second.id);
         repo.saveInk(second);
         clickDesc(root, "Scratchpad");
         idle();
 
-        assertEquals(java.util.Arrays.asList("1/3", "2/3", "3/3"), pageLabels(root));
+        assertEquals(java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
         String movedFirst = repo.scratchpadPages().get(0).id;
         clickFirstEnabled(root, "Move");
         assertNull("Move opens notebook menu", find(root, "Moving Scratchpad 1"));
         assertNull(find(root, "Reordering Scratchpad 1"));
         // Overlay menu item is last; tab bars match earlier in DFS.
         clickLast(root, "journal");
-        assertEquals(2, repo.notebookPages(Notebook.JOURNAL.uuid).size());
+        assertEquals(1, repo.notebookPages(Notebook.JOURNAL.uuid).size());
         assertEquals(movedFirst, repo.notebookPages(Notebook.JOURNAL.uuid).get(0).id);
-        assertEquals("moving a page away updates the count", java.util.Arrays.asList("1/2", "2/2"), pageLabels(root));
+        assertEquals("moving a page away updates the count", java.util.Arrays.asList("1/1"), pageLabels(root));
 
         click(root, "+");
         EditText name = findEdit(root);
@@ -370,10 +374,10 @@ public class CanvasActivitySmokeTest {
         String movedSecond = repo.scratchpadPages().get(0).id;
         clickFirstEnabled(root, "Move");
         clickLast(root, "fresh");
-        assertEquals(2, repo.notebookPages(fresh.id()).size());
+        assertEquals(1, repo.notebookPages(fresh.id()).size());
         assertEquals(movedSecond, repo.notebookPages(fresh.id()).get(0).id);
-        assertEquals(1, repo.scratchpadPages().size());
-        assertTrue(repo.scratchpadPages().get(0).isBlank());
+        assertTrue("Scratchpad may be empty after filing the last page",
+                repo.scratchpadPages().isEmpty());
 
         controller.pause().stop().destroy();
     }
@@ -383,9 +387,12 @@ public class CanvasActivitySmokeTest {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board page = repo.scratchpadPages().get(0);
-        page.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
-        page.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(500f, page.paperOrigin + 700f), page.id);
+        TestInk.appendCovering(page.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
+        TestInk.appendCovering(page.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(500f, page.paperOrigin + 700f), page.id);
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("lasso");
         assertTrue(repo.ensureSheet(notebook.id(), 800, 800, 0L));
@@ -493,8 +500,11 @@ public class CanvasActivitySmokeTest {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board page = repo.scratchpadPages().get(0);
-        page.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
+        TestInk.appendCovering(page.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("longpress-paste");
         assertTrue(repo.ensureSheet(notebook.id(), 800, 800, 0L));

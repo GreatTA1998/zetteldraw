@@ -15,6 +15,7 @@ import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
@@ -41,6 +42,14 @@ public class PageLinksTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+
+        BoardRepository _repo = ZettelData.repository(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext());
+        _repo.ensureSheet(null, 800, 800, 0L);
+        if (_repo.scratchpadPages().isEmpty()) {
+            _repo.createPage(null);
+        }
+
     }
 
     @Test
@@ -48,8 +57,11 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo dense = repo.createNotebook("dense");
+        ensureNotebookPage(repo, dense.id());
         BoardRepository.NotebookInfo otherA = repo.createNotebook("other-a");
+        ensureNotebookPage(repo, otherA.id());
         BoardRepository.NotebookInfo otherB = repo.createNotebook("other-b");
+        ensureNotebookPage(repo, otherB.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -57,10 +69,10 @@ public class PageLinksTest {
         int height = repo.pages(dense.id()).get(0).slicePx;
         assertTrue(height > 40);
         List<Board> pages = repo.pages(dense.id());
-        pages.get(0).paper.appendStroke(TestStrokes.stroke(3f, 39f * height + 10f), pages.get(0).id);
+        TestInk.appendCovering(pages.get(0).paper, TestStrokes.stroke(3f, 39f * height + 10f), pages.get(0).id);
         repo.saveInk(pages.get(0));
         openNotebook(root, "dense");
-        assertEquals(41, repo.pages(dense.id()).size());
+        assertEquals(40, repo.pages(dense.id()).size());
         // Return restores the left-behind scroll (page 1); move to the inked page so the
         // source is also the front page and the banner stays "Linking …".
         pageScroller(root).scrollTo(0, 39 * height);
@@ -71,13 +83,19 @@ public class PageLinksTest {
         // sheet, so the first press froze and the tenth did not.
         RoomBoardRepository room = (RoomBoardRepository) repo;
         room.ensureSheet(otherA.id(), height, height, 1L);
+        if (room.pages(otherA.id()).isEmpty()) {
+            room.createPage(otherA.id());
+        }
         room.ensureSheet(otherB.id(), height, height, 1L);
+        if (room.pages(otherB.id()).isEmpty()) {
+            room.createPage(otherB.id());
+        }
         ink(repo, otherA.id(), 10f);
         ink(repo, otherB.id(), 30f * height + 10f);
         room.invalidateOpenSheet(otherA.id());
         room.invalidateOpenSheet(otherB.id());
 
-        TextView control = textIn((View) find(root, "40/41").getParent(), "Link");
+        TextView control = textIn((View) find(root, "40/40").getParent(), "Link");
         assertNotNull(control);
         View slot = (View) control.getParent();
         View area = (View) pageScroller(root).getParent();
@@ -130,7 +148,9 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
+        ensureNotebookPage(repo, from.id());
         BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
+        ensureNotebookPage(repo, to.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -139,20 +159,20 @@ public class PageLinksTest {
         ink(repo, from.id(), 10f);
         ink(repo, to.id(), 10f);
         openNotebook(root, "frombook");
-        clickOnPage(root, "1/2", "Link");
+        clickOnPage(root, "1/1", "Link");
         openNotebook(root, "tobook");
         click(root, "Confirm");
         openNotebook(root, "frombook");
         relayout(root);
 
-        TextView page = find(root, "1/2");
+        TextView page = find(root, "1/1");
         assertNotNull(page);
         View slot = (View) page.getParent();
         TextView link = textIn(slot, "Link");
         TextView reorder = textIn(slot, "Reorder");
         TextView move = textIn(slot, "Move");
         TextView more = textIn(slot, "⋮");
-        TextView ref = find(root, "→ tobook 1/2");
+        TextView ref = find(root, "→ tobook 1/1");
         assertNotNull(link);
         assertNotNull("Reorder sits next to Link", reorder);
         assertNotNull(move);
@@ -202,7 +222,9 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
+        ensureNotebookPage(repo, from.id());
         BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
+        ensureNotebookPage(repo, to.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -212,7 +234,7 @@ public class PageLinksTest {
         ink(repo, to.id(), 10f);
         openNotebook(root, "frombook");
 
-        clickOnPage(root, "1/2", "Link");
+        clickOnPage(root, "1/1", "Link");
         assertNotNull(find(root, "Link"));
         assertNotNull(find(root, "Linking frombook 1"));
         TextView confirmOnSource = find(root, "Confirm");
@@ -234,14 +256,14 @@ public class PageLinksTest {
         String targetId = repo.pages(to.id()).get(0).id;
         assertEquals(1, repo.linksTouching(sourceId).size());
         assertEquals(targetId, repo.linksTouching(sourceId).get(0).targetId());
-        assertNotNull(find(root, "← frombook 1/2"));
+        assertNotNull(find(root, "← frombook 1/1"));
         relayout(root);
         assertNotNull("the arrow line is a hole in the pen reader",
-                cover(ink, find(root, "← frombook 1/2"), ink.penExcludes()));
+                cover(ink, find(root, "← frombook 1/1"), ink.penExcludes()));
 
         openNotebook(root, "frombook");
-        assertNotNull(find(root, "→ tobook 1/2"));
-        assertNull(find(root, "← tobook 1/2"));
+        assertNotNull(find(root, "→ tobook 1/1"));
+        assertNull(find(root, "← tobook 1/1"));
 
         controller.pause().stop().destroy();
     }
@@ -251,7 +273,9 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
-        repo.createNotebook("tobook");
+        ensureNotebookPage(repo, from.id());
+        BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
+        ensureNotebookPage(repo, to.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -260,7 +284,7 @@ public class PageLinksTest {
         ink(repo, from.id(), 10f);
         openNotebook(root, "frombook");
 
-        clickOnPage(root, "1/2", "Link");
+        clickOnPage(root, "1/1", "Link");
         TextView confirm = find(root, "Confirm");
         assertNotNull(confirm);
         assertFalse(confirm.isEnabled());
@@ -282,7 +306,9 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
+        ensureNotebookPage(repo, from.id());
         BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
+        ensureNotebookPage(repo, to.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -291,7 +317,7 @@ public class PageLinksTest {
         ink(repo, from.id(), 10f);
         ink(repo, to.id(), 10f);
         openNotebook(root, "frombook");
-        clickOnPage(root, "1/2", "Link");
+        clickOnPage(root, "1/1", "Link");
         openNotebook(root, "tobook");
         assertNotNull(find(root, "Confirm"));
         click(root, "Cancel");
@@ -309,7 +335,9 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
+        ensureNotebookPage(repo, from.id());
         BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
+        ensureNotebookPage(repo, to.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -318,9 +346,9 @@ public class PageLinksTest {
         int height = repo.pages(to.id()).get(0).slicePx;
         ink(repo, from.id(), 10f);
         ink(repo, to.id(), height + 10f);
-        assertEquals(3, repo.pages(to.id()).size());
+        assertEquals(2, repo.pages(to.id()).size());
         openNotebook(root, "frombook");
-        clickOnPage(root, "1/2", "Link");
+        clickOnPage(root, "1/1", "Link");
         openNotebook(root, "tobook");
         pageScroller(root).scrollTo(0, height);
         idle();
@@ -331,8 +359,8 @@ public class PageLinksTest {
         String above = repo.pages(to.id()).get(0).id;
         repo.deletePage(above);
         openNotebook(root, "frombook");
-        assertNotNull(find(root, "→ tobook 1/2"));
-        assertNull(find(root, "→ tobook 2/3"));
+        assertNotNull(find(root, "→ tobook 1/1"));
+        assertNull(find(root, "→ tobook 2/2"));
 
         controller.pause().stop().destroy();
     }
@@ -342,7 +370,9 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
+        ensureNotebookPage(repo, from.id());
         BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
+        ensureNotebookPage(repo, to.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -354,26 +384,27 @@ public class PageLinksTest {
         String targetId = repo.pages(to.id()).get(0).id;
         repo.createLink(sourceId, targetId);
         openNotebook(root, "frombook");
-        assertNotNull(find(root, "→ tobook 1/2"));
+        assertNotNull(find(root, "→ tobook 1/1"));
 
         repo.deletePage(sourceId);
         assertTrue(repo.linksTouching(targetId).isEmpty());
         openNotebook(root, "frombook");
-        assertNull(find(root, "→ tobook 1/2"));
+        assertNull(find(root, "→ tobook 1/1"));
         openNotebook(root, "tobook");
-        assertNull(find(root, "← frombook 1/2"));
+        assertNull(find(root, "← frombook 1/1"));
 
+        ensureNotebookPage(repo, from.id());
         ink(repo, from.id(), 10f);
         sourceId = repo.pages(from.id()).get(0).id;
         repo.createLink(sourceId, targetId);
         openNotebook(root, "tobook");
-        assertNotNull(find(root, "← frombook 1/2"));
+        assertNotNull(find(root, "← frombook 1/1"));
         repo.deletePage(targetId);
         assertTrue(repo.linksTouching(sourceId).isEmpty());
         openNotebook(root, "tobook");
-        assertNull(find(root, "← frombook 1/2"));
+        assertNull(find(root, "← frombook 1/1"));
         openNotebook(root, "frombook");
-        assertNull(find(root, "→ tobook 1/2"));
+        assertNull(find(root, "→ tobook 1/1"));
 
         controller.pause().stop().destroy();
     }
@@ -383,8 +414,11 @@ public class PageLinksTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
+        ensureNotebookPage(repo, shelf.id());
         BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
+        ensureNotebookPage(repo, chapter.id());
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
+        ensureNotebookPage(repo, from.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -394,11 +428,11 @@ public class PageLinksTest {
         int height = repo.pages(chapter.id()).get(0).slicePx;
         ink(repo, from.id(), 10f);
         ink(repo, chapter.id(), 2f * height + 10f);
-        assertEquals(4, repo.pages(chapter.id()).size());
+        assertEquals(3, repo.pages(chapter.id()).size());
         assertEquals(2, repo.pages(chapter.id()).get(0).paper.lastInkedSlice());
 
         openNotebook(root, "frombook");
-        clickOnPage(root, "1/2", "Link");
+        clickOnPage(root, "1/1", "Link");
         click(root, "shelf");
         openNotebook(root, "chapter");
         // Return restores the scroll left behind (page 1), not the last inked page.
@@ -416,13 +450,13 @@ public class PageLinksTest {
         click(root, "Confirm");
 
         openNotebook(root, "frombook");
-        click(root, "→ chapter 1/4");
+        click(root, "→ chapter 1/3");
         assertFalse("ancestor shelf is not underlined",
                 ((View) find(root, "shelf").getParent()).isSelected());
         assertTrue(((View) find(root, "chapter").getParent()).isSelected());
         scroller = pageScroller(root);
         assertEquals("the link opens page 1, not the last inked page", 0, scroller.getScrollY());
-        TextView first = find(root, "1/4");
+        TextView first = find(root, "1/3");
         assertNotNull(first);
         int top = offsetIn(first, scroller);
         assertTrue(top >= scroller.getScrollY() && top < scroller.getScrollY() + scroller.getHeight());
@@ -433,8 +467,15 @@ public class PageLinksTest {
     private static void ink(BoardRepository repo, String notebookId, float y) {
         List<Board> pages = repo.pages(notebookId);
         Board page = pages.get(pages.size() - 1);
-        page.paper.appendStroke(TestStrokes.stroke(4f, y), page.id);
+        TestInk.appendCovering(page.paper, TestStrokes.stroke(4f, y), page.id);
         repo.saveInk(page);
+    }
+
+    private static void ensureNotebookPage(BoardRepository repo, String notebookId) {
+        repo.ensureSheet(notebookId, 800, 800, 0L);
+        if (repo.pages(notebookId).isEmpty()) {
+            repo.createPage(notebookId);
+        }
     }
 
     private static void openNotebook(View root, String title) {

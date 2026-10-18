@@ -1600,12 +1600,10 @@ final class PageInkView extends FrameLayout {
         RectF src = Lasso.boundsOf(clipboard);
         float dx = paperX - src.centerX();
         float dy = paperY - src.centerY();
-        String adopt = adoptBlankAt(paper, src.bottom + dy, shown);
         ArrayList<InkRenderer.InkStroke> placed = new ArrayList<>(clipboard.size());
         for (InkRenderer.InkStroke stroke : clipboard) {
             InkRenderer.InkStroke copy = stroke.duplicated(dx, dy);
-            paper.appendStroke(copy, adopt);
-            adopt = null;
+            paper.appendStroke(copy);
             placed.add(copy);
         }
         RectF touched = new RectF(src);
@@ -1731,12 +1729,10 @@ final class PageInkView extends FrameLayout {
         }
         Board page = drawnOn.page(index);
         NotebookPaper paper = page.paper;
-        int slicesBefore = paper.sliceCount();
         boolean wasBlank = page.isBlank();
         ArrayList<TouchPoint> paperPoints = toPaper(points, drawnOn.scrollY);
-        String adopt = adoptBlank(paper, paperPoints, drawnOn);
         InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(paperPoints);
-        paper.appendStroke(stroke, adopt);
+        paper.appendStroke(stroke);
         history.record(InkHistory.Edit.of(InkHistory.Part.paperAdded(page, stroke)));
         historyChanged();
         // Paint into cached slice bitmaps (same as non-paper). Do not drop every
@@ -1745,7 +1741,7 @@ final class PageInkView extends FrameLayout {
         // was blank without Color CU.
         paintStrokeOntoPaperCaches(drawnOn, paper, stroke);
         notifyChanged(page);
-        if ((wasBlank || paper.sliceCount() > slicesBefore) && listener != null) {
+        if (wasBlank && listener != null) {
             listener.onPageBecameNonEmpty(page);
         }
     }
@@ -1874,8 +1870,7 @@ final class PageInkView extends FrameLayout {
         // Translate while the sprite is still up, then reseat the selection at
         // the drop point. Dropping the selection here used to force a re-lasso
         // for every reposition (Elton v75).
-        String adopt = adoptBlankAt(paper, s.bounds.bottom + dy, shown);
-        paper.translate(ids, dx, dy, adopt);
+        paper.translate(ids, dx, dy);
         RectF touchedPaper = new RectF(s.bounds);
         touchedPaper.union(s.bounds.left + dx, s.bounds.top + dy, s.bounds.right + dx, s.bounds.bottom + dy);
         invalidatePaperRegion(paper, touchedPaper);
@@ -1888,27 +1883,6 @@ final class PageInkView extends FrameLayout {
         if (listener != null) {
             listener.onLassoMoved(new Lasso.Move(s.page, Map.of(), Map.of(), dx, dy));
         }
-    }
-
-    /** The unsaved blank at the end of the stack, when this stroke grows into it. */
-    private static String adoptBlank(NotebookPaper paper, List<TouchPoint> paperPoints, InkViewport drawnOn) {
-        float bottom = 0f;
-        for (TouchPoint point : paperPoints) {
-            bottom = Math.max(bottom, point.y);
-        }
-        return adoptBlankAt(paper, bottom, drawnOn);
-    }
-
-    /**
-     * Trailing-blank id when ink bottom grows past the last saved slice.
-     * One adopt spine for pen, paste, and paper lasso commit.
-     */
-    private static String adoptBlankAt(NotebookPaper paper, float bottom, InkViewport view) {
-        if (bottom < paper.origin(paper.sliceCount()) || view.layout.size() == 0) {
-            return null;
-        }
-        Board tail = view.page(view.layout.size() - 1);
-        return tail.sliceIndex >= paper.sliceCount() ? tail.id : null;
     }
 
     private void invalidatePaper(InkViewport view, NotebookPaper paper) {

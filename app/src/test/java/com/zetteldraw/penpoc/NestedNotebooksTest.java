@@ -17,6 +17,7 @@ import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.NotebookPaper;
 import com.zetteldraw.penpoc.data.TestStrokes;
@@ -43,6 +44,14 @@ public class NestedNotebooksTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+
+        BoardRepository _repo = ZettelData.repository(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext());
+        _repo.ensureSheet(null, 800, 800, 0L);
+        if (_repo.scratchpadPages().isEmpty()) {
+            _repo.createPage(null);
+        }
+
         ApplicationProvider.getApplicationContext()
                 .getSharedPreferences("canvas", Context.MODE_PRIVATE)
                 .edit()
@@ -121,18 +130,26 @@ public class NestedNotebooksTest {
         click(root, "dating");
         idleForPaint();
         relayout(root);
+        assertNotNull(find(root, "Create new page"));
+        assertTrue(find(root, "Create new page").performClick());
+        idleForPaint();
+        relayout(root);
         assertNotNull(find(root, "1/" + repo.pages(dating.id()).size()));
-        repo.pages(dating.id()).get(0).paper.appendStroke(TestStrokes.stroke(11f, 20f));
+        TestInk.appendCovering(repo.pages(dating.id()).get(0).paper, TestStrokes.stroke(11f, 20f));
         repo.saveInk(repo.pages(dating.id()).get(0));
 
         click(root, "stacey");
+        idleForPaint();
+        relayout(root);
+        assertNotNull(find(root, "Create new page"));
+        assertTrue(find(root, "Create new page").performClick());
         idleForPaint();
         relayout(root);
         assertNotNull("Stacey pages are on screen after switch", find(root, "1/" + repo.pages(stacey.id()).size()));
         assertTrue(((View) find(root, "stacey").getParent()).isSelected());
         assertFalse("Dating must not stay underlined while Stacey is open",
                 ((View) find(root, "dating").getParent()).isSelected());
-        repo.pages(stacey.id()).get(0).paper.appendStroke(TestStrokes.stroke(99f, 20f));
+        TestInk.appendCovering(repo.pages(stacey.id()).get(0).paper, TestStrokes.stroke(99f, 20f));
         repo.saveInk(repo.pages(stacey.id()).get(0));
         assertNotEquals(NotebookPaper.sheetId(dating.id()), NotebookPaper.sheetId(stacey.id()));
 
@@ -167,7 +184,7 @@ public class NestedNotebooksTest {
         View root = activity.getWindow().getDecorView();
         idle();
         Board first = repo.scratchpadPages().get(0);
-        first.paper.appendStroke(TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
+        TestInk.appendCovering(first.paper, TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
         repo.saveInk(first);
         String sourceId = repo.scratchpadPages().get(0).id;
         clickDesc(root, "Scratchpad");
@@ -227,16 +244,16 @@ public class NestedNotebooksTest {
         idleForPaint();
 
         List<Board> pages = repo.pages(notebook.id());
-        assertEquals(4, pages.size());
+        assertEquals(3, pages.size());
         assertEquals(2, pages.get(0).paper.lastInkedSlice());
         View scroller = pageScroller(root);
         assertEquals(2 * height, scroller.getScrollY());
-        TextView third = find(root, "3/4");
+        TextView third = find(root, "3/3");
         assertNotNull(third);
         int thirdTop = offsetIn(third, scroller);
         assertTrue("page 3 is in the viewport",
                 thirdTop >= scroller.getScrollY() && thirdTop < scroller.getScrollY() + scroller.getHeight());
-        TextView firstLabel = find(root, "1/4");
+        TextView firstLabel = find(root, "1/3");
         assertTrue("page 1 sits above the viewport",
                 offsetIn(firstLabel, scroller) + firstLabel.getHeight() <= scroller.getScrollY());
 
@@ -278,7 +295,7 @@ public class NestedNotebooksTest {
         scroller = pageScroller(root);
         assertEquals("return restores the left-behind page, not last inked",
                 height, scroller.getScrollY());
-        assertNotNull(find(root, "2/4"));
+        assertNotNull(find(root, "2/3"));
 
         controller.pause().stop().destroy();
     }
@@ -323,10 +340,16 @@ public class NestedNotebooksTest {
         click(root, "resume");
         idle();
         relayout(root);
+        if (repo.pages(notebookId).isEmpty()) {
+            assertNotNull(find(root, "Create new page"));
+            assertTrue(find(root, "Create new page").performClick());
+            idle();
+            relayout(root);
+        }
         List<Board> pages = repo.pages(notebookId);
         int height = pages.get(0).slicePx;
         assertTrue(height > 40);
-        pages.get(0).paper.appendStroke(TestStrokes.stroke(12f, 2f * height + 10f));
+        TestInk.appendCovering(pages.get(0).paper, TestStrokes.stroke(12f, 2f * height + 10f), pages.get(0).id);
         repo.saveInk(pages.get(0));
         probe.pause().stop().destroy();
         app.getSharedPreferences("canvas", Context.MODE_PRIVATE)
@@ -384,7 +407,7 @@ public class NestedNotebooksTest {
     public void openingTheLastPageOfTwentyPaintsOnlyTheOnScreenSlice() {
         int height = 400;
         NotebookPaper paper = NotebookPaper.empty(height);
-        paper.appendStroke(TestStrokes.stroke(8f, 19f * height + 10f));
+        TestInk.appendCovering(paper, TestStrokes.stroke(8f, 19f * height + 10f));
         assertEquals(19, paper.lastInkedSlice());
         assertEquals(20, paper.sliceCount());
 

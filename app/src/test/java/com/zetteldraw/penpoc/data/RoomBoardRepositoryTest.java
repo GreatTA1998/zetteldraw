@@ -66,28 +66,27 @@ public class RoomBoardRepositoryTest {
     @Test
     public void pagesEmptyUntilReady() {
         assertTrue("Ready-only: no fallthrough to BoardEntity rows", repo.scratchpadPages().isEmpty());
-        assertTrue(device.ensureReady());
-        List<Board> pages = repo.scratchpadPages();
-        assertEquals(1, pages.size());
-        assertTrue(pages.get(0).isBlank());
-        assertNotNull(pages.get(0).paper);
+        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        assertTrue("Ready empty sheet has no soft trailing blank", repo.scratchpadPages().isEmpty());
     }
 
     @Test
-    public void scratchpadStartsWithOneUnsavedBlankPage() {
-        device.ensureReady();
-        List<Board> pages = repo.scratchpadPages();
-        assertEquals(1, pages.size());
-        assertTrue(pages.get(0).isBlank());
-        assertNull(device.db.dao().board(pages.get(0).id));
-        repo.saveInk(pages.get(0));
-        assertNull("blank pages are not stored as board rows", device.db.dao().board(pages.get(0).id));
+    public void createPageAddsRealBlankSlice() {
+        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.scratchpadPages().isEmpty());
+        Board page = repo.createPage(null);
+        assertNotNull(page);
+        assertTrue(page.isBlank());
+        assertNotNull(page.paper);
+        assertEquals(1, repo.scratchpadPages().size());
+        assertSame(page, repo.scratchpadPages().get(0));
+        assertNull("blank pages are not BoardEntity rows", device.db.dao().board(page.id));
     }
 
     @Test
-    public void firstStrokeFlushesLogAndNextBlankAppears() {
-        device.ensureReady();
-        Board page = repo.scratchpadPages().get(0);
+    public void firstStrokeFlushesLogWithoutMintingSoftBlank() {
+        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        Board page = repo.createPage(null);
         TestInk.draw(page, 10f);
         repo.saveInk(page);
         String sheetId = NotebookPaper.sheetId(null);
@@ -96,38 +95,31 @@ public class RoomBoardRepositoryTest {
         assertNotNull(log);
         assertNotNull(log.inkHash);
         assertNotNull(device.db.dao().outbox(OutboxEntry.LOG, sheetId));
-        assertEquals(2, repo.scratchpadPages().size());
-        Board blank = repo.scratchpadPages().get(1);
-        assertTrue(blank.isBlank());
-        assertSame("the same blank until it gets ink", blank, repo.scratchpadPages().get(1));
-        assertSame("same id, same object", page, repo.scratchpadPages().get(0));
+        assertEquals(1, repo.scratchpadPages().size());
+        assertSame(page, repo.scratchpadPages().get(0));
+        assertFalse(page.isBlank());
     }
 
     @Test
-    public void sheetFirstStrokeAdoptsBlankIdAndMintsAFreshTrailingBlank() {
-        device.ensureReady();
-        Board blank = repo.scratchpadPages().get(0);
+    public void createPageThenInkKeepsSameSliceId() {
+        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        Board blank = repo.createPage(null);
         assertTrue(blank.isBlank());
-        assertNotNull(blank.paper);
-        String adopted = blank.id;
-        blank.paper.appendStroke(TestInk.stroke(10f, 20f, 8), adopted);
+        String id = blank.id;
+        TestInk.draw(blank, 10f);
         repo.saveInk(blank);
 
         List<Board> pages = repo.scratchpadPages();
-        assertEquals(2, pages.size());
-        assertEquals(adopted, pages.get(0).id);
-        assertSame("the adopted blank stays as slice 0", blank, pages.get(0));
+        assertEquals(1, pages.size());
+        assertEquals(id, pages.get(0).id);
+        assertSame(blank, pages.get(0));
         assertFalse(pages.get(0).isBlank());
-        assertTrue(pages.get(1).isBlank());
-        assertFalse("a new blank id follows; the adopted one must not appear twice",
-                adopted.equals(pages.get(1).id));
-        assertSame(pages.get(1), repo.scratchpadPages().get(1));
     }
 
     @Test
     public void saveWithoutChangesDoesNotRequeueLog() {
         device.ensureReady();
-        Board page = repo.scratchpadPages().get(0);
+        Board page = repo.createPage(null);
         TestInk.draw(page, 10f);
         repo.saveInk(page);
         String sheetId = NotebookPaper.sheetId(null);
@@ -142,7 +134,7 @@ public class RoomBoardRepositoryTest {
     @Test
     public void lassoTranslatePersistsOnLogAndSurvivesReopen() {
         device.ensureReady();
-        Board page = repo.scratchpadPages().get(0);
+        Board page = repo.createPage(null);
         TestInk.draw(page, 10f);
         TestInk.draw(page, 200f);
         repo.saveInk(page);
@@ -183,49 +175,45 @@ public class RoomBoardRepositoryTest {
 
         repo.movePageToNotebook(b.id, comedy);
         repo.movePageToNotebook(a.id, comedy);
-        assertEquals(ids(b, a), ids(stored(repo.notebookPages(comedy))));
+        assertEquals(ids(b, a), ids(repo.notebookPages(comedy)));
         List<Board> scratch = repo.scratchpadPages();
+        assertEquals(1, scratch.size());
         assertEquals(c.id, scratch.get(0).id);
-        assertTrue(scratch.get(scratch.size() - 1).isBlank());
 
         repo.movePageToNotebook(b.id, comedy);
-        assertEquals("moving again makes it newest", ids(a, b), ids(stored(repo.notebookPages(comedy))));
+        assertEquals("moving again makes it newest", ids(a, b), ids(repo.notebookPages(comedy)));
 
         repo.movePageToNotebook(c.id, Notebook.JOURNAL.uuid);
-        assertEquals(ids(c), ids(stored(repo.notebookPages(Notebook.JOURNAL.uuid))));
-        assertEquals(1, repo.scratchpadPages().size());
-        assertTrue(repo.scratchpadPages().get(0).isBlank());
+        assertEquals(ids(c), ids(repo.notebookPages(Notebook.JOURNAL.uuid)));
+        assertTrue(repo.scratchpadPages().isEmpty());
     }
 
     @Test
-    public void wipeClearsOnePageAndKeepsOneTrailingBlank() {
+    public void wipeClearsInkAndTrimTailDropsEmptyTrailingSlices() {
         device.ensureReady();
         Board a = inkedScratchpadPage(10f);
         Board b = inkedScratchpadPage(20f);
-        assertEquals(3, repo.scratchpadPages().size());
+        assertEquals(2, repo.scratchpadPages().size());
 
         repo.wipePage(a.id);
         assertTrue(a.isBlank());
-        assertEquals("a wiped middle page stays", 3, repo.scratchpadPages().size());
+        assertEquals("a wiped middle page stays", 2, repo.scratchpadPages().size());
         assertTrue(device.inkDir().toPath().resolve(NotebookPaper.sheetId(null) + ".zdl").toFile().exists());
 
         repo.wipePage(b.id);
         List<Board> pages = repo.scratchpadPages();
-        // Both inked slices wiped: paper keeps the first blank slice + trailing blank collapses.
-        assertTrue(pages.get(pages.size() - 1).isBlank());
-        assertTrue("only blank content remains", stored(pages).stream().allMatch(Board::isBlank)
-                || stored(pages).isEmpty()
-                || pages.stream().allMatch(Board::isBlank));
+        // trimTail drops empty trailing slices; middle blank may remain or all go.
+        assertTrue("only blank content remains", pages.stream().allMatch(Board::isBlank));
     }
 
     @Test
-    public void notebookGrowsAPageAfterDrawingOnItsLastBlank() {
+    public void notebookCreatePageThenInk() {
         BoardRepository.NotebookInfo notebook = repo.createNotebook("grows");
         assertTrue("pages() empty until ensure", repo.pages(notebook.id()).isEmpty());
-        assertTrue(device.ensureReady(notebook.id()));
-        List<Board> pages = repo.pages(notebook.id());
-        assertEquals("an empty notebook shows one blank page", 1, pages.size());
-        Board first = pages.get(0);
+        assertTrue(repo.ensureSheet(notebook.id(), Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.pages(notebook.id()).isEmpty());
+        Board first = repo.createPage(notebook.id());
+        assertNotNull(first);
         assertTrue(first.isBlank());
 
         TestInk.draw(first, 10f);
@@ -234,32 +222,30 @@ public class RoomBoardRepositoryTest {
         String sheetId = NotebookPaper.sheetId(notebook.id());
         assertNotNull(device.db.dao().notebookLog(sheetId));
         assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.LOG, sheetId).op);
-        pages = repo.pages(notebook.id());
-        assertEquals(2, pages.size());
+        List<Board> pages = repo.pages(notebook.id());
+        assertEquals(1, pages.size());
         assertSame(first, pages.get(0));
-        assertTrue(pages.get(1).isBlank());
-        assertTrue(device.ensureReady());
-        assertEquals("the Scratchpad is untouched", 1, repo.scratchpadPages().size());
+        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        assertTrue("the Scratchpad is untouched", repo.scratchpadPages().isEmpty());
 
-        Board second = pages.get(1);
+        Board second = repo.createPage(notebook.id());
         TestInk.draw(second, 20f);
         device.tick();
         repo.saveInk(second);
-        assertEquals(ids(first, second), ids(stored(repo.pages(notebook.id()))));
-        assertEquals(3, repo.pages(notebook.id()).size());
+        assertEquals(ids(first, second), ids(repo.pages(notebook.id())));
+        assertEquals(2, repo.pages(notebook.id()).size());
 
         device.reopen();
         assertTrue(device.ensureReady(notebook.id()));
         List<Board> reopened = device.repo.pages(notebook.id());
-        assertEquals(ids(first, second), ids(stored(reopened)));
-        assertTrue(reopened.get(2).isBlank());
+        assertEquals(ids(first, second), ids(reopened));
     }
 
     @Test
     public void deletedOrUnknownNotebookHasNoPages() {
         BoardRepository.NotebookInfo notebook = repo.createNotebook("brief");
-        assertTrue(device.ensureReady(notebook.id()));
-        assertEquals(1, repo.pages(notebook.id()).size());
+        assertTrue(repo.ensureSheet(notebook.id(), Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.pages(notebook.id()).isEmpty());
         repo.deleteNotebook(notebook.id());
         assertTrue(repo.pages(notebook.id()).isEmpty());
         assertTrue(repo.pages("no-such-notebook").isEmpty());
@@ -271,12 +257,11 @@ public class RoomBoardRepositoryTest {
         device.ensureReady(Notebook.COMEDY.uuid);
         Board a = inkedScratchpadPage(10f);
         repo.movePageToNotebook(a.id, Notebook.COMEDY.uuid);
-        assertEquals(ids(a), ids(stored(repo.notebookPages(Notebook.COMEDY.uuid))));
+        assertEquals(ids(a), ids(repo.notebookPages(Notebook.COMEDY.uuid)));
         repo.wipePage(a.id);
-        // Ready paper trimTail drops a wiped last slice; trailing blank remains.
+        // Ready paper trimTail drops a wiped last empty slice.
         List<Board> comedy = repo.notebookPages(Notebook.COMEDY.uuid);
-        assertEquals(1, comedy.size());
-        assertTrue(comedy.get(0).isBlank());
+        assertTrue(comedy.isEmpty() || comedy.stream().allMatch(Board::isBlank));
     }
 
     @Test
@@ -303,7 +288,7 @@ public class RoomBoardRepositoryTest {
         assertEquals(ids(a, b), ids(after).subList(0, 2));
         TestInk.assertSameInk(aInk, TestInk.strokesOf(after.get(0)));
         TestInk.assertSameInk(bInk, TestInk.strokesOf(after.get(1)));
-        assertEquals(ids(c), ids(stored(reopened.notebookPages(Notebook.ACTIONS_LIFE.uuid))));
+        assertEquals(ids(c), ids(reopened.notebookPages(Notebook.ACTIONS_LIFE.uuid)));
         TestInk.assertSameInk(cInk,
                 TestInk.strokesOf(reopened.notebookPages(Notebook.ACTIONS_LIFE.uuid).get(0)));
     }
@@ -325,7 +310,9 @@ public class RoomBoardRepositoryTest {
             device.ensureReady();
         }
         List<Board> pages = repo.scratchpadPages();
-        Board page = pages.get(pages.size() - 1);
+        Board page = pages.isEmpty() || !pages.get(pages.size() - 1).isBlank()
+                ? repo.createPage(null)
+                : pages.get(pages.size() - 1);
         TestInk.draw(page, x);
         device.tick();
         repo.saveInk(page);
@@ -338,15 +325,6 @@ public class RoomBoardRepositoryTest {
             ids.add(b.id);
         }
         return ids;
-    }
-
-    /** The list without its unsaved trailing blank page. */
-    static List<Board> stored(List<Board> pages) {
-        List<Board> copy = new ArrayList<>(pages);
-        if (!copy.isEmpty() && copy.get(copy.size() - 1).isBlank()) {
-            copy.remove(copy.size() - 1);
-        }
-        return copy;
     }
 
     static List<String> ids(List<Board> boards) {

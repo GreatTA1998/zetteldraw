@@ -106,7 +106,10 @@ public class LegacyMigrationTest {
         device.repo.setLegacyFilesDir(filesDir);
         assertEquals(-1, LegacyBoardImporter.importIfPresent(
                 filesDir, device.repo, Device.PAGE, Device.PAGE, 0L));
-        assertTrue(device.ensureReady());
+        assertTrue(device.ensureReadyWithPage(null));
+        if (device.repo.scratchpadPages().isEmpty()) {
+            device.repo.createPage(null);
+        }
         assertEquals(s1, device.repo.scratchpadPages().get(0).id);
         assertPoints(device.repo.scratchpadPages().get(0), 3);
     }

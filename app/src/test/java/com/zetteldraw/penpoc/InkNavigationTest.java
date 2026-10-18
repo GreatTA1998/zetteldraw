@@ -66,6 +66,11 @@ public class InkNavigationTest {
         context = ApplicationProvider.getApplicationContext();
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+        BoardRepository repo = ZettelData.repository(context);
+        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            assertNotNull(repo.createPage(null));
+        }
     }
 
     @Test
@@ -194,12 +199,18 @@ public class InkNavigationTest {
 
         assertEquals("the stroke belongs to the Scratchpad page it was drawn on", 1, scratch.paper.strokes().size());
         assertEquals(140f, scratch.paper.strokes().get(0).points.get(0).y, 0f);
-        assertEquals("and was saved there", 2, repo.scratchpadPages().size());
+        assertEquals("ink does not mint a Create-new-page blank", 1, repo.scratchpadPages().size());
         List<Board> comedyPages = repo.notebookPages(Notebook.COMEDY.uuid);
-        assertEquals(1, comedyPages.size());
-        assertTrue("nothing leaked into the notebook", comedyPages.get(0).isBlank());
+        assertTrue("empty notebook stays empty until Create new page", comedyPages.isEmpty());
 
-        ink.addStroke(points(120f, 140f));
+        // Seed an inkable comedy page (Create new page), then stroke there.
+        assertNotNull(findText(root, "Create new page"));
+        assertTrue(findText(root, "Create new page").performClick());
+        idle();
+        comedyPages = repo.notebookPages(Notebook.COMEDY.uuid);
+        assertEquals(1, comedyPages.size());
+        PageInkView comedyInk = findInk(root);
+        comedyInk.addStroke(points(120f, 140f));
         idle();
         assertEquals("new strokes go to the notebook now shown", 1,
                 repo.notebookPages(Notebook.COMEDY.uuid).get(0).paper.strokes().size());
@@ -219,6 +230,9 @@ public class InkNavigationTest {
         try {
             disk.release();
             assertTrue(repo.ensureSheet(null, 1000, 1000, 0L));
+            if (repo.scratchpadPages().isEmpty()) {
+                repo.createPage(null);
+            }
             Board first = repo.scratchpadPages().get(0);
             assertNotNull(first.paper);
             PageInkView ink = new PageInkView(context);
@@ -302,10 +316,11 @@ public class InkNavigationTest {
 
     private static void seed(BoardRepository repo, String notebookId) {
         assertTrue(repo.ensureSheet(notebookId, 800, 800, 0L));
-        Board blank = repo.notebookPages(notebookId).get(0);
+        Board blank = repo.createPage(notebookId);
         // One flush grows 40 inked slices (was 40×60 BoardEntity saves before Ready-only).
         for (int p = 0; p < 40; p++) {
-            blank.paper.appendStroke(
+            com.zetteldraw.penpoc.data.TestInk.appendCovering(
+                    blank.paper,
                     com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, p * 800f + 20f),
                     p == 0 ? blank.id : null);
         }

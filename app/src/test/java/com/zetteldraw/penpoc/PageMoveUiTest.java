@@ -14,6 +14,7 @@ import android.widget.TextView;
 
 import androidx.test.core.app.ApplicationProvider;
 
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
 import com.zetteldraw.penpoc.data.ZettelData;
@@ -42,6 +43,14 @@ public class PageMoveUiTest {
     public void freshRepository() {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
+
+        BoardRepository _repo = ZettelData.repository(
+                androidx.test.core.app.ApplicationProvider.getApplicationContext());
+        _repo.ensureSheet(null, 800, 800, 0L);
+        if (_repo.scratchpadPages().isEmpty()) {
+            _repo.createPage(null);
+        }
+
     }
 
     @Test
@@ -49,6 +58,7 @@ public class PageMoveUiTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
+        ensureNotebookPage(repo, book.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -60,7 +70,7 @@ public class PageMoveUiTest {
         ink(repo, book.id(), 3f * height + 10f);
         openNotebook(root, "book");
         List<Board> before = repo.pages(book.id());
-        assertEquals(5, before.size());
+        assertEquals(4, before.size());
         String id1 = before.get(0).id;
         String id2 = before.get(1).id;
         String id3 = before.get(2).id;
@@ -70,7 +80,7 @@ public class PageMoveUiTest {
         scroller.scrollTo(0, 2 * height);
         idle();
         relayout(root);
-        clickOnPage(root, "3/5", "Reorder");
+        clickOnPage(root, "3/4", "Reorder");
         assertNotNull(find(root, "Reordering book 3"));
         TextView confirmOnSource = find(root, "Confirm");
         assertNotNull("confirm stays visible on the source page", confirmOnSource);
@@ -92,7 +102,7 @@ public class PageMoveUiTest {
         assertEquals(id3, after.get(1).id);
         assertEquals(id2, after.get(2).id);
         assertEquals(id4, after.get(3).id);
-        assertTrue(after.get(4).isBlank());
+        assertEquals(4, after.size());
         assertNull(find(root, "Reordering book 3"));
         assertNull(find(root, "Confirm"));
 
@@ -104,6 +114,7 @@ public class PageMoveUiTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
+        ensureNotebookPage(repo, book.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -119,7 +130,7 @@ public class PageMoveUiTest {
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
-        clickOnPage(root, "1/3", "Reorder");
+        clickOnPage(root, "1/2", "Reorder");
         assertNotNull(find(root, "Reordering book 1"));
         TextView confirm = find(root, "Confirm");
         assertNotNull(confirm);
@@ -137,6 +148,7 @@ public class PageMoveUiTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
+        ensureNotebookPage(repo, book.id());
         BoardRepository.NotebookInfo other = repo.createNotebook("other");
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
@@ -146,18 +158,18 @@ public class PageMoveUiTest {
         openNotebook(root, "book");
         String source = repo.pages(book.id()).get(0).id;
 
-        clickOnPage(root, "1/2", "Move");
+        clickOnPage(root, "1/1", "Move");
         assertNull("Move is menu, not snackbar", find(root, "Reordering book 1"));
         assertNull(find(root, "Moving book 1"));
         // Menu row is the last "other" (tab bar match is earlier).
         assertTrue(last(root, "other").performClick());
         idleForPaint();
 
-        assertEquals(1, repo.pages(book.id()).size());
-        assertTrue(repo.pages(book.id()).get(0).isBlank());
+        assertTrue("source notebook may be empty after filing its only page",
+                repo.pages(book.id()).isEmpty());
         List<Board> dest = repo.pages(other.id());
         assertEquals(source, dest.get(0).id);
-        assertTrue(dest.get(dest.size() - 1).isBlank());
+        assertEquals(1, dest.size());
 
         controller.pause().stop().destroy();
     }
@@ -171,9 +183,13 @@ public class PageMoveUiTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
+        ensureNotebookPage(repo, book.id());
         BoardRepository.NotebookInfo top = repo.createNotebook("top-level");
         // Install once so the dest is log-backed, then drop Ready (Scratchpad-only session).
         repo.ensureSheet(top.id(), 800, 800, 0L);
+        if (repo.pages(top.id()).isEmpty()) {
+            repo.createPage(top.id());
+        }
         ((com.zetteldraw.penpoc.data.RoomBoardRepository) repo).invalidateOpenSheet(top.id());
         assertTrue(repo.pages(top.id()).isEmpty());
 
@@ -184,15 +200,16 @@ public class PageMoveUiTest {
         openNotebook(root, "book");
         String source = repo.pages(book.id()).get(0).id;
 
-        clickOnPage(root, "1/2", "Move");
+        clickOnPage(root, "1/1", "Move");
         assertTrue(last(root, "top-level").performClick());
         idleForPaint();
 
         assertTrue("source must leave book",
                 repo.pages(book.id()).stream().noneMatch(b -> source.equals(b.id)));
         List<Board> dest = repo.pages(top.id());
-        assertEquals(source, dest.get(0).id);
-        assertTrue(dest.get(dest.size() - 1).isBlank());
+        assertTrue("moved page is in dest",
+                dest.stream().anyMatch(b -> source.equals(b.id)));
+        assertTrue(dest.size() >= 1);
 
         controller.pause().stop().destroy();
     }
@@ -202,6 +219,7 @@ public class PageMoveUiTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("book");
+        ensureNotebookPage(repo, book.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
@@ -215,7 +233,7 @@ public class PageMoveUiTest {
         scroller.scrollTo(0, 0);
         idle();
         relayout(root);
-        clickOnPage(root, "1/2", "Reorder");
+        clickOnPage(root, "1/1", "Reorder");
         relayout(root);
         assertEquals("bottom strip must not shrink the drawing area", areaBefore, area.getHeight());
         TextView banner = find(root, "Reordering book 1");
@@ -236,8 +254,15 @@ public class PageMoveUiTest {
     private static void ink(BoardRepository repo, String notebookId, float y) {
         List<Board> pages = repo.pages(notebookId);
         Board page = pages.get(pages.size() - 1);
-        page.paper.appendStroke(TestStrokes.stroke(4f, y), page.id);
+        TestInk.appendCovering(page.paper, TestStrokes.stroke(4f, y), page.id);
         repo.saveInk(page);
+    }
+
+    private static void ensureNotebookPage(BoardRepository repo, String notebookId) {
+        repo.ensureSheet(notebookId, 800, 800, 0L);
+        if (repo.pages(notebookId).isEmpty()) {
+            repo.createPage(notebookId);
+        }
     }
 
     private static void openNotebook(View root, String title) {

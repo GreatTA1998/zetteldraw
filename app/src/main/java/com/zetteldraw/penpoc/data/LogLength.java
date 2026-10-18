@@ -8,8 +8,8 @@ package com.zetteldraw.penpoc.data;
  * prefs, and not a "trusted" UI snapshot. Sync may lengthen a log; it may never
  * shorten one except via an explicit local tear/delete that rewrote the file.
  *
- * <p>UI trailing blank is projection only ({@code pages = slices} or
- * {@code slices + 1}) and must not feed this policy.
+ * <p>UI pages are Ready slices only ({@code pages = sliceCount}); soft tails
+ * must not feed this policy.
  */
 public final class LogLength {
     private LogLength() {

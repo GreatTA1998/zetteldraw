@@ -112,6 +112,9 @@ public class BoardEntityInkRetireTest {
         assertEquals(OutboxEntry.UPSERT, out.op);
         assertTrue(new File(inkDir, page.id + ".zdi").exists());
         assertTrue(device.ensureReady());
+        if (device.repo.scratchpadPages().isEmpty()) {
+            device.repo.createPage(null);
+        }
         assertTrue(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
         repo.deletePage(page.id);
         assertFalse(RoomBoardRepositoryTest.ids(repo.scratchpadPages()).contains(page.id));
@@ -119,7 +122,10 @@ public class BoardEntityInkRetireTest {
 
     @Test
     public void logBackedNotebookIgnoresRemoteBoardInk() throws Exception {
-        assertTrue(device.ensureReady());
+        assertTrue(device.ensureReadyWithPage(null));
+        if (device.repo.scratchpadPages().isEmpty()) {
+            device.repo.createPage(null);
+        }
         Board ready = repo.scratchpadPages().get(0);
         TestInk.draw(ready, 20f);
         repo.saveInk(ready);

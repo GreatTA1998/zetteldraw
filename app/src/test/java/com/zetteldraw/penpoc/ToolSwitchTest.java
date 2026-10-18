@@ -23,6 +23,7 @@ import androidx.test.core.app.ApplicationProvider;
 import com.onyx.android.sdk.data.note.TouchPoint;
 import com.onyx.android.sdk.pen.TouchHelper;
 import com.onyx.android.sdk.pen.data.TouchPointList;
+import com.zetteldraw.penpoc.data.TestInk;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.TestStrokes;
 import com.zetteldraw.penpoc.data.ZettelData;
@@ -500,8 +501,11 @@ public class ToolSwitchTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        if (repo.scratchpadPages().isEmpty()) {
+            repo.createPage(null);
+        }
         Board page = repo.scratchpadPages().get(0);
-        page.paper.appendStroke(TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
+        TestInk.appendCovering(page.paper, TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("stay-lasso");
         assertTrue(repo.ensureSheet(notebook.id(), 800, 800, 0L));
