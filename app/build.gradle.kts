@@ -81,6 +81,10 @@ android {
             isIncludeAndroidResources = true
             all {
                 it.systemProperty("zd.repoRoot", rootProject.projectDir.absolutePath)
+                // Forwarded for DenseZdlFixtureWriter (emulator crash harness seed).
+                System.getProperty("zd.dense.slices")?.let { v -> it.systemProperty("zd.dense.slices", v) }
+                System.getProperty("zd.dense.strokes")?.let { v -> it.systemProperty("zd.dense.strokes", v) }
+                System.getProperty("zd.dense.out")?.let { v -> it.systemProperty("zd.dense.out", v) }
             }
         }
     }
