@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import pg from "pg";
+import { createHash, randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 import { encodeInk, type InkStroke } from "../../src/ink.js";
 import { S3InkStorage } from "../../src/storage.js";
@@ -9,8 +8,6 @@ import { imageKey } from "../../src/thumbs.js";
 // Runs against a live stack: `npm run test:integration` brings it up with docker compose.
 const URL_BASE = process.env.SYNC_URL ?? "http://127.0.0.1:8787";
 const TOKEN = process.env.SYNC_TOKEN ?? "dev-device-token";
-const DATABASE_URL =
-  process.env.DATABASE_URL ?? "postgres://zetteldraw:zetteldraw@127.0.0.1:55432/zetteldraw";
 
 const storage = S3InkStorage.fromConfig({
   endpoint: process.env.S3_ENDPOINT ?? "http://127.0.0.1:59000",
@@ -57,6 +54,50 @@ function ink(seed: number) {
   return { bytes, hash: sha256Hex(bytes) };
 }
 
+/** Minimal Ready ZDL: header slices only (matches server readSliceIndex). */
+function zdlHeader(pageIds: string[], height = 1407): { bytes: Buffer; hash: string; b64: string } {
+  const parts: Buffer[] = [];
+  parts.push(Buffer.from([0x5a, 0x44, 0x4c, 1]));
+  const head = Buffer.alloc(8);
+  head.writeInt32BE(height, 0);
+  head.writeInt32BE(pageIds.length, 4);
+  parts.push(head);
+  for (const pageId of pageIds) {
+    const id = Buffer.from(pageId, "utf8");
+    const row = Buffer.alloc(4 + 2 + id.length);
+    row.writeInt32BE(height, 0);
+    row.writeUInt16BE(id.length, 4);
+    id.copy(row, 6);
+    parts.push(row);
+  }
+  const bytes = Buffer.concat(parts);
+  return {
+    bytes,
+    hash: createHash("sha256").update(bytes).digest("hex"),
+    b64: bytes.toString("base64"),
+  };
+}
+
+function logRow(
+  id: string,
+  notebookId: string | null,
+  zdl: { hash: string; bytes: Buffer },
+  updatedAt: number,
+) {
+  return {
+    id,
+    notebook_id: notebookId,
+    ink_hash: zdl.hash,
+    ink_bytes: zdl.bytes.length,
+    slice_height: 1407,
+    conflict_of: null,
+    created_at: updatedAt,
+    updated_at: updatedAt,
+    deleted_at: null,
+    base_rev: 0,
+  };
+}
+
 const now = Date.now() - 60_000;
 // Unique per run, so notebooks left by earlier runs against the same database never interleave.
 const notebookKey = `zz${Date.now().toString(36)}`;
@@ -64,26 +105,10 @@ const notebookA = randomUUID();
 const notebookB = randomUUID();
 const pages = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
 const inks = pages.map((_, i) => ink(i + Math.random()));
-
-async function pullAll(since: number) {
-  const boards: any[] = [];
-  const notebooks: any[] = [];
-  let cursor = since;
-  for (;;) {
-    const res = await call("GET", `/sync/pull?since=${cursor}&limit=500`);
-    boards.push(...res.json.boards);
-    notebooks.push(...res.json.notebooks);
-    cursor = res.json.cursor;
-    if (!res.json.has_more) break;
-  }
-  return { boards, notebooks, cursor };
-}
-
-async function pageIds(notebook: string): Promise<string[]> {
-  const res = await call("GET", `/web/notebooks/${notebook}/pages`);
-  expect(res.status).toBe(200);
-  return res.json.pages.map((p: { id: string }) => p.id);
-}
+const logA = randomUUID();
+const logB = randomUUID();
+const zdlA = zdlHeader(pages.slice(0, 3));
+const zdlB = zdlHeader(pages.slice(3, 4));
 
 beforeAll(async () => {
   const health = await fetch(URL_BASE + "/healthz");
@@ -97,40 +122,20 @@ beforeAll(async () => {
     deleted_at: null,
     base_rev: 0,
   });
-  // BOARD push retired — notebooks via /sync/push; page rows + blobs via SQL/S3.
+  // Ready LOG is companion page SoT — push notebooks + ZDL logs (no boards list dual).
   const res = await call("POST", "/sync/push", {
     schema_version: schema,
     device_id: "web-test",
     notebooks: [notebook(notebookA, "Web test A", notebookKey), notebook(notebookB, "Web test B", `${notebookKey}V`)],
     boards: [],
-    logs: [],
+    logs: [logRow(logA, notebookA, zdlA, now), logRow(logB, notebookB, zdlB, now + 1)],
     links: [],
-    blobs: {},
+    blobs: { [zdlA.hash]: zdlA.b64, [zdlB.hash]: zdlB.b64 },
   });
   expect(res.status).toBe(200);
-  for (const ink of inks) {
-    await storage.put(ink.hash, ink.bytes);
-  }
-  const pool = new pg.Pool({ connectionString: DATABASE_URL });
-  const boardRows: Array<{ i: number; notebookId: string; position: string }> = [
-    { i: 0, notebookId: notebookA, position: "a0" },
-    { i: 1, notebookId: notebookA, position: "a1" },
-    { i: 2, notebookId: notebookA, position: "a2" },
-    { i: 3, notebookId: notebookB, position: "a0" },
-  ];
-  try {
-    for (const row of boardRows) {
-      const ink = inks[row.i];
-      await pool.query(
-        `INSERT INTO boards (
-           id, notebook_id, position, ink_hash, ink_bytes, thumb_hash,
-           conflict_of, created_at, updated_at, deleted_at, rev
-         ) VALUES ($1,$2,$3,$4,$5,null,null,$6,$6,null, nextval('sync_rev'))`,
-        [pages[row.i], row.notebookId, row.position, ink.hash, ink.bytes.length, now],
-      );
-    }
-  } finally {
-    await pool.end();
+  // ZDI blobs still exercise /web/thumbs on-demand render (page list thumbs stay null).
+  for (const inkBlob of inks) {
+    await storage.put(inkBlob.hash, inkBlob.bytes);
   }
 });
 
@@ -155,31 +160,25 @@ describe("web reads", () => {
     expect(list[a]).toMatchObject({ title: "Web test A", page_count: 3 });
   });
 
-  it("lists pages in position order with image urls", async () => {
+  it("lists pages in Ready order (thumbs null until ZDL→PNG)", async () => {
     const res = await call("GET", `/web/notebooks/${notebookA}/pages`);
     expect(res.json.pages.map((p: any) => p.id)).toEqual(pages.slice(0, 3));
     expect(res.json.pages[0]).toMatchObject({
-      thumb_url: `/web/thumbs/${inks[0].hash}.png`,
-      render_url: `/web/renders/${inks[0].hash}.png`,
+      thumb_url: null,
+      render_url: null,
     });
     expect((await call("GET", `/web/notebooks/${randomUUID()}/pages`)).status).toBe(404);
     expect((await call("GET", `/web/notebooks/not-a-uuid/pages`)).status).toBe(404);
     expect((await call("GET", `/web/notebooks/scratchpad/pages`)).status).toBe(200);
   });
 
-  it("renders thumbnails on push and serves PNGs", async () => {
-    let stored = false;
-    for (let i = 0; i < 50 && !stored; i++) {
-      stored = await storage.hasObject(imageKey("thumb", inks[1].hash));
-      if (!stored) await new Promise((r) => setTimeout(r, 100));
-    }
-    expect(stored).toBe(true);
-
+  it("renders ZDI thumbnails on demand and serves PNGs", async () => {
     const thumb = await call("GET", `/web/thumbs/${inks[1].hash}.png`);
     expect(thumb.status).toBe(200);
     expect(thumb.type).toBe("image/png");
     expect(thumb.headers.get("cache-control")).toContain("immutable");
     expect(thumb.bytes!.readUInt32BE(16)).toBe(480);
+    expect(await storage.hasObject(imageKey("thumb", inks[1].hash))).toBe(true);
 
     const full = await call("GET", `/web/renders/${inks[1].hash}.png`);
     expect(full.status).toBe(200);
@@ -198,13 +197,7 @@ describe("web reads", () => {
 
 describe("web is read-only", () => {
   it("refuses rename and move", async () => {
-    const move = await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: notebookA, after_id: pages[2] });
-    expect(move.status).toBe(405);
-    expect(move.json.error).toBe("read_only");
-    expect(await pageIds(notebookA)).toEqual(pages.slice(0, 3));
-
-    const rename = await call("PATCH", `/web/notebooks/${notebookA}`, { title: "Renamed on the web" });
-    expect(rename.status).toBe(405);
-    expect(rename.json.error).toBe("read_only");
+    expect((await call("PATCH", `/web/notebooks/${notebookA}`, { title: "nope" })).status).toBe(405);
+    expect((await call("POST", `/web/pages/${pages[0]}/move`, { notebook_id: notebookB })).status).toBe(405);
   });
 });

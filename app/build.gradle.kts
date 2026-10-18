@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v159: delete structure-before-Ready dual (ensureSheet / replayStructure).
-        versionCode = 163
-        versionName = "4.42"
+        // Tip v164: delete boards-coupled web list SQL (Ready-only companion pages).
+        versionCode = 164
+        versionName = "4.43"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

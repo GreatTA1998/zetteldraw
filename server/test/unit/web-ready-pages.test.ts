@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type pg from "pg";
-import { listPages, listNotebooks } from "../../src/web.js";
+import { listPages, listNotebooks, placesOf } from "../../src/web.js";
 import type { InkStorage } from "../../src/storage.js";
 import { readSliceIndex } from "../../src/zdl.js";
 
@@ -25,7 +25,7 @@ function zdlEmptyExtend(pageId: string, height = 1407): Buffer {
 }
 
 describe("web Ready page list", () => {
-  it("lists pages from Ready ZDL when boards are empty (log-only notebook)", async () => {
+  it("lists pages from Ready ZDL (no boards SQL)", async () => {
     const notebookId = "11111111-1111-1111-1111-111111111111";
     const pageId = "22222222-2222-2222-2222-222222222222";
     const hash = "ab".repeat(32);
@@ -73,9 +73,6 @@ describe("web Ready page list", () => {
         if (sql.includes("FROM page_links")) {
           return { rows: [] };
         }
-        if (sql.includes("FROM boards")) {
-          return { rows: [] };
-        }
         return { rows: [] };
       },
     } as unknown as pg.Pool;
@@ -94,21 +91,24 @@ describe("web Ready page list", () => {
     expect(pages[0].id).toBe(pageId);
     expect(pages[0].thumb_url).toBeNull();
     expect(queries.some((q) => q.includes("notebook_logs"))).toBe(true);
+    expect(queries.some((q) => q.includes("FROM boards"))).toBe(false);
   });
 
-  it("fills page_count from Ready when boards report 0", async () => {
+  it("fills page_count from Ready only (no boards JOIN)", async () => {
     const notebookId = "11111111-1111-1111-1111-111111111111";
     const pageId = "22222222-2222-2222-2222-222222222222";
     const hash = "cd".repeat(32);
     const bytes = zdlEmptyExtend(pageId);
 
+    let boardQueries = 0;
     let logQueries = 0;
     const pool = {
       query: async (sql: string) => {
-        if (sql.includes("count(*)::int AS page_count")) {
-          return { rows: [{ page_count: 0, last_edited_at: null }] };
+        if (sql.includes("FROM boards")) {
+          boardQueries++;
+          return { rows: [] };
         }
-        if (sql.includes("count(b.id)::int AS page_count")) {
+        if (sql.includes("FROM notebooks n") && sql.includes("ORDER BY n.position")) {
           return {
             rows: [
               {
@@ -120,15 +120,12 @@ describe("web Ready page list", () => {
                 updated_at: 2,
                 deleted_at: null,
                 rev: 1,
-                page_count: 0,
-                last_edited_at: null,
               },
             ],
           };
         }
         if (sql.includes("FROM notebook_logs")) {
           logQueries++;
-          // scratch readyCount then notebook readyCount — scratch has no log
           if (sql.includes("l.notebook_id IS NULL")) {
             return { rows: [] };
           }
@@ -164,5 +161,58 @@ describe("web Ready page list", () => {
     expect(art?.page_count).toBe(1);
     expect(art?.last_edited_at).toBe(9);
     expect(logQueries).toBeGreaterThan(0);
+    expect(boardQueries).toBe(0);
+  });
+
+  it("placesOf resolves page ids from Ready logs only", async () => {
+    const notebookId = "11111111-1111-1111-1111-111111111111";
+    const pageId = "22222222-2222-2222-2222-222222222222";
+    const hash = "ef".repeat(32);
+    const bytes = zdlEmptyExtend(pageId);
+
+    const queries: string[] = [];
+    const pool = {
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push(sql);
+        if (sql.includes("FROM notebook_logs")) {
+          return {
+            rows: [
+              {
+                id: "log1",
+                notebook_id: notebookId,
+                ink_hash: hash,
+                ink_bytes: bytes.length,
+                slice_height: 1407,
+                conflict_of: null,
+                created_at: 1,
+                updated_at: 9,
+                deleted_at: null,
+                rev: 3,
+              },
+            ],
+          };
+        }
+        if (sql.includes("FROM notebooks n") && sql.includes("ANY(")) {
+          expect(params?.at(-1)).toEqual([notebookId]);
+          return { rows: [{ id: notebookId, title: "art themes" }] };
+        }
+        return { rows: [] };
+      },
+    } as unknown as pg.Pool;
+
+    const storage: InkStorage = {
+      has: async () => true,
+      put: async () => {},
+      get: async () => bytes,
+    };
+
+    const places = await placesOf(pool, [pageId], { kind: "user", userId: "u1" }, storage);
+    expect(places.get(pageId)).toMatchObject({
+      notebook_id: notebookId,
+      notebook_title: "art themes",
+      index: 1,
+      count: 1,
+    });
+    expect(queries.some((q) => q.includes("FROM boards"))).toBe(false);
   });
 });

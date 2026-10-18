@@ -14,9 +14,9 @@ import { readSliceIndex, ZdlFormatError } from "./zdl.js";
  * the companion is strictly read-only for ink. The only write it offers is
  * Hand off / lost-device ack (live-writer lease), which does not touch notebook data.
  *
- * Page identity/order prefer Ready {@code notebook_logs} (+ ZDL structure index)
- * over live {@code boards} rows so log-only notebooks are not empty on the
- * companion. Hand-off still gates on uncovered BOARD ink via {@link backupStatus}.
+ * Page identity/order is Ready-only: {@code notebook_logs} + ZDL structure index.
+ * Live {@code boards} rows are not a companion list SoT (Hand-off still scans
+ * uncovered BOARD ink via {@link backupStatus}).
  */
 
 export const SCRATCHPAD = "scratchpad";
@@ -76,7 +76,7 @@ export interface PagePlace {
 
 const LIVE = "b.deleted_at IS NULL AND b.conflict_of IS NULL";
 
-/** Board-shaped page list row (Ready-synthesized or SQL boards fallback). */
+/** Ready-synthesized page list row (thumbs null until ZDL→PNG). */
 type PageListRow = Pick<
   BoardRow,
   "id" | "notebook_id" | "position" | "ink_hash" | "ink_bytes" | "created_at" | "updated_at" | "rev"
@@ -180,7 +180,7 @@ interface LinkRowLite {
 /**
  * Resolve notebook + 1-based index/count for each live page id (Android pageRef).
  * Missing / deleted / out-of-scope pages are omitted.
- * Prefers Ready page lists when {@code storage} is set (log-only notebooks).
+ * Ready logs are the only companion place index (no boards SQL).
  */
 export async function placesOf(
   pool: pg.Pool | pg.PoolClient,
@@ -189,12 +189,11 @@ export async function placesOf(
   storage?: InkStorage,
 ): Promise<Map<string, PagePlace>> {
   const out = new Map<string, PagePlace>();
-  if (pageIds.length === 0) {
+  if (pageIds.length === 0 || !storage) {
     return out;
   }
   const want = new Set(pageIds.map((id) => id.toLowerCase()));
   const { sql, params } = scopeParams(scope);
-  const bOwn = sql("boards", "b");
   const nOwn = sql("notebooks", "n");
 
   const placeFromPages = (
@@ -217,109 +216,37 @@ export async function placesOf(
     }
   };
 
-  const boards = await pool.query<BoardRow>(
-    `SELECT b.* FROM boards b
-     WHERE ${LIVE} AND ${bOwn} AND b.id = ANY($${params.length + 1}::uuid[])`,
-    [...params, pageIds],
+  const { sql: logSql, params: logParams } = logOwnSql(scope);
+  const logs = await pool.query<LogRow>(
+    `SELECT l.* FROM notebook_logs l
+     WHERE l.deleted_at IS NULL AND l.conflict_of IS NULL AND l.ink_hash IS NOT NULL AND ${logSql}`,
+    logParams,
   );
-
-  const notebookIds = [
-    ...new Set(boards.rows.map((b) => b.notebook_id).filter((id): id is string => id !== null)),
-  ];
   const titles = new Map<string, string>();
-  if (notebookIds.length > 0) {
-    const notebooks = await pool.query<{ id: string; title: string }>(
+  const logNbIds = [
+    ...new Set(logs.rows.map((l) => l.notebook_id).filter((id): id is string => id !== null)),
+  ];
+  if (logNbIds.length > 0) {
+    const more = await pool.query<{ id: string; title: string }>(
       `SELECT n.id, n.title FROM notebooks n
        WHERE n.deleted_at IS NULL AND ${nOwn} AND n.id = ANY($${params.length + 1}::uuid[])`,
-      [...params, notebookIds],
+      [...params, logNbIds],
     );
-    for (const n of notebooks.rows) {
+    for (const n of more.rows) {
       titles.set(n.id, n.title);
     }
   }
-
-  // Pages whose notebook is missing/deleted/out of scope live in Scratchpad (same as listPages).
-  const inScratchpad = new Set<string>();
-  for (const row of boards.rows) {
-    if (row.notebook_id === null || !titles.has(row.notebook_id)) {
-      inScratchpad.add(row.id);
-    }
-  }
-
-  const scratchPages =
-    inScratchpad.size > 0 ? await pagesIn(pool, null, scope, storage) : [];
-  const scratchIndex = new Map(scratchPages.map((p, i) => [p.id, i]));
-
-  const byNotebook = new Map<string, BoardRow[]>();
-  for (const row of boards.rows) {
-    if (inScratchpad.has(row.id)) {
-      const idx = scratchIndex.get(row.id);
-      if (idx === undefined) continue;
-      out.set(row.id.toLowerCase(), {
-        page_id: row.id,
-        notebook_id: SCRATCHPAD,
-        notebook_title: "Scratchpad",
-        index: idx + 1,
-        count: scratchPages.length,
-      });
-      continue;
-    }
-    const nb = row.notebook_id!;
-    const list = byNotebook.get(nb) ?? [];
-    list.push(row);
-    byNotebook.set(nb, list);
-  }
-
-  for (const [notebookId, needed] of byNotebook) {
-    const all = await pagesIn(pool, notebookId, scope, storage);
-    const index = new Map(all.map((p, i) => [p.id, i]));
-    const title = titles.get(notebookId) ?? "";
-    for (const row of needed) {
-      const idx = index.get(row.id);
-      if (idx === undefined || title === "") continue;
-      out.set(row.id.toLowerCase(), {
-        page_id: row.id,
-        notebook_id: notebookId,
-        notebook_title: title,
-        index: idx + 1,
-        count: all.length,
-      });
-    }
-  }
-
-  // Log-only page ids (no board row) — scan Ready logs for leftovers.
-  if (storage && out.size < want.size) {
-    const { sql: logSql, params: logParams } = logOwnSql(scope);
-    const logs = await pool.query<LogRow>(
-      `SELECT l.* FROM notebook_logs l
-       WHERE l.deleted_at IS NULL AND l.conflict_of IS NULL AND l.ink_hash IS NOT NULL AND ${logSql}`,
-      logParams,
+  for (const log of logs.rows) {
+    if (out.size >= want.size) break;
+    const nb = log.notebook_id;
+    if (nb !== null && !titles.has(nb)) continue;
+    const pages = await pagesFromReadyLog(storage, log, nb);
+    if (!pages) continue;
+    placeFromPages(
+      pages,
+      nb === null ? SCRATCHPAD : nb,
+      nb === null ? "Scratchpad" : titles.get(nb)!,
     );
-    const logNbIds = [
-      ...new Set(logs.rows.map((l) => l.notebook_id).filter((id): id is string => id !== null)),
-    ];
-    if (logNbIds.length > 0) {
-      const more = await pool.query<{ id: string; title: string }>(
-        `SELECT n.id, n.title FROM notebooks n
-         WHERE n.deleted_at IS NULL AND ${nOwn} AND n.id = ANY($${params.length + 1}::uuid[])`,
-        [...params, logNbIds],
-      );
-      for (const n of more.rows) {
-        titles.set(n.id, n.title);
-      }
-    }
-    for (const log of logs.rows) {
-      if (out.size >= want.size) break;
-      const nb = log.notebook_id;
-      if (nb !== null && !titles.has(nb)) continue;
-      const pages = await pagesFromReadyLog(storage, log, nb);
-      if (!pages) continue;
-      placeFromPages(
-        pages,
-        nb === null ? SCRATCHPAD : nb,
-        nb === null ? "Scratchpad" : titles.get(nb)!,
-      );
-    }
   }
   return out;
 }
@@ -424,54 +351,37 @@ export async function listNotebooks(
 ): Promise<WebNotebook[]> {
   const { sql, params } = scopeParams(scope);
   const nOwn = sql("notebooks", "n");
-  const bOwn = sql("boards", "b");
-  // Pages whose notebook is missing/deleted/out of scope show in the scratchpad.
-  const inScratchpad = `(b.notebook_id IS NULL OR NOT EXISTS (
-    SELECT 1 FROM notebooks n WHERE n.id = b.notebook_id AND n.deleted_at IS NULL AND ${nOwn}))`;
-
-  const scratch = await pool.query<{ page_count: number; last_edited_at: number | null }>(
-    `SELECT count(*)::int AS page_count, max(b.updated_at) AS last_edited_at
-     FROM boards b WHERE ${LIVE} AND ${bOwn} AND ${inScratchpad}`,
-    params,
-  );
-  const notebooks = await pool.query<NotebookRow & { page_count: number; last_edited_at: number | null }>(
-    `SELECT n.*, count(b.id)::int AS page_count, max(b.updated_at) AS last_edited_at
-     FROM notebooks n
-     LEFT JOIN boards b ON b.notebook_id = n.id AND ${LIVE} AND ${bOwn}
+  const notebooks = await pool.query<NotebookRow>(
+    `SELECT n.* FROM notebooks n
      WHERE n.deleted_at IS NULL AND ${nOwn}
-     GROUP BY n.id
      ORDER BY n.position, n.id`,
     params,
   );
 
-  const readyCount = async (
+  const readyMeta = async (
     notebookId: string | null,
-    boardCount: number,
-    boardEdited: number | null,
   ): Promise<{ page_count: number; last_edited_at: number | null }> => {
-    // Boards still cover historical notebooks; only hit object storage when the
-    // board list is empty but a Ready log exists (the 22 log-only fleet cases).
-    if (!storage || boardCount > 0) {
-      return { page_count: boardCount, last_edited_at: boardEdited };
+    if (!storage) {
+      return { page_count: 0, last_edited_at: null };
     }
     const log = await readyLogForNotebook(pool, notebookId, scope);
     if (!log?.ink_hash) {
-      return { page_count: boardCount, last_edited_at: boardEdited };
+      return { page_count: 0, last_edited_at: null };
     }
     const pages = await pagesFromReadyLog(storage, log, notebookId);
     if (!pages) {
-      return { page_count: boardCount, last_edited_at: boardEdited };
+      return { page_count: 0, last_edited_at: null };
     }
     return {
       page_count: pages.length,
-      last_edited_at: log.updated_at ?? boardEdited,
+      last_edited_at: log.updated_at,
     };
   };
 
-  const scratchReady = await readyCount(null, scratch.rows[0].page_count, scratch.rows[0].last_edited_at);
+  const scratchReady = await readyMeta(null);
   const notebookRows = await Promise.all(
     notebooks.rows.map(async (n) => {
-      const ready = await readyCount(n.id, n.page_count, n.last_edited_at);
+      const ready = await readyMeta(n.id);
       return {
         id: n.id,
         kind: "notebook" as const,
@@ -514,50 +424,22 @@ async function liveNotebook(db: pg.Pool | pg.PoolClient, id: string, scope: Sync
   return res.rows[0];
 }
 
-async function pagesInBoards(
-  db: pg.Pool | pg.PoolClient,
-  notebookId: string | null,
-  scope: SyncScope,
-): Promise<PageListRow[]> {
-  const { sql, params } = scopeParams(scope);
-  const bOwn = sql("boards", "b");
-  const nOwn = sql("notebooks", "n");
-  if (notebookId === null) {
-    const inScratchpad = `(b.notebook_id IS NULL OR NOT EXISTS (
-      SELECT 1 FROM notebooks n WHERE n.id = b.notebook_id AND n.deleted_at IS NULL AND ${nOwn}))`;
-    const res = await db.query<BoardRow>(
-      `SELECT b.* FROM boards b WHERE ${LIVE} AND ${bOwn} AND ${inScratchpad} ORDER BY b.position, b.id`,
-      params,
-    );
-    return res.rows;
-  }
-  const res = await db.query<BoardRow>(
-    `SELECT b.* FROM boards b WHERE ${LIVE} AND ${bOwn} AND b.notebook_id = $${params.length + 1} ORDER BY b.position, b.id`,
-    [...params, notebookId],
-  );
-  return res.rows;
-}
-
-/**
- * Live page order for a notebook. Ready {@code .zdl} wins when storage can
- * index it; otherwise historical {@code boards} rows (thumbs still work).
- */
+/** Live page order for a notebook — Ready {@code .zdl} only. */
 async function pagesIn(
   db: pg.Pool | pg.PoolClient,
   notebookId: string | null,
   scope: SyncScope,
   storage?: InkStorage,
 ): Promise<PageListRow[]> {
-  if (storage) {
-    const log = await readyLogForNotebook(db, notebookId, scope);
-    if (log) {
-      const fromReady = await pagesFromReadyLog(storage, log, notebookId);
-      if (fromReady) {
-        return fromReady;
-      }
-    }
+  if (!storage) {
+    return [];
   }
-  return pagesInBoards(db, notebookId, scope);
+  const log = await readyLogForNotebook(db, notebookId, scope);
+  if (!log) {
+    return [];
+  }
+  const fromReady = await pagesFromReadyLog(storage, log, notebookId);
+  return fromReady ?? [];
 }
 
 export async function listPages(
