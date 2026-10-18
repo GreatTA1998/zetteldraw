@@ -11,6 +11,7 @@ import android.view.View;
 import androidx.test.core.app.ApplicationProvider;
 
 import com.onyx.android.sdk.data.note.TouchPoint;
+import com.zetteldraw.penpoc.data.NotebookPaper;
 
 import org.junit.After;
 import org.junit.Before;
@@ -48,6 +49,15 @@ public class SurfaceGateTest {
         UiExecutors.surfaceForTest = null;
     }
 
+    private static Board slice(NotebookPaper paper, String id, int index) {
+        Board board = new Board(id, 1L + index);
+        board.paper = paper;
+        board.sliceIndex = index;
+        board.paperOrigin = 1000f * index;
+        board.slicePx = 1000;
+        return board;
+    }
+
     private PageInkView laidOut(Board... pages) {
         PageInkView ink = new PageInkView(context);
         ink.measure(View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.EXACTLY),
@@ -55,7 +65,7 @@ public class SurfaceGateTest {
         ink.layout(0, 0, 600, 1000);
         int[] heights = new int[pages.length];
         Arrays.fill(heights, 1000);
-        ink.setPages(Arrays.asList(pages), heights, 24);
+        ink.setPages(Arrays.asList(pages), heights, 0);
         ink.setLive(true);
         return ink;
     }
@@ -101,8 +111,9 @@ public class SurfaceGateTest {
 
     @Test
     public void aStuckSurfaceWorkerNeverBlocksTheMainThread() {
-        Board a = new Board("a", 1L);
-        Board b = new Board("b", 2L);
+        NotebookPaper paper = NotebookPaper.empty(1000);
+        Board a = slice(paper, "a", 0);
+        Board b = slice(paper, "b", 1);
         PageInkView ink = laidOut(a, b);
         settle();
         ink.onSurface(true);
@@ -123,11 +134,12 @@ public class SurfaceGateTest {
         long ms = (System.nanoTime() - started) / 1_000_000;
         assertTrue("main thread kept going (" + ms + " ms)", ms < 1_000);
         assertEquals("the stroke drawn before the scroll landed where it was drawn", 900f,
-                a.strokes.get(0).points.get(0).y, 0f);
+                paper.strokes().get(0).points.get(0).y, 0f);
         assertFalse("pen stays off: the worker never confirmed a repaint", ink.penOn());
 
         ink.addStroke(points(100f, 900f));
-        assertEquals("the scroll still applied after the deadline", 1, b.strokes.size());
+        assertEquals(2, paper.strokes().size());
+        assertEquals("the scroll still applied after the deadline", 1, paper.lastInkedSlice());
     }
 
     private static ArrayList<TouchPoint> points(float x, float y) {

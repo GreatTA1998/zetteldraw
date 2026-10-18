@@ -1,4 +1,4 @@
-import type { BoardRow, Incoming, LinkRow, LogRow, NotebookPush } from "./lww.js";
+import type { Incoming, LinkRow, LogRow, NotebookPush } from "./lww.js";
 
 export class BadRequest extends Error {}
 
@@ -10,7 +10,8 @@ export interface PushBody {
   schema_version: number;
   device_id: string;
   notebooks: NotebookPush[];
-  boards: Incoming<BoardRow>[];
+  /** Always empty — BOARD push retired; Ready notebook_logs carry ink. */
+  boards: [];
   /** Whole notebook logs. Absent on an older body, which means none. */
   logs: Incoming<LogRow>[];
   /** Page links. Absent means none. A link copies no ink. */
@@ -77,23 +78,11 @@ export function parsePushBody(raw: unknown): PushBody {
       base_rev: int(o, "base_rev", w),
     };
   });
-  const boards = array(body, "boards").map((v, i) => {
-    const w = `boards[${i}]`;
-    const o = obj(v, w);
-    return {
-      id: str(o, "id", w, UUID).toLowerCase(),
-      notebook_id: strOrNull(o, "notebook_id", w, UUID)?.toLowerCase() ?? null,
-      position: str(o, "position", w, POSITION),
-      ink_hash: strOrNull(o, "ink_hash", w, SHA256),
-      ink_bytes: int(o, "ink_bytes", w),
-      thumb_hash: strOrNull(o, "thumb_hash", w, SHA256),
-      conflict_of: strOrNull(o, "conflict_of", w, UUID)?.toLowerCase() ?? null,
-      created_at: int(o, "created_at", w),
-      updated_at: int(o, "updated_at", w),
-      deleted_at: intOrNull(o, "deleted_at", w),
-      base_rev: int(o, "base_rev", w),
-    };
-  });
+  // Tip never pushes BOARD (v136+); reject so cloud ink ingress is LOG-only.
+  if (array(body, "boards").length > 0) {
+    throw new BadRequest("boards push is retired; use notebook_logs");
+  }
+  const boards: [] = [];
   const logs = array(body, "logs").map((v, i) => {
     const w = `logs[${i}]`;
     const o = obj(v, w);

@@ -23,7 +23,6 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 import java.io.File;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -133,22 +132,9 @@ public class BoardEntityInkRetireTest {
         assertNotNull(log);
         byte[] logBefore = new InkFileStore(inkDir).readLog(sheetId);
 
-        BoardEntity remote = new BoardEntity();
-        remote.id = ready.id;
-        remote.notebookId = null;
-        remote.position = "a0";
-        remote.createdAt = ready.createdAt;
-        remote.updatedAt = log.updatedAt + 10_000;
-        remote.rev = Math.max(1, log.rev) + 50;
-        byte[] remoteBytes = InkCodec.encode(
-                Collections.singletonList(TestInk.stroke(900f, 10f, 12)));
-        remote.inkHash = InkFileStore.sha256(remoteBytes);
-        remote.inkBytes = remoteBytes.length;
-
+        // Pull has no BOARD channel — Ready .zdl must stay sole catch-up ink.
         SyncStore.PullPage pull = new SyncStore.PullPage();
-        pull.boards.add(remote);
-        pull.blobs.put(remote.inkHash, remoteBytes);
-        pull.cursor = remote.rev;
+        pull.cursor = Math.max(1, log.rev) + 50;
         repo.applyPull(pull);
 
         assertFalse("log-backed must not recreate page .zdi",

@@ -74,8 +74,7 @@ public final class InkSheetStore {
 
     /**
      * Pulled log staged outside the lock (hash-checked + replayed once).
-     * Same idea as {@link MetaPullApply.Staged} for unmigrated board residue —
-     * apply under lock must not replay again.
+     * Apply under lock must not replay again.
      */
     record StagedLog(byte[] bytes, NotebookPaper paper) {
     }
@@ -253,19 +252,21 @@ public final class InkSheetStore {
     }
 
     void installSheet(String notebookId, String sheetId, NotebookPaper paper, int flushed, boolean queue) {
+        // Disk I/O outside the repo lock so main-thread pages()/isSheetReady
+        // are not blocked on large .zdl reads during ensureSheet.
+        byte[] bytes;
+        try {
+            bytes = deps.ink().readLog(sheetId);
+        } catch (IOException e) {
+            return;
+        }
+        if (bytes == null) {
+            bytes = paper.bytes();
+        }
         synchronized (deps.lock()) {
             OpenSheet open = new OpenSheet(sheetId, notebookId, paper, flushed);
             open.ready = true;
             sheets.put(sheetId, open);
-            byte[] bytes;
-            try {
-                bytes = deps.ink().readLog(sheetId);
-            } catch (IOException e) {
-                return;
-            }
-            if (bytes == null) {
-                bytes = paper.bytes();
-            }
             ensureNotebookLogMetaLocked(open, bytes, queue);
             if (queue && bytes != null) {
                 deps.mirrorLog(sheetId, bytes);

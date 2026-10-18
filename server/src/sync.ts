@@ -3,7 +3,6 @@ import type pg from "pg";
 import type { QueryResultRow } from "pg";
 import { isUnowned, ownedByUser, rowOwner, stampOwnership, type OwnerTable } from "./accounts.js";
 import {
-  resolveBoard,
   resolveLink,
   resolveLog,
   resolveNotebook,
@@ -27,18 +26,6 @@ export const PUSH_LOCK = 42_4242;
  */
 export const INLINE_BLOB_MAX_BYTES = 256 * 1024;
 
-const BOARD_COLS = [
-  "id",
-  "notebook_id",
-  "position",
-  "ink_hash",
-  "ink_bytes",
-  "thumb_hash",
-  "conflict_of",
-  "created_at",
-  "updated_at",
-  "deleted_at",
-] as const;
 const NOTEBOOK_COLS = ["id", "title", "position", "parent_id", "created_at", "updated_at", "deleted_at"] as const;
 const LOG_COLS = [
   "id",
@@ -56,7 +43,7 @@ const LINK_COLS = ["id", "source_id", "target_id", "created_at", "updated_at", "
 export type ResultStatus = Status | "missing_blob" | "forbidden";
 
 export interface PushResult {
-  entity: "notebook" | "board" | "log" | "link";
+  entity: "notebook" | "log" | "link";
   id: string;
   status: ResultStatus;
   rev: number;
@@ -82,7 +69,7 @@ export function sha256Hex(bytes: Buffer): string {
 
 async function upsert(
   client: pg.PoolClient,
-  table: "boards" | "notebooks" | "notebook_logs" | "page_links",
+  table: "notebooks" | "notebook_logs" | "page_links",
   cols: readonly string[],
   row: Record<string, unknown>,
 ): Promise<number> {
@@ -103,7 +90,7 @@ async function upsert(
 
 async function restamp(
   client: pg.PoolClient,
-  table: "boards" | "notebooks" | "notebook_logs" | "page_links",
+  table: "notebooks" | "notebook_logs" | "page_links",
   id: string,
 ): Promise<number> {
   const res = await client.query<{ rev: number }>(
@@ -115,7 +102,7 @@ async function restamp(
 
 async function applyDecision<T extends { id: string; rev: number }>(
   client: pg.PoolClient,
-  table: "boards" | "notebooks" | "notebook_logs" | "page_links",
+  table: "notebooks" | "notebook_logs" | "page_links",
   cols: readonly string[],
   existing: T | null,
   decision: Decision<T>,
@@ -127,10 +114,9 @@ async function applyDecision<T extends { id: string; rev: number }>(
   } else if (decision.restamp && existing) {
     rev = await restamp(client, table, existing.id);
   }
-  if (decision.copy && (table === "boards" || table === "notebook_logs")) {
+  if (decision.copy && table === "notebook_logs") {
     const copy = decision.copy as { id: string };
-    const cols = table === "boards" ? BOARD_COLS : LOG_COLS;
-    await upsert(client, table, cols, decision.copy as unknown as Record<string, unknown>);
+    await upsert(client, table, LOG_COLS, decision.copy as unknown as Record<string, unknown>);
     await maybeStamp(client, table, copy.id, scope);
   }
   return rev;
@@ -162,16 +148,16 @@ async function assertWritable(
 }
 
 /**
- * One push spine for notebooks / boards / logs / links: writable → lock row →
- * resolve → apply → stamp. Board/log pass {@code blobMissing} for ink hashes
- * not yet in storage or this push's blob map.
+ * One push spine for notebooks / logs / links: writable → lock row →
+ * resolve → apply → stamp. Log pass {@code blobMissing} for ink hashes
+ * not yet in storage or this push's blob map. BOARD push is retired (Ready LOG).
  */
 async function pushEntityGroup<TExisting extends { id: string; rev: number }, TIncoming extends { id: string }>(
   client: pg.PoolClient,
   scope: SyncScope,
   results: PushResult[],
   entity: PushResult["entity"],
-  table: OwnerTable,
+  table: "notebooks" | "notebook_logs" | "page_links",
   cols: readonly string[],
   rows: TIncoming[],
   resolve: (existing: TExisting | null, incoming: TIncoming) => Decision<TExisting>,
@@ -205,10 +191,10 @@ function visibilitySql(table: OwnerTable, alias: string, scope: SyncScope, userP
   return isUnowned(table, alias);
 }
 
-/** One pull row-load for notebooks / boards / logs / links (rev-bounded page). */
+/** One pull row-load for notebooks / logs / links (rev-bounded page). */
 async function loadPullRows<T extends QueryResultRow>(
   pool: pg.Pool,
-  table: "notebooks" | "boards" | "notebook_logs" | "page_links",
+  table: "notebooks" | "notebook_logs" | "page_links",
   ids: string[],
   maxRev: number,
 ): Promise<T[]> {
@@ -237,7 +223,7 @@ export async function push(
     await storage.put(hash, bytes);
   }
   const missing = new Set<string>();
-  for (const row of [...body.boards, ...body.logs]) {
+  for (const row of body.logs) {
     const hash = row.ink_hash;
     if (hash && row.deleted_at === null && !(hash in body.blobs) && !missing.has(hash)) {
       if (!(await storage.has(hash))) {
@@ -256,9 +242,6 @@ export async function push(
     await pushEntityGroup<NotebookRow, (typeof body.notebooks)[number]>(
       client, scope, results, "notebook", "notebooks", NOTEBOOK_COLS, body.notebooks,
       (existing, incoming) => resolveNotebook(existing, incoming));
-    await pushEntityGroup<BoardRow, (typeof body.boards)[number]>(
-      client, scope, results, "board", "boards", BOARD_COLS, body.boards,
-      (existing, incoming) => resolveBoard(existing, incoming, randomUUID), inkBlobMissing);
     await pushEntityGroup<LogRow, (typeof body.logs)[number]>(
       client, scope, results, "log", "notebook_logs", LOG_COLS, body.logs,
       (existing, incoming) => resolveLog(existing, incoming, randomUUID), inkBlobMissing);
@@ -327,17 +310,16 @@ export async function pull(
     userParam = params.length;
   }
   const nVis = visibilitySql("notebooks", "n", scope, userParam);
-  const bVis = visibilitySql("boards", "b", scope, userParam);
   const lVis = visibilitySql("notebook_logs", "l", scope, userParam);
   const kVis = visibilitySql("page_links", "k", scope, userParam);
   params.push(limit + 1);
   const limitParam = params.length;
 
-  const changes = await pool.query<{ kind: "notebook" | "board" | "log" | "link"; id: string; rev: number }>(
+  // Pull SoT is notebooks + logs + links only — no BOARD rows (Ready .zdl ink;
+  // covered BOARD residue must not 400 the page via missing board blobs).
+  const changes = await pool.query<{ kind: "notebook" | "log" | "link"; id: string; rev: number }>(
     `SELECT kind, id, rev FROM (
        SELECT 'notebook'::text AS kind, n.id, n.rev FROM notebooks n WHERE n.rev > $1 AND ${nVis}
-       UNION ALL
-       SELECT 'board', b.id, b.rev FROM boards b WHERE b.rev > $1 AND ${bVis}
        UNION ALL
        SELECT 'log', l.id, l.rev FROM notebook_logs l WHERE l.rev > $1 AND ${lVis}
        UNION ALL
@@ -352,13 +334,11 @@ export async function pull(
   const cursor = page.length > 0 ? page[page.length - 1].rev : since;
   const maxRev = cursor;
   const notebookIds = page.filter((c) => c.kind === "notebook").map((c) => c.id);
-  const boardIds = page.filter((c) => c.kind === "board").map((c) => c.id);
   const logIds = page.filter((c) => c.kind === "log").map((c) => c.id);
   const linkIds = page.filter((c) => c.kind === "link").map((c) => c.id);
 
   // Rows can be re-stamped by a concurrent push after the change scan; the rev bound keeps the page consistent.
   const notebooks = await loadPullRows<NotebookRow>(pool, "notebooks", notebookIds, maxRev);
-  const boards = await loadPullRows<BoardRow>(pool, "boards", boardIds, maxRev);
   const logs = await loadPullRows<LogRow>(pool, "notebook_logs", logIds, maxRev);
   const links = await loadPullRows<LinkRow>(pool, "page_links", linkIds, maxRev);
 
@@ -382,13 +362,19 @@ export async function pull(
     }
     blobs[hash] = bytes.toString("base64");
   };
-  for (const row of [
-    ...boards.map((b) => ({ hash: b.ink_hash, deleted: b.deleted_at, kind: "board", id: b.id })),
-    ...logs.map((l) => ({ hash: l.ink_hash, deleted: l.deleted_at, kind: "notebook_log", id: l.id })),
-  ]) {
-    if (row.hash && row.deleted === null) {
-      await loadBlob(row.hash, row.kind, row.id);
+  for (const row of logs) {
+    if (row.ink_hash && row.deleted_at === null) {
+      await loadBlob(row.ink_hash, "notebook_log", row.id);
     }
   }
-  return { schema_version: schemaVersion, cursor, has_more: hasMore, notebooks, boards, logs, links, blobs };
+  return {
+    schema_version: schemaVersion,
+    cursor,
+    has_more: hasMore,
+    notebooks,
+    boards: [],
+    logs,
+    links,
+    blobs,
+  };
 }

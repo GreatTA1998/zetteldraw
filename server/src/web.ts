@@ -407,19 +407,21 @@ export interface BackupMissing {
 }
 
 /**
- * Whether every restore-critical owned ink blob is present in object storage.
+ * Whether Hand-off / lost-device restore may unlock.
+ *
  * Notebook list / page thumbs on the web can look fine while a notebook_log
  * (the Boox source of truth after v20) is missing from S3 — this check catches that.
  *
- * Board page blobs covered by a live Ready {@code notebook_logs} row for the
- * same notebook are migration residue, not Hand-off restore SoT — they do not
- * block {@link BackupStatus#ready_for_device_restore}.
+ * Uncovered live BOARD ink (no Ready {@code notebook_logs} for the same notebook)
+ * must not unlock Hand-off: Prepare / {@code ensureReadyInkForBackup} must cover
+ * every inked notebook onto Ready {@code .zdl} first. Covered BOARD rows are
+ * migration residue and are excluded from {@link BackupStatus#boards_with_ink}.
  */
 export interface BackupStatus {
   ok: boolean;
   ready_for_device_restore: boolean;
   notebooks: number;
-  /** Live board ink rows with no covering Ready notebook_log (restore-critical). */
+  /** Live board ink rows with no covering Ready notebook_log — blocks Hand-off. */
   boards_with_ink: number;
   logs_with_ink: number;
   missing: BackupMissing[];
@@ -476,17 +478,23 @@ export async function backupStatus(
     }
   }
 
+  const uncoveredBoards = boards.rows.length;
   const ok = missing.length === 0;
+  // Hand-off unlocks only when every inked notebook is Ready-covered and all
+  // restore-critical blobs (uncovered boards + logs) are in object storage.
+  const ready = ok && uncoveredBoards === 0;
   return {
     ok,
-    ready_for_device_restore: ok,
+    ready_for_device_restore: ready,
     notebooks: notebooks.rows[0]?.n ?? 0,
-    boards_with_ink: boards.rows.length,
+    boards_with_ink: uncoveredBoards,
     logs_with_ink: logs.rows.length,
     missing,
-    note: ok
-      ? "All restore-critical ink blobs are in object storage. Ready notebook logs cover migrated page residue. A fresh signed-in device can pull them."
-      : "Some restore-critical ink hashes are in Postgres but missing from object storage. Do not uninstall the Boox until sync re-uploads them.",
+    note: ready
+      ? "All restore-critical ink blobs are in object storage. Ready notebook logs cover every inked notebook. A fresh signed-in device can pull them."
+      : uncoveredBoards > 0
+        ? "Uncovered page blob(s) remain — run Prepare transfer on the live Boox so Ready notebook logs cover them before Hand-off."
+        : "Some restore-critical ink hashes are in Postgres but missing from object storage. Do not uninstall the Boox until sync re-uploads them.",
   };
 }
 
