@@ -2079,8 +2079,8 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Shared indented notebook hierarchy for Move destination and Place-under
-     * parent. Fills nearly the full drawing-area height (minus safe margins)
-     * so deep trees need far less scrolling than the old ~55% chip.
+     * parent. Uses nearly the full drawing-area width and packs rows into
+     * columns so many notebooks/subnotebooks fit without endless vertical scroll.
      */
     private void showNotebookHierarchyMenu(
             View anchor,
@@ -2096,94 +2096,115 @@ public final class CanvasActivity extends Activity {
         // full window (top bars / Place-under tab anchor must not shrink it).
         FrameLayout layoutHost = drawingArea != null ? drawingArea : host;
         LinearLayout list = hierarchyPanel();
-        LinearLayout tree = new LinearLayout(this);
-        tree.setOrientation(LinearLayout.VERTICAL);
-        boolean any = addNotebookHierarchy(tree, null, 0, skipIds, onPick);
-        if (!any) {
-            tree.addView(panelText(getString(R.string.no_place_target), 14));
+        int margin = dp(8);
+        int hostW = layoutHost.getWidth() > 0 ? layoutHost.getWidth() : root.getWidth();
+        int hostH = layoutHost.getHeight() > 0 ? layoutHost.getHeight() : root.getHeight();
+        int panelW = Math.max(dp(280), hostW - 2 * margin);
+        int maxH = Math.max(dp(280), hostH - 2 * margin - list.getPaddingTop() - list.getPaddingBottom());
+        int innerW = Math.max(dp(200), panelW - list.getPaddingLeft() - list.getPaddingRight());
+
+        ArrayList<HierarchyRow> rows = new ArrayList<>();
+        collectNotebookHierarchy(rows, null, 0, skipIds, onPick);
+        if (rows.isEmpty()) {
+            rows.add(new HierarchyRow(getString(R.string.no_place_target), 0, null));
         }
         if (includeNewNotebook) {
-            addPanelButton(tree, getString(R.string.new_notebook_item), 0,
-                    () -> showNameForm(null, null, null, moveAfter));
+            rows.add(new HierarchyRow(getString(R.string.new_notebook_item), 0,
+                    () -> showNameForm(null, null, null, moveAfter)));
         }
+
+        int colMin = dp(180);
+        int rowH = dp(48);
+        int rowsFit = Math.max(1, maxH / rowH);
+        int byWidth = Math.max(1, innerW / colMin);
+        int byHeight = Math.max(1, (rows.size() + rowsFit - 1) / rowsFit);
+        int cols = rows.size() <= rowsFit ? 1 : Math.min(byWidth, byHeight);
+        int perCol = (rows.size() + cols - 1) / cols;
+        int colW = Math.max(colMin, innerW / cols);
+
+        LinearLayout columns = new LinearLayout(this);
+        columns.setOrientation(LinearLayout.HORIZONTAL);
+        for (int c = 0; c < cols; c++) {
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            int start = c * perCol;
+            int end = Math.min(rows.size(), start + perCol);
+            for (int i = start; i < end; i++) {
+                HierarchyRow row = rows.get(i);
+                if (row.action == null) {
+                    col.addView(panelText(row.label, 14));
+                } else {
+                    addPanelButton(col, row.label, row.depth, row.action);
+                }
+            }
+            columns.addView(col, new LinearLayout.LayoutParams(colW, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
+
+        View body = columns;
+        int contentW = colW * cols;
+        if (contentW > innerW) {
+            HorizontalScrollView hScroll = new HorizontalScrollView(this);
+            hScroll.setHorizontalScrollBarEnabled(false);
+            hScroll.addView(columns, new FrameLayout.LayoutParams(contentW, FrameLayout.LayoutParams.WRAP_CONTENT));
+            body = hScroll;
+        }
+        columns.measure(
+                View.MeasureSpec.makeMeasureSpec(contentW, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        int treeH = columns.getMeasuredHeight();
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(false);
-        scroll.addView(tree, matchWrap());
-        int margin = dp(8);
-        int hostH = layoutHost.getHeight() > 0 ? layoutHost.getHeight() : root.getHeight();
-        // Nearly full available height — only chrome safe margins left empty.
-        int maxH = Math.max(dp(280), hostH - 2 * margin - list.getPaddingTop() - list.getPaddingBottom());
-        tree.measure(
-                View.MeasureSpec.makeMeasureSpec(dp(320), View.MeasureSpec.AT_MOST),
-                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
-        int treeH = tree.getMeasuredHeight();
+        scroll.addView(body, matchWrap());
         LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 treeH > maxH ? maxH : LinearLayout.LayoutParams.WRAP_CONTENT);
         list.addView(scroll, scrollLp);
-        showOverlay(list, hierarchyMenuLp(list, layoutHost, anchor, margin), layoutHost);
+        showOverlay(list, hierarchyMenuLp(list, layoutHost, panelW, margin), layoutHost);
     }
 
     /**
-     * Tall hierarchy panel: top of the drawing area with safe margins, not
-     * tucked above the Move/⋮ chip (that left most of the screen unused).
+     * Wide hierarchy panel: nearly full drawing-area width with safe margins,
+     * top-aligned (not tucked above the Move/⋮ chip).
      */
     private FrameLayout.LayoutParams hierarchyMenuLp(
-            View content, FrameLayout host, View anchor, int margin) {
+            View content, FrameLayout host, int panelW, int margin) {
         content.measure(
-                View.MeasureSpec.makeMeasureSpec(Math.max(dp(280), host.getWidth() - 2 * margin),
-                        View.MeasureSpec.AT_MOST),
+                View.MeasureSpec.makeMeasureSpec(panelW, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(host.getHeight(), View.MeasureSpec.AT_MOST));
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT);
+                panelW, FrameLayout.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
         lp.topMargin = margin;
-        // Move (page chrome, right) → END; Place under (tab, usually left) → START.
-        boolean fromPageChrome = anchor != null && drawingArea != null
-                && isDescendantOf(anchor, drawingArea);
-        if (fromPageChrome) {
-            lp.gravity = Gravity.TOP | Gravity.END;
-            lp.rightMargin = margin;
-        } else {
-            lp.gravity = Gravity.TOP | Gravity.START;
-            lp.leftMargin = margin;
-        }
         return lp;
     }
 
-    private static boolean isDescendantOf(View child, View ancestor) {
-        View current = child;
-        while (current != null) {
-            if (current == ancestor) {
-                return true;
-            }
-            current = current.getParent() instanceof View ? (View) current.getParent() : null;
-        }
-        return false;
-    }
-
-    private boolean addNotebookHierarchy(
-            LinearLayout tree,
+    private void collectNotebookHierarchy(
+            ArrayList<HierarchyRow> rows,
             String parentId,
             int depth,
             HashSet<String> skipIds,
             NotebookPick onPick) {
-        boolean any = false;
         for (BoardRepository.NotebookInfo each : childrenOf(parentId)) {
             if (skipIds != null && skipIds.contains(each.id())) {
-                // Still walk children in case a skipped node has eligible cousins
-                // via another branch — skipIds already includes descendants of
-                // Place-under source, so children are also skipped.
+                // skipIds already includes Place-under source descendants.
                 continue;
             }
-            any = true;
             String id = each.id();
-            addPanelButton(tree, each.title(), depth, () -> onPick.onPick(id));
-            if (addNotebookHierarchy(tree, each.id(), depth + 1, skipIds, onPick)) {
-                any = true;
-            }
+            rows.add(new HierarchyRow(each.title(), depth, () -> onPick.onPick(id)));
+            collectNotebookHierarchy(rows, each.id(), depth + 1, skipIds, onPick);
         }
-        return any;
+    }
+
+    private static final class HierarchyRow {
+        final String label;
+        final int depth;
+        final Runnable action;
+
+        HierarchyRow(String label, int depth, Runnable action) {
+            this.label = label;
+            this.depth = depth;
+            this.action = action;
+        }
     }
 
     /**
@@ -2225,11 +2246,10 @@ public final class CanvasActivity extends Activity {
         void onPick(String notebookId);
     }
 
-    /** Roomier than {@link #panel()} for deep Move / Place-under trees. */
+    /** Wide panel for Move / Place-under multi-column trees. */
     private LinearLayout hierarchyPanel() {
         LinearLayout list = panel();
-        list.setMinimumWidth(dp(280));
-        list.setPadding(dp(10), dp(8), dp(10), dp(8));
+        list.setPadding(dp(8), dp(6), dp(8), dp(6));
         return list;
     }
 
