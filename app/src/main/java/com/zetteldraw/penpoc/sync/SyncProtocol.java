@@ -1,7 +1,6 @@
 package com.zetteldraw.penpoc.sync;
 
 import com.zetteldraw.penpoc.data.SyncStore;
-import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.PageLinkEntity;
@@ -42,11 +41,8 @@ final class SyncProtocol {
                     .put("base_rev", n.rev));
         }
         body.put("notebooks", notebooks);
-        JSONArray boards = new JSONArray();
-        for (BoardEntity b : batch.boards) {
-            boards.put(boardJson(b).put("base_rev", b.rev));
-        }
-        body.put("boards", boards);
+        // Tip never pushes BOARD ink (v136+); keep empty array for server validate.
+        body.put("boards", new JSONArray());
         JSONArray logs = new JSONArray();
         for (NotebookLogEntity log : batch.logs) {
             logs.put(logJson(log).put("base_rev", log.rev));
@@ -94,23 +90,7 @@ final class SyncProtocol {
             n.deletedAt = optLong(j, "deleted_at");
             page.notebooks.add(n);
         }
-        JSONArray boards = response.optJSONArray("boards");
-        for (int i = 0; boards != null && i < boards.length(); i++) {
-            JSONObject j = boards.getJSONObject(i);
-            BoardEntity b = new BoardEntity();
-            b.id = j.getString("id");
-            b.notebookId = optString(j, "notebook_id");
-            b.position = j.getString("position");
-            b.inkHash = optString(j, "ink_hash");
-            b.inkBytes = j.optLong("ink_bytes", 0L);
-            b.thumbHash = optString(j, "thumb_hash");
-            b.conflictOf = optString(j, "conflict_of");
-            b.createdAt = j.getLong("created_at");
-            b.updatedAt = j.getLong("updated_at");
-            b.rev = j.getLong("rev");
-            b.deletedAt = optLong(j, "deleted_at");
-            page.boards.add(b);
-        }
+        // Pull boards are ignored (server emits []); catch-up ink is Ready .zdl only.
         JSONArray logs = response.optJSONArray("logs");
         for (int i = 0; logs != null && i < logs.length(); i++) {
             page.logs.add(logFrom(logs.getJSONObject(i)));
@@ -187,13 +167,6 @@ final class SyncProtocol {
         log.rev = j.getLong("rev");
         log.deletedAt = optLong(j, "deleted_at");
         return log;
-    }
-
-    private static JSONObject boardJson(BoardEntity b) throws JSONException {
-        return inkJson(b.id, b.notebookId, b.inkHash, b.inkBytes, b.conflictOf,
-                b.createdAt, b.updatedAt, b.deletedAt)
-                .put("position", b.position)
-                .put("thumb_hash", orNull(b.thumbHash));
     }
 
     private static Object orNull(Object value) {

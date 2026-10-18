@@ -27,7 +27,7 @@ function fakeStorage(present: Set<string>): InkStorage {
 }
 
 describe("backupStatus", () => {
-  it("is ready when every uncovered board and notebook_log ink blob exists", async () => {
+  it("blocks Hand-off while uncovered BOARD ink remains even if blobs exist", async () => {
     const hash = "ab".repeat(32);
     const pool = fakePool([
       { rows: [{ n: 1 }] },
@@ -38,10 +38,12 @@ describe("backupStatus", () => {
       kind: "user",
       userId: "google-sub",
     });
-    expect(status.ready_for_device_restore).toBe(true);
+    expect(status.ok).toBe(true);
+    expect(status.ready_for_device_restore).toBe(false);
     expect(status.boards_with_ink).toBe(1);
     expect(status.logs_with_ink).toBe(1);
     expect(status.missing).toEqual([]);
+    expect(status.note).toMatch(/Uncovered page blob/i);
   });
 
   it("fails when a notebook_log blob is missing even if boards look fine", async () => {
@@ -61,7 +63,7 @@ describe("backupStatus", () => {
     expect(status.missing).toEqual([{ table: "notebook_logs", id: "l1", ink_hash: logHash }]);
   });
 
-  it("treats Ready-covered board residue as non-restore (boards query returns none)", async () => {
+  it("is ready only when Ready covers every inked notebook and log blobs exist", async () => {
     // SQL filters covered boards; the boards response is already uncovered-only.
     const logHash = "11".repeat(32);
     const pool = fakePool([
@@ -77,6 +79,6 @@ describe("backupStatus", () => {
     expect(status.boards_with_ink).toBe(0);
     expect(status.logs_with_ink).toBe(1);
     expect(status.missing).toEqual([]);
-    expect(status.note).toMatch(/Ready notebook logs cover/i);
+    expect(status.note).toMatch(/Ready notebook logs cover every inked notebook/i);
   });
 });

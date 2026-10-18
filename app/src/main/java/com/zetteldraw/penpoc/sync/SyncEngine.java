@@ -5,7 +5,6 @@ import android.util.Log;
 
 import com.zetteldraw.penpoc.LaunchLog;
 import com.zetteldraw.penpoc.data.SyncStore;
-import com.zetteldraw.penpoc.data.db.BoardEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 
 import org.json.JSONException;
@@ -52,7 +51,6 @@ public final class SyncEngine {
 
     public static final class Result {
         public int pushed;
-        public int pulledBoards;
         public int pulledNotebooks;
         /** True when this pass pulled before pushing (cloud seeded a new device). */
         public boolean restoredFromCloud;
@@ -192,7 +190,7 @@ public final class SyncEngine {
                 return;
             }
             store.applyPushResults(batch, results);
-            result.pushed += batch.notebooks.size() + batch.boards.size() + batch.logs.size();
+            result.pushed += batch.notebooks.size() + batch.logs.size() + batch.links.size();
             if (store.outboxSize() >= before) {
                 return;
             }
@@ -209,7 +207,6 @@ public final class SyncEngine {
             }
             fetchMissingBlobs(page);
             store.applyPull(page);
-            result.pulledBoards += page.boards.size();
             result.pulledNotebooks += page.notebooks.size();
             if (!page.hasMore) {
                 return;
@@ -218,15 +215,13 @@ public final class SyncEngine {
     }
 
     /**
-     * Pull JSON omits large Base64 blobs. Skip getBlob when local hash already
-     * matches (applyPull meta-only omit for logs and legacy boards).
+     * Pull JSON omits large Base64 blobs. Skip getBlob when local log hash
+     * already matches (applyPull meta-only omit). BOARD blobs are not fetched —
+     * Hand-off requires Ready-cover; catch-up ink is LOG-only.
      */
     private void fetchMissingBlobs(SyncStore.PullPage page) throws IOException {
         for (NotebookLogEntity log : page.logs) {
             ensureBlob(page.blobs, log.inkHash, log.deletedAt, store.localInkLogHash(log.id));
-        }
-        for (BoardEntity board : page.boards) {
-            ensureBlob(page.blobs, board.inkHash, board.deletedAt, store.localBoardInkHash(board.id));
         }
     }
 

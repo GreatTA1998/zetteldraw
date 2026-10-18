@@ -160,6 +160,15 @@ public interface BoardRepository {
     boolean placeNotebook(String notebookId, String parentId);
 
     /**
+     * Reorders {@code notebookId} among its siblings so it sits immediately
+     * before {@code beforeSiblingId}, or last among those siblings when that
+     * is null. Uses one fractional {@code position} write (no sibling rewrite).
+     * False when either id is missing, parents differ, or {@code beforeSiblingId}
+     * is the notebook itself. Already in that slot is a no-op success.
+     */
+    boolean reorderNotebook(String notebookId, String beforeSiblingId);
+
+    /**
      * Runs on the UI thread after sync pulled changes in, once per sync pass.
      * Each screen adds its own and removes only its own, so one screen
      * closing can't silence another.

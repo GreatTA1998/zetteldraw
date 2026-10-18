@@ -6,8 +6,9 @@ package com.zetteldraw.penpoc.data;
  * Calls arrive on the repository's background executor; failures are
  * swallowed because the mirror is never the source of truth.
  *
- * <p>BoardEntity {@code .zdi} page-file copies are not mirrored — migration
- * residue lives only in app-private storage until {@code ensureSheet}.
+ * <p>Index catalogs Ready {@code .zdl} ({@code ink_format: zdl}). BoardEntity
+ * {@code .zdi} is not mirrored — migration residue stays app-private until
+ * {@code ensureSheet}.
  */
 public interface InkMirror {
     void writeIndex(String json);
