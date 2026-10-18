@@ -6,6 +6,7 @@ import com.zetteldraw.penpoc.InkRenderer;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -172,40 +173,51 @@ public final class NotebookPaper {
         if (bytes[3] != VERSION) {
             throw new IOException("unsupported notebook log " + bytes[3]);
         }
-        ByteBuffer in = ByteBuffer.wrap(bytes);
-        in.position(4);
-        int sliceHeight = in.getInt();
-        int sliceCount = in.getInt();
-        if (sliceCount < 0 || sliceCount > 100_000) {
-            throw new IOException("bad slice count " + sliceCount);
-        }
-        NotebookPaper paper = new NotebookPaper(sliceHeight, bytes);
-        for (int i = 0; i < sliceCount; i++) {
-            int height = in.getInt();
-            if (height <= 0) {
-                throw new IOException("bad slice height");
+        try {
+            ByteBuffer in = ByteBuffer.wrap(bytes);
+            in.position(4);
+            int sliceHeight = in.getInt();
+            int sliceCount = in.getInt();
+            if (sliceCount < 0 || sliceCount > 100_000) {
+                throw new IOException("bad slice count " + sliceCount);
             }
-            paper.heights.add(height);
-            paper.sliceIds.add(readId(in));
-        }
-        int good = in.position();
-        while (in.remaining() > 0) {
-            if (in.remaining() < 5) {
-                // A crash mid-append leaves a short tail. Earlier records stay whole.
-                break;
+            NotebookPaper paper = new NotebookPaper(sliceHeight, bytes);
+            for (int i = 0; i < sliceCount; i++) {
+                int height = in.getInt();
+                if (height <= 0) {
+                    throw new IOException("bad slice height");
+                }
+                paper.heights.add(height);
+                paper.sliceIds.add(readId(in));
             }
-            int op = in.get() & 0xff;
-            int len = in.getInt();
-            if (len < 0 || len > in.remaining()) {
-                break;
+            int good = in.position();
+            while (in.remaining() > 0) {
+                if (in.remaining() < 5) {
+                    // A crash mid-append leaves a short tail. Earlier records stay whole.
+                    break;
+                }
+                int op = in.get() & 0xff;
+                int len = in.getInt();
+                if (len < 0 || len > in.remaining()) {
+                    break;
+                }
+                int start = in.position();
+                try {
+                    paper.applyOp(op, ByteBuffer.wrap(bytes, start, len));
+                } catch (IOException | BufferUnderflowException | NegativeArraySizeException e) {
+                    // Heal-in-place: keep the good prefix, drop this op and the rest.
+                    // Do not fail the whole notebook — hundreds of pages may already be Ready.
+                    break;
+                }
+                in.position(start + len);
+                good = in.position();
             }
-            int start = in.position();
-            paper.applyOp(op, ByteBuffer.wrap(bytes, start, len));
-            in.position(start + len);
-            good = in.position();
+            paper.log = Arrays.copyOf(bytes, good);
+            return paper;
+        } catch (BufferUnderflowException e) {
+            // Header itself is unreadable — caller may quarantine + empty Ready.
+            throw new IOException("corrupt notebook ink log", e);
         }
-        paper.log = Arrays.copyOf(bytes, good);
-        return paper;
     }
 
     public byte[] bytes() {
@@ -1055,9 +1067,19 @@ public final class NotebookPaper {
         return raw.toByteArray();
     }
 
-    private static InkRenderer.InkStroke readStroke(ByteBuffer in) {
+    /** Bytes per point in the stroke payload (x,y,pressure,size,tiltX,tiltY,dt,width). */
+    private static final int STROKE_POINT_BYTES = 28;
+
+    private static InkRenderer.InkStroke readStroke(ByteBuffer in) throws IOException {
         String id = readId(in);
+        if (in.remaining() < 12) {
+            throw new IOException("truncated stroke");
+        }
         int n = in.getInt();
+        // Refuse absurd counts before allocating — corrupt len can OOM the process.
+        if (n < 0 || n > in.remaining() / STROKE_POINT_BYTES) {
+            throw new IOException("bad stroke point count " + n);
+        }
         long t0 = in.getLong();
         ArrayList<TouchPoint> points = new ArrayList<>(n);
         float[] widths = new float[n];
@@ -1103,15 +1125,27 @@ public final class NotebookPaper {
         out.write(bytes);
     }
 
-    private static String readId(ByteBuffer in) {
+    private static String readId(ByteBuffer in) throws IOException {
+        if (in.remaining() < 2) {
+            throw new IOException("truncated id");
+        }
         int n = in.getShort() & 0xffff;
+        if (n > in.remaining()) {
+            throw new IOException("truncated id");
+        }
         byte[] bytes = new byte[n];
         in.get(bytes);
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
-    private static List<String> readIds(ByteBuffer in) {
+    private static List<String> readIds(ByteBuffer in) throws IOException {
+        if (in.remaining() < 4) {
+            throw new IOException("truncated id list");
+        }
         int n = in.getInt();
+        if (n < 0 || n > 100_000) {
+            throw new IOException("bad id count " + n);
+        }
         ArrayList<String> ids = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
             ids.add(readId(in));

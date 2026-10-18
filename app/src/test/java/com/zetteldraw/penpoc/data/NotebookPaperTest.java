@@ -5,6 +5,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import android.app.Application;
 
@@ -16,7 +17,13 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -311,5 +318,56 @@ public class NotebookPaperTest {
         assertEquals("p2", again.stroke("p2").id);
         assertTrue(again.containsInk(0));
         assertTrue(again.containsInk(1));
+    }
+
+    /** Truncated header id must throw IOException — not BufferUnderflowException. */
+    @Test
+    public void replayTruncatedSliceIdThrowsIoException() {
+        // empty() has sliceCount=0 (12-byte header). Build a 1-slice header then chop the id.
+        ByteBuffer buf = ByteBuffer.allocate(64).order(ByteOrder.BIG_ENDIAN);
+        buf.put((byte) 'Z').put((byte) 'D').put((byte) 'L').put((byte) 1);
+        buf.putInt(200);
+        buf.putInt(1);
+        buf.putInt(200);
+        buf.putShort((short) 36);
+        buf.put(new byte[]{1, 2, 3, 4}); // claim 36-byte id, write 4
+        byte[] truncated = Arrays.copyOf(buf.array(), buf.position());
+        try {
+            NotebookPaper.replay(truncated);
+            fail("expected IOException");
+        } catch (IOException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("corrupt")
+                    || e.getMessage().contains("truncated"));
+        }
+    }
+
+    /**
+     * Corrupt APPEND with an absurd point count must heal by keeping the good
+     * prefix — not OOM and not fail the whole notebook.
+     */
+    @Test
+    public void replayAbsurdStrokePointCountKeepsPrefix() throws Exception {
+        NotebookPaper paper = NotebookPaper.empty(200);
+        paper.appendStroke(line("keep-me", 4f, 10f, 20f));
+        byte[] base = paper.bytes();
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        DataOutputStream out = new DataOutputStream(payload);
+        byte[] id = "deadbeef-dead-dead-dead-deadbeefdead".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        out.writeShort(id.length);
+        out.write(id);
+        out.writeInt(50_000_000);
+        out.writeLong(1_000L);
+        byte[] body = payload.toByteArray();
+        ByteBuffer record = ByteBuffer.allocate(5 + body.length).order(ByteOrder.BIG_ENDIAN);
+        record.put((byte) 1);
+        record.putInt(body.length);
+        record.put(body);
+        byte[] corrupt = new byte[base.length + record.position()];
+        System.arraycopy(base, 0, corrupt, 0, base.length);
+        System.arraycopy(record.array(), 0, corrupt, base.length, record.position());
+        NotebookPaper healed = NotebookPaper.replay(corrupt);
+        assertEquals(1, healed.strokes().size());
+        assertEquals("keep-me", healed.strokes().get(0).id);
+        assertTrue(healed.bytes().length <= base.length);
     }
 }

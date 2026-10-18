@@ -183,27 +183,69 @@ public final class InkSheetStore {
             existing = deps.ink().readLog(sheetId);
         } catch (IOException e) {
             Log.e(TAG, "ink log unreadable " + sheetId, e);
-            return false;
+            existing = null;
         }
         if (existing != null) {
             try {
                 RoomBoardRepository.logReplays.incrementAndGet();
-                installSheet(notebookId, sheetId, NotebookPaper.replay(existing), existing.length, false);
+                NotebookPaper paper = NotebookPaper.replay(existing);
+                byte[] healed = paper.bytes();
+                // Prefix heal (bad tail skipped): rewrite in place so the next open
+                // is clean. Never queue — do not push a truncated body over cloud.
+                if (healed.length < existing.length) {
+                    deps.ink().writeLog(sheetId, healed);
+                    LaunchLog.mark("healed ink log " + sheetId + " "
+                            + existing.length + "→" + healed.length + " bytes");
+                }
+                installSheet(notebookId, sheetId, paper, healed.length, false);
                 return isSheetReady(notebookId);
-            } catch (IOException e) {
-                Log.e(TAG, "ink log will not replay " + sheetId, e);
-                return false;
+            } catch (IOException | RuntimeException e) {
+                // Header-level corruption: quarantine the file (keep bytes on disk),
+                // then try page-file migration or empty Ready so *this* sheet opens
+                // and other notebooks stay usable. Never wipe the library.
+                Log.e(TAG, "ink log will not replay " + sheetId + "; quarantining", e);
+                File quarantined = deps.ink().quarantineLog(sheetId);
+                LaunchLog.mark("quarantined ink log " + sheetId
+                        + (quarantined == null ? "" : (" → " + quarantined.getName())));
+                List<NotebookPaper.SourcePage> recovered =
+                        deps.migrationSources(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
+                if (recovered != null && !recovered.isEmpty()) {
+                    if (installFromSources(notebookId, recovered, pageHeight, false)) {
+                        return true;
+                    }
+                }
+                return installEmptyReady(notebookId, pageHeight);
             }
         }
         synchronized (deps.lock()) {
             if (deps.dao().notebookLog(sheetId) != null) {
-                LaunchLog.mark("ink log missing for " + sheetId + "; page files left as they are");
-                return false;
+                // Meta says log-backed but file gone — open blank locally; cloud
+                // blob untouched (queue=false). Hand-off only if user chooses later.
+                LaunchLog.mark("ink log missing for " + sheetId + "; empty Ready heal");
+                return installEmptyReady(notebookId, pageHeight);
             }
         }
         List<NotebookPaper.SourcePage> sources =
                 deps.migrationSources(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
         return installFromSources(notebookId, sources, pageHeight, true);
+    }
+
+    /**
+     * Last-resort local open: blank Ready sheet so UI paints. Does not delete
+     * quarantined {@code .zdl.corrupt.*} files and does not queue cloud push.
+     */
+    private boolean installEmptyReady(String notebookId, int pageHeight) {
+        String sheetId = NotebookPaper.sheetId(notebookId);
+        NotebookPaper empty = NotebookPaper.empty(pageHeight);
+        byte[] bytes = empty.bytes();
+        try {
+            deps.ink().writeLog(sheetId, bytes);
+        } catch (IOException e) {
+            Log.e(TAG, "empty Ready heal write failed " + sheetId, e);
+            return false;
+        }
+        installSheet(notebookId, sheetId, empty, bytes.length, false);
+        return isSheetReady(notebookId);
     }
 
     /**

@@ -82,6 +82,22 @@ public class InkFileStore {
         return readFile(logFile(sheetId));
     }
 
+    /**
+     * Moves a bad {@code .zdl} aside so open can heal without deleting ink.
+     * Returns the quarantine path, or null when there was nothing to move.
+     */
+    public File quarantineLog(String sheetId) {
+        File log = logFile(sheetId);
+        if (!log.isFile()) {
+            return null;
+        }
+        File dest = new File(dir, sheetId + ".zdl.corrupt." + System.currentTimeMillis());
+        if (!log.renameTo(dest)) {
+            return null;
+        }
+        return dest;
+    }
+
     public void discard(File staged) {
         if (staged != null) {
             //noinspection ResultOfMethodCallIgnored
@@ -99,7 +115,11 @@ public class InkFileStore {
         if (!file.exists()) {
             return null;
         }
-        byte[] buf = new byte[(int) file.length()];
+        long length = file.length();
+        if (length < 0 || length > Integer.MAX_VALUE) {
+            throw new IOException("ink file too large " + file);
+        }
+        byte[] buf = new byte[(int) length];
         try (FileInputStream in = new FileInputStream(file)) {
             int read = 0;
             while (read < buf.length) {
