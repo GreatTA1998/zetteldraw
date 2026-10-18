@@ -21,6 +21,7 @@ import com.onyx.android.sdk.pen.data.TouchPointList;
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.InkFileStore;
 import com.zetteldraw.penpoc.data.InkMirror;
+import com.zetteldraw.penpoc.data.NotebookPaper;
 import com.zetteldraw.penpoc.data.RoomBoardRepository;
 import com.zetteldraw.penpoc.data.SlowInkFileStore;
 import com.zetteldraw.penpoc.data.ZettelData;
@@ -70,10 +71,9 @@ public class InkNavigationTest {
 
     @Test
     public void aStrokeKeepsThePictureItsPenWentDownOn() {
-        Board a = new Board("a", 1L);
-        Board b = new Board("b", 2L);
+        NotebookPaper paper = NotebookPaper.empty(1000);
         PageInkView ink = new PageInkView(context);
-        ink.setPages(Arrays.asList(a, b), new int[]{1000, 1000}, 24);
+        ink.setPages(slices(paper), new int[]{1000, 1000}, 0);
         idle();
 
         ink.rawInput().onBeginRawDrawing(false, points(100f, 900f).get(0));
@@ -83,17 +83,16 @@ public class InkNavigationTest {
         ink.rawInput().onEndRawDrawing(false, points(100f, 900f).get(0));
         idle();
 
-        assertEquals("pen-up after the scroll applied still maps with pen-down's picture", 1, a.strokes.size());
-        assertTrue(b.isBlank());
-        assertEquals(900f, a.strokes.get(0).points.get(0).y, 0f);
+        assertEquals("pen-up after the scroll applied still maps with pen-down's picture", 1, paper.strokes().size());
+        assertEquals(0, paper.lastInkedSlice());
+        assertEquals(900f, paper.strokes().get(0).points.get(0).y, 0f);
     }
 
     @Test
     public void callbacksFromTheReaderThreadMapWithThePenDownPicture() throws Exception {
-        Board a = new Board("a", 1L);
-        Board b = new Board("b", 2L);
+        NotebookPaper paper = NotebookPaper.empty(1000);
         PageInkView ink = new PageInkView(context);
-        ink.setPages(Arrays.asList(a, b), new int[]{1000, 1000}, 24);
+        ink.setPages(slices(paper), new int[]{1000, 1000}, 0);
         idle();
 
         Thread reader = new Thread(() -> {
@@ -106,9 +105,9 @@ public class InkNavigationTest {
         ink.setContentScrollY(800);
         idle();
 
-        assertEquals("a non-stylus renderer calls from its own thread; same result", 1, a.strokes.size());
-        assertEquals(900f, a.strokes.get(0).points.get(0).y, 0f);
-        assertTrue(b.isBlank());
+        assertEquals("a non-stylus renderer calls from its own thread; same result", 1, paper.strokes().size());
+        assertEquals(900f, paper.strokes().get(0).points.get(0).y, 0f);
+        assertEquals(0, paper.lastInkedSlice());
     }
 
     @Test
@@ -134,31 +133,30 @@ public class InkNavigationTest {
 
     @Test
     public void aStrokeQueuedBeforeAScrollKeepsTheScrollItWasDrawnAt() {
-        Board a = new Board("a", 1L);
-        Board b = new Board("b", 2L);
+        NotebookPaper paper = NotebookPaper.empty(1000);
         PageInkView ink = new PageInkView(context);
-        ink.setPages(Arrays.asList(a, b), new int[]{1000, 1000}, 24);
+        ink.setPages(slices(paper), new int[]{1000, 1000}, 0);
         idle();
 
         main.post(() -> ink.addStroke(points(100f, 900f)));
         ink.setContentScrollY(800);
         idle();
 
-        assertEquals("drawn near the bottom of page 1, stays there", 1, a.strokes.size());
-        assertTrue(b.isBlank());
-        assertEquals(900f, a.strokes.get(0).points.get(0).y, 0f);
+        assertEquals("drawn near the bottom of page 1, stays there", 1, paper.strokes().size());
+        assertEquals(0, paper.lastInkedSlice());
+        assertEquals(900f, paper.strokes().get(0).points.get(0).y, 0f);
 
         ink.addStroke(points(100f, 900f));
-        assertEquals("once the scrolled picture is up, the same spot is on page 2", 1, b.strokes.size());
-        assertEquals(900f + 800f - 1024f, b.strokes.get(0).points.get(0).y, 0f);
+        assertEquals(2, paper.strokes().size());
+        assertEquals("once the scrolled picture is up, the same spot is on page 2", 1, paper.lastInkedSlice());
+        assertEquals(900f + 800f, paper.strokes().get(1).points.get(0).y, 0f);
     }
 
     @Test
     public void strokesQueuedDuringAStallIgnoreTheFlingThatFollows() {
-        Board a = new Board("a", 1L);
-        Board b = new Board("b", 2L);
+        NotebookPaper paper = NotebookPaper.empty(1000);
         PageInkView ink = new PageInkView(context);
-        ink.setPages(Arrays.asList(a, b), new int[]{1000, 1000}, 24);
+        ink.setPages(slices(paper), new int[]{1000, 1000}, 0);
         ink.setContentScrollY(100);
         idle();
 
@@ -171,10 +169,10 @@ public class InkNavigationTest {
         }
         idle();
 
-        assertEquals(3, a.strokes.size());
-        assertTrue("nothing spills onto the next page", b.isBlank());
+        assertEquals(3, paper.strokes().size());
+        assertEquals("nothing spills onto the next page", 0, paper.lastInkedSlice());
         for (int i = 0; i < ys.length; i++) {
-            assertEquals(ys[i] + 100f, a.strokes.get(i).points.get(0).y, 0f);
+            assertEquals(ys[i] + 100f, paper.strokes().get(i).points.get(0).y, 0f);
         }
     }
 
@@ -268,9 +266,8 @@ public class InkNavigationTest {
         Board scratch = repo.scratchpadPages().get(0);
         assertTrue(ink.inkEnabled());
 
-        // Ready snappy open reads pages() on the UI thread (no loader wait). Holding the
-        // repo lock across taps is no longer the right probe — that blocked the snappy
-        // path for 20s. Probe that rapid taps stay snappy and the last tab wins.
+        // One load spine (synchronous in tests): rapid taps must stay fast and
+        // the last tab must win. Holding the repo lock across taps is not the probe.
         long slowest = 0;
         for (String tab : new String[]{"comedy", "journal", "comedy", "journal", "comedy"}) {
             long before = System.nanoTime();
@@ -373,6 +370,19 @@ public class InkNavigationTest {
         @Override
         public void onHistoryChanged() {
         }
+    }
+
+    private static List<Board> slices(NotebookPaper paper) {
+        ArrayList<Board> boards = new ArrayList<>();
+        for (int i = 0; i < 2; i++) {
+            Board board = new Board(i == 0 ? "a" : "b", 1L + i);
+            board.paper = paper;
+            board.sliceIndex = i;
+            board.paperOrigin = 1000f * i;
+            board.slicePx = 1000;
+            boards.add(board);
+        }
+        return boards;
     }
 
     private static ArrayList<TouchPoint> points(float x, float y) {

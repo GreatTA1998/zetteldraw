@@ -932,16 +932,8 @@ public final class CanvasActivity extends Activity {
         pagesLoaded = true;
         collectionId = id;
         styleTabs();
-        // Snappy path: Ready sheet → same showReady spine as async load.
-        String notebook = notebookKey(id);
-        if (pageHeight > 0 && repository.isSheetReady(notebook)) {
-            List<Board> ready = repository.pages(notebook);
-            if (ready != null && !ready.isEmpty()) {
-                ++loadGeneration;
-                showReady(id, ready, keepScroll);
-                return;
-            }
-        }
+        // One load+retry spine for Ready and not-Ready. (Snappy early-return
+        // skipped scheduleLoadRetry and left blank after clearShownPages.)
         // Different collection not Ready yet: never leave the previous notebook's
         // ink painted under the new tab selection (Dating/Stacey "same sheet" bug).
         // Same-collection cold reload may keep the old list briefly with pen held.
@@ -1144,7 +1136,7 @@ public final class CanvasActivity extends Activity {
         if (loaded.pages().isEmpty()) {
             return;
         }
-        // Same Ready paint spine as snappy open / reload / delete.
+        // Same Ready paint spine as reload / delete.
         showReady(loaded.id(), loaded.pages(), loaded.keepScroll());
         if (!firstListShown) {
             firstListShown = true;
