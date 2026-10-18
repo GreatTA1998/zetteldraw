@@ -1,6 +1,7 @@
 package com.zetteldraw.penpoc;
 
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -30,9 +31,11 @@ import android.text.TextUtils;
 import android.text.style.AbsoluteSizeSpan;
 import android.text.style.StyleSpan;
 import android.util.TypedValue;
+import android.view.DragEvent;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.WindowInsets;
@@ -70,9 +73,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Top bar: Scratchpad | top-level notebooks | +. A selected notebook with
- * children opens another bar of only those children. Tab underline is the
- * open notebook only (not ancestors). Each collection is a continuous
- * vertical scroll of its own pages.
+ * children opens another bar of only those children. Long-press a notebook
+ * name then drag to reorder siblings on that strip (one fractional position
+ * write); long-press without a drag still opens Rename / Place / Delete.
+ * Scratchpad stays pinned. Tab underline is the open notebook only (not
+ * ancestors). Each collection is a continuous vertical scroll of its own pages.
  */
 public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
@@ -128,6 +133,12 @@ public final class CanvasActivity extends Activity {
     private String reorderSourceRef;
     /** Notebook id of the reorder source ({@code null} = Scratchpad). */
     private String reorderSourceNotebookId;
+    /**
+     * Top-strip notebook drag: after long-press starts a drag, show the
+     * Rename/Place/Delete menu on cancel only when the drag never reordered.
+     */
+    private String pendingNotebookMenuId;
+    private boolean notebookDragReordered;
     private View toolbar;
     private PageInkView inkView;
     private PageScroller scroller;
@@ -431,7 +442,8 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Scratchpad pinned left; the notebook tabs scroll, with + after the last
-     * one. Long-press a tab for its Rename / Delete menu.
+     * one. Long-press a tab for Rename / Place / Delete; long-press then drag
+     * reorders siblings on the strip (not a page Reorder mode / snackbar).
      */
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
@@ -682,6 +694,68 @@ public final class CanvasActivity extends Activity {
         LinearLayout.LayoutParams addLp = wrap();
         addLp.leftMargin = dp(4);
         strip.addView(plus, addLp);
+        // Drop on the trailing + = move to end among this strip's siblings.
+        plus.setOnDragListener((v, event) -> onStripEndDrag(strip, event));
+    }
+
+    /** Drop on a strip's + button places the dragged notebook last among siblings. */
+    private boolean onStripEndDrag(LinearLayout strip, DragEvent event) {
+        NotebookTab dragged = dragTabOf(event);
+        if (dragged == null || dragged.getParent() != strip) {
+            return false;
+        }
+        switch (event.getAction()) {
+            case DragEvent.ACTION_DRAG_STARTED:
+                return true;
+            case DragEvent.ACTION_DROP:
+                return commitNotebookReorder(dragged, null);
+            case DragEvent.ACTION_DRAG_ENDED:
+                onNotebookDragEnded(event);
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    private static NotebookTab dragTabOf(DragEvent event) {
+        Object local = event.getLocalState();
+        return local instanceof NotebookTab ? (NotebookTab) local : null;
+    }
+
+    /**
+     * Insert {@code dragged} immediately before {@code before}, or at the end
+     * of its sibling strip when {@code before} is null. Same-parent only.
+     */
+    private boolean commitNotebookReorder(NotebookTab dragged, NotebookTab before) {
+        if (dragged == null) {
+            return false;
+        }
+        String beforeId = before == null ? null : before.id;
+        if (!repository.reorderNotebook(dragged.id, beforeId)) {
+            return false;
+        }
+        notebookDragReordered = true;
+        pendingNotebookMenuId = null;
+        rebuildNotebookTabs(repository.notebooks());
+        if (trail.contains(dragged.id) || Objects.equals(notebookId, dragged.id)) {
+            openNotebook(dragged.id, null);
+        } else {
+            styleTabs();
+        }
+        return true;
+    }
+
+    private void onNotebookDragEnded(DragEvent event) {
+        if (event.getAction() != DragEvent.ACTION_DRAG_ENDED) {
+            return;
+        }
+        String menuId = pendingNotebookMenuId;
+        pendingNotebookMenuId = null;
+        boolean reordered = notebookDragReordered;
+        notebookDragReordered = false;
+        if (menuId != null && !reordered && !event.getResult()) {
+            showNotebookMenu(menuId);
+        }
     }
 
     private List<BoardRepository.NotebookInfo> childrenOf(String parentId) {
@@ -2867,29 +2941,30 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * One notebook in the top bar. Tap opens it; long-press opens it and its
-     * Rename / Delete menu.
+     * One notebook in a nav strip. Tap opens it. Long-press then drag reorders
+     * among siblings; long-press without a drag (or a canceled drag) opens
+     * Rename / Place / Delete — not the page Reorder snackbar mode.
      */
     private final class NotebookTab extends LinearLayout {
         final String id;
+        final String parentId;
         final int depth;
         final Button label;
 
         NotebookTab(Context context, BoardRepository.NotebookInfo info, int depth) {
             super(context);
             id = info.id();
+            parentId = info.parentId();
             this.depth = depth;
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
             label = new Button(context, null, android.R.attr.borderlessButtonStyle);
             styleTabLabel(label, info.title());
             label.setMaxWidth(dp(220));
-            onTap(label, v -> openNotebook(id, null));
-            onLongTap(label, v -> {
-                openNotebook(id, null);
-                showNotebookMenu(id);
-                return true;
-            });
+            label.setSoundEffectsEnabled(false);
+            label.setOnClickListener(v -> openNotebook(id, null));
+            attachNotebookTabTouch(label, this);
+            setOnDragListener((v, event) -> onNotebookTabDrag(this, event));
             addView(label, wrap());
             setCurrent(false);
         }
@@ -2898,6 +2973,130 @@ public final class CanvasActivity extends Activity {
             styleTab(this, current);
             inkLabel(label, current);
         }
+    }
+
+    /**
+     * Long-press arms reorder; move past touch slop starts a drag. Long-press
+     * then release without a drag opens the notebook menu (same as before).
+     */
+    private void attachNotebookTabTouch(Button label, NotebookTab tab) {
+        final int slop = ViewConfiguration.get(label.getContext()).getScaledTouchSlop();
+        final int longMs = ViewConfiguration.getLongPressTimeout();
+        final float[] down = new float[2];
+        final boolean[] armed = {false};
+        final boolean[] dragging = {false};
+        final Runnable arm = () -> {
+            armed[0] = true;
+            ViewParent parent = label.getParent();
+            if (parent != null) {
+                parent.requestDisallowInterceptTouchEvent(true);
+            }
+        };
+        label.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    UiClick.play(v.getContext());
+                    down[0] = event.getX();
+                    down[1] = event.getY();
+                    armed[0] = false;
+                    dragging[0] = false;
+                    v.removeCallbacks(arm);
+                    v.postDelayed(arm, longMs);
+                    return false;
+                case MotionEvent.ACTION_MOVE: {
+                    float dx = event.getX() - down[0];
+                    float dy = event.getY() - down[1];
+                    if (dx * dx + dy * dy <= slop * (float) slop) {
+                        return false;
+                    }
+                    v.removeCallbacks(arm);
+                    if (armed[0] && !dragging[0]) {
+                        dragging[0] = true;
+                        openNotebook(tab.id, null);
+                        dismissOverlay();
+                        pendingNotebookMenuId = tab.id;
+                        notebookDragReordered = false;
+                        ClipData data = ClipData.newPlainText("notebook", tab.id);
+                        v.startDragAndDrop(data, new View.DragShadowBuilder(v), tab, 0);
+                        return true;
+                    }
+                    return dragging[0];
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    v.removeCallbacks(arm);
+                    if (armed[0] && !dragging[0]
+                            && event.getActionMasked() == MotionEvent.ACTION_UP) {
+                        openNotebook(tab.id, null);
+                        showNotebookMenu(tab.id);
+                        return true;
+                    }
+                    return dragging[0];
+                default:
+                    return false;
+            }
+        });
+        // performLongClick / a11y: same menu. Touch long-press is handled above
+        // (arm → drag or menu on release); framework long-click must stay off so
+        // it does not open the menu before a drag can start.
+        label.setOnLongClickListener(v -> {
+            openNotebook(tab.id, null);
+            showNotebookMenu(tab.id);
+            return true;
+        });
+        label.setLongClickable(false);
+    }
+
+    private boolean onNotebookTabDrag(NotebookTab target, DragEvent event) {
+        NotebookTab dragged = dragTabOf(event);
+        if (dragged == null || dragged == target) {
+            if (event.getAction() == DragEvent.ACTION_DRAG_ENDED) {
+                onNotebookDragEnded(event);
+            }
+            return dragged != null;
+        }
+        if (!Objects.equals(dragged.parentId, target.parentId)
+                || dragged.depth != target.depth
+                || dragged.getParent() != target.getParent()) {
+            return false;
+        }
+        switch (event.getAction()) {
+            case DragEvent.ACTION_DRAG_STARTED:
+                return true;
+            case DragEvent.ACTION_DRAG_ENTERED:
+            case DragEvent.ACTION_DRAG_LOCATION:
+            case DragEvent.ACTION_DRAG_EXITED:
+                return true;
+            case DragEvent.ACTION_DROP: {
+                // Left half → insert before target; right half → before the next sibling.
+                NotebookTab before = event.getX() < target.getWidth() / 2f
+                        ? target
+                        : nextSiblingTab(target);
+                return commitNotebookReorder(dragged, before);
+            }
+            case DragEvent.ACTION_DRAG_ENDED:
+                onNotebookDragEnded(event);
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** Next notebook tab in the same strip, or null when {@code tab} is last. */
+    private NotebookTab nextSiblingTab(NotebookTab tab) {
+        ViewParent parent = tab.getParent();
+        if (!(parent instanceof LinearLayout)) {
+            return null;
+        }
+        LinearLayout strip = (LinearLayout) parent;
+        int at = strip.indexOfChild(tab);
+        for (int i = at + 1; i < strip.getChildCount(); i++) {
+            View child = strip.getChildAt(i);
+            if (child instanceof NotebookTab) {
+                return (NotebookTab) child;
+            }
+        }
+        return null;
     }
 
     private void updateExcludeRects() {

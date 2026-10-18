@@ -1442,6 +1442,66 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
+    @Override
+    public boolean reorderNotebook(String notebookId, String beforeSiblingId) {
+        if (notebookId == null || notebookId.equals(beforeSiblingId)) {
+            return false;
+        }
+        synchronized (lock) {
+            NotebookEntity row = dao.notebook(notebookId);
+            if (row == null || row.deletedAt != null) {
+                return false;
+            }
+            ArrayList<NotebookEntity> siblings = new ArrayList<>();
+            for (NotebookEntity each : dao.liveNotebooks()) {
+                if (Objects.equals(each.parentId, row.parentId)) {
+                    siblings.add(each);
+                }
+            }
+            int from = indexOfNotebook(siblings, notebookId);
+            if (from < 0) {
+                return false;
+            }
+            int insertAt = siblings.size();
+            if (beforeSiblingId != null) {
+                NotebookEntity before = dao.notebook(beforeSiblingId);
+                if (before == null || before.deletedAt != null
+                        || !Objects.equals(before.parentId, row.parentId)) {
+                    return false;
+                }
+                insertAt = indexOfNotebook(siblings, beforeSiblingId);
+                if (insertAt < 0) {
+                    return false;
+                }
+            }
+            // Destination index in the list with {@code row} removed.
+            int dest = insertAt > from ? insertAt - 1 : insertAt;
+            if (dest == from) {
+                return true;
+            }
+            siblings.remove(from);
+            String left = dest > 0 ? siblings.get(dest - 1).position : null;
+            String right = dest < siblings.size() ? siblings.get(dest).position : null;
+            String next = Positions.between(left, right);
+            if (next.equals(row.position)) {
+                return true;
+            }
+            row.position = next;
+            row.updatedAt = clock.getAsLong();
+            saveNotebookQueued(row);
+            return true;
+        }
+    }
+
+    private static int indexOfNotebook(List<NotebookEntity> rows, String id) {
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).id.equals(id)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private void seedNotebooks() {
         long now = clock.getAsLong();
         for (Notebook notebook : Notebook.values()) {
