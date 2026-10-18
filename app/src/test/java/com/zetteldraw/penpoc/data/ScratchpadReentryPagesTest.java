@@ -66,7 +66,7 @@ public class ScratchpadReentryPagesTest {
         }
 
         List<Board> before = repo.scratchpadPages();
-        assertTrue("inked pages + trailing blank", before.size() > 1);
+        assertTrue("inked pages after tear (empty trailing slices may remain)", before.size() > 1);
         int inkedBefore = inked(before);
         assertTrue(inkedBefore >= 2);
 
@@ -83,7 +83,8 @@ public class ScratchpadReentryPagesTest {
         assertFalse(opened.get(0).isBlank());
 
         repo.ensureSheet(Notebook.COMEDY.uuid, PAGE, PAGE, 0L);
-        assertEquals(1, repo.pages(Notebook.COMEDY.uuid).size());
+        // Bare ensureSheet = empty Ready OK (no auto blank).
+        assertEquals(0, repo.pages(Notebook.COMEDY.uuid).size());
 
         List<Board> back = repo.scratchpadPages();
         assertTrue("return from another notebook keeps multi-page Scratchpad", back.size() > 1);

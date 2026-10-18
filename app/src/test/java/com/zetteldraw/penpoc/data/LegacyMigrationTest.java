@@ -72,15 +72,17 @@ public class LegacyMigrationTest {
         assertEquals(s1, scratch.get(0).id);
         assertEquals(s2, scratch.get(1).id);
         assertEquals("unreferenced boards with ink are not lost", orphan, scratch.get(2).id);
-        assertEquals(4, scratch.size());
-        assertTrue(scratch.get(3).isBlank());
+        // Soft trailing blank stripped on migrate — s1, s2, orphan only.
+        assertEquals(3, scratch.size());
 
         List<Board> comedy = device.repo.notebookPages(Notebook.COMEDY.uuid);
-        assertEquals(List.of(c1, c2), RoomBoardRepositoryTest.ids(comedy).subList(0, 2));
-        assertEquals(3, comedy.size());
-        assertTrue(comedy.get(2).isBlank());
-        assertEquals(1, device.repo.notebookPages(Notebook.JOURNAL.uuid).size());
-        assertTrue(device.repo.notebookPages(Notebook.JOURNAL.uuid).get(0).isBlank());
+        assertEquals(List.of(c1, c2), RoomBoardRepositoryTest.ids(comedy));
+        assertEquals(2, comedy.size());
+        // Journal blank wiped / stripped — empty Ready OK.
+        assertTrue(device.repo.notebookPages(Notebook.JOURNAL.uuid).size() <= 1);
+        if (!device.repo.notebookPages(Notebook.JOURNAL.uuid).isEmpty()) {
+            assertTrue(device.repo.notebookPages(Notebook.JOURNAL.uuid).get(0).isBlank());
+        }
 
         assertPoints(scratch.get(0), 3);
         assertPoints(comedy.get(1), 5);
@@ -124,8 +126,8 @@ public class LegacyMigrationTest {
                 filesDir, device.repo, Device.PAGE, Device.PAGE, 0L));
         assertTrue(device.ensureReady());
         assertTrue(device.ensureReady(Notebook.COMEDY.uuid));
-        assertEquals(4, device.repo.scratchpadPages().size());
-        assertEquals(3, device.repo.notebookPages(Notebook.COMEDY.uuid).size());
+        assertEquals(3, device.repo.scratchpadPages().size());
+        assertEquals(2, device.repo.notebookPages(Notebook.COMEDY.uuid).size());
     }
 
     @Test

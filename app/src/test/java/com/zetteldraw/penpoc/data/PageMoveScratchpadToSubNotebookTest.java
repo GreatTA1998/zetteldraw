@@ -80,7 +80,7 @@ public class PageMoveScratchpadToSubNotebookTest {
         String actions = repo.createNotebook("actions.life").id();
         String sub = repo.createNotebook("today", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+        assertTrue(TestSheets.ready(repo, sub, PAGE));
 
         Board earlier = inkNearBottom(null, "keep");
         Board last = inkNearBottom(null, "elton-drawing");
@@ -89,15 +89,15 @@ public class PageMoveScratchpadToSubNotebookTest {
         String movedId = last.id;
 
         // Exact UI path after navigating to the sub-notebook: save target,
-        // save source (no longer on screen), place before trailing blank.
+        // save source (no longer on screen), place before dest blank.
         repo.saveInk(destBlank);
         repo.saveInk(last);
         assertTrue(repo.placePageBefore(movedId, destBlank.id, sub));
 
         List<Board> scratch = repo.pages(null);
-        assertEquals(2, scratch.size());
+        // Last-page move leaves earlier only — no soft blank auto-appended.
+        assertEquals(1, scratch.size());
         assertEquals(earlier.id, scratch.get(0).id);
-        assertTrue(scratch.get(1).isBlank());
         assertNotNull(scratch.get(0).paper.stroke("keep"));
         assertTrue("moved page must leave Scratchpad",
                 scratch.stream().noneMatch(b -> movedId.equals(b.id)));
@@ -120,8 +120,8 @@ public class PageMoveScratchpadToSubNotebookTest {
         String actions = repo.createNotebook("actions.life").id();
         String home = repo.createNotebook("home page", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(actions, PAGE, PAGE, 0L);
-        repo.ensureSheet(home, PAGE, PAGE, 0L);
+        assertTrue(TestSheets.ready(repo, actions, PAGE));
+        assertTrue(TestSheets.ready(repo, home, PAGE));
 
         Board parentPage = inkNearBottom(actions, "parent-stay");
         Board drawing = inkNearBottom(null, "second-loss");
@@ -137,9 +137,8 @@ public class PageMoveScratchpadToSubNotebookTest {
         assertNotNull("parent ink stays on actions.life",
                 find(repo.pages(actions), parentPage.id).paper.stroke("parent-stay"));
         List<Board> homePages = repo.pages(home);
-        assertEquals(movedId, homePages.get(0).id);
-        assertNotNull(homePages.get(0).paper.stroke("second-loss"));
-        assertTrue(homePages.get(homePages.size() - 1).isBlank());
+        Board landed = find(homePages, movedId);
+        assertNotNull(landed.paper.stroke("second-loss"));
     }
 
     @Test
@@ -147,7 +146,7 @@ public class PageMoveScratchpadToSubNotebookTest {
         String actions = repo.createNotebook("actions.life").id();
         String sub = repo.createNotebook("errands", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+        assertTrue(TestSheets.ready(repo, sub, PAGE));
 
         inkNearBottom(null, "keep");
         Board last = inkNearBottom(null, "race-ink");
@@ -188,7 +187,7 @@ public class PageMoveScratchpadToSubNotebookTest {
         String actions = repo.createNotebook("actions.life").id();
         String sub = repo.createNotebook("pull-race", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+        assertTrue(TestSheets.ready(repo, sub, PAGE));
 
         Board last = inkNearBottom(null, "pull-ink");
         String movedId = last.id;
@@ -244,13 +243,13 @@ public class PageMoveScratchpadToSubNotebookTest {
      * Elton 2026-10-15: Move Scratchpad → top-level notebook no-ops until the
      * dest is opened (or stays stuck if never opened). UI called {@code pages(dest)}
      * without {@code ensureSheet}; log-backed not-Ready sheets return [].
-     * Fixed path: ensure → trailing blank → placePageBefore (dest-first).
+     * Fixed path: ensure → Create new page if empty → placePageBefore (dest-first).
      */
     @Test
     public void menuPathEnsureThenPlaceIntoInvalidatedTopLevelKeepsPage() {
         String top = repo.createNotebook("journal-like").id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(top, PAGE, PAGE, 0L);
+        assertTrue(TestSheets.ready(repo, top, PAGE));
         // Touch dest so the ink log exists on disk, then drop the Ready sheet
         // (as after a long Scratchpad-only session that never opened it).
         Board destSeed = repo.pages(top).get(repo.pages(top).size() - 1);
@@ -283,7 +282,7 @@ public class PageMoveScratchpadToSubNotebookTest {
         String actions = repo.createNotebook("actions.life").id();
         String sub = repo.createNotebook("inbox", actions).id();
         repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+        assertTrue(TestSheets.ready(repo, sub, PAGE));
 
         inkNearBottom(null, "keep");
         Board last = inkNearBottom(null, "drained");

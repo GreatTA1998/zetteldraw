@@ -105,6 +105,7 @@ public class ReadyOnlyWritersTest {
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
+        drain();
         Board page = repo.scratchpadPages().get(0);
         String sheetId = page.sheetId;
         byte[] before = ink.readLog(sheetId);
@@ -164,7 +165,7 @@ public class ReadyOnlyWritersTest {
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
-        assertTrue(repo.ensureSheet(com.zetteldraw.penpoc.Notebook.COMEDY.uuid, PAGE, PAGE, 0L));
+        assertTrue(TestSheets.ready(repo, com.zetteldraw.penpoc.Notebook.COMEDY.uuid, PAGE));
         Board source = repo.scratchpadPages().get(0);
         TestInk.draw(source, 10f);
         repo.saveInk(source);

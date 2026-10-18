@@ -46,8 +46,8 @@ public class PageLinkRepositoryTest {
     public void samePageAndDuplicateAreRejectedAndDeletingEitherPageRemovesTheLink() {
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
         BoardRepository.NotebookInfo to = repo.createNotebook("tobook");
-        repo.ensureSheet(from.id(), 400, 800, 1L);
-        repo.ensureSheet(to.id(), 400, 800, 1L);
+        assertTrue(TestSheets.ready(repo, from.id(), 400));
+        assertTrue(TestSheets.ready(repo, to.id(), 400));
         Board source = repo.pages(from.id()).get(0);
         TestInk.appendCovering(source.paper, TestStrokes.stroke(1f, 10f), source.id);
         repo.saveInk(source);
@@ -67,7 +67,8 @@ public class PageLinkRepositoryTest {
         assertTrue(repo.linksTouching(target.id).isEmpty());
         assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.LINK, link.id()).op);
 
-        Board sourceAgain = repo.pages(from.id()).get(repo.pages(from.id()).size() - 1);
+        // Empty Ready after delete — Create new page for the next link source.
+        Board sourceAgain = repo.createPage(from.id());
         TestInk.appendCovering(sourceAgain.paper, TestStrokes.stroke(2f, 10f), sourceAgain.id);
         repo.saveInk(sourceAgain);
         BoardRepository.PageLink second = repo.createLink(sourceAgain.id, target.id);

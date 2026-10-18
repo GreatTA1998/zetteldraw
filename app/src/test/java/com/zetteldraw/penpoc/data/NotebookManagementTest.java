@@ -144,8 +144,8 @@ public class NotebookManagementTest {
     public void pulledDeleteSendsLocallyFiledPagesToScratchpad() throws Exception {
         // Ready SoT: pull-delete must Move inked slices like local deleteNotebook
         // (BoardEntity notebookId=null alone is not enough after Ready-only pages).
-        // Empty Scratchpad dest (only trailing blank) is the hard case — adopted
-        // blank id must not remain as trailingBlanks after filing away.
+        // Empty Scratchpad dest is the hard case — filed pages must land as real
+        // slices (no soft trailing blank projection).
         device.ensureReady();
         device.ensureReady(Notebook.ACTIONS_LIFE.uuid);
         Board a = inked(10f);
@@ -227,8 +227,8 @@ public class NotebookManagementTest {
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
         BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());
         assertEquals(shelf.id(), chapter.parentId());
-        repo.ensureSheet(shelf.id(), 800, 800, 0L);
-        repo.ensureSheet(chapter.id(), 800, 800, 0L);
+        assertTrue(TestSheets.ready(repo, shelf.id(), 800));
+        assertTrue(TestSheets.ready(repo, chapter.id(), 800));
         Board parentPage = repo.pages(shelf.id()).get(0);
         Board childPage = repo.pages(chapter.id()).get(0);
         assertNotEquals(parentPage.sheetId, childPage.sheetId);
@@ -246,7 +246,8 @@ public class NotebookManagementTest {
             }
         }
         assertEquals(99f, repo.pages(chapter.id()).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
-        assertEquals(2, repo.pages(shelf.id()).size());
+        // No auto blank after ink — parent sheet has the one inked page.
+        assertEquals(1, repo.pages(shelf.id()).size());
     }
 
     @Test

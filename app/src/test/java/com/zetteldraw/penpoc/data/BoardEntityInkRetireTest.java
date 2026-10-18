@@ -71,7 +71,8 @@ public class BoardEntityInkRetireTest {
         assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
         assertTrue(new InkFileStore(inkDir).hasLog(NotebookPaper.sheetId(null)));
         List<Board> pages = repo.scratchpadPages();
-        assertTrue(pages.size() >= 2);
+        // Migrated inked page only — no projected soft trailing blank.
+        assertEquals(1, pages.size());
         assertEquals(page.id, pages.get(0).id);
         assertFalse(pages.get(0).isBlank());
     }

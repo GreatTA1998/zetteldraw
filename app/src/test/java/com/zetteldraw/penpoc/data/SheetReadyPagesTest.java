@@ -66,7 +66,7 @@ public class SheetReadyPagesTest {
 
         List<Board> full = repo.scratchpadPages();
         int fullCount = full.size();
-        assertTrue("expected many pages including trailing blank, was " + fullCount, fullCount > 30);
+        assertTrue("expected many pages from covering ink, was " + fullCount, fullCount > 30);
 
         // Cold process: log on disk, no OpenSheet — must not project Room rows.
         device.reopen();
@@ -125,7 +125,8 @@ public class SheetReadyPagesTest {
         assertTrue(scratchpadCount > 30);
 
         assertTrue(repo.ensureSheet(Notebook.COMEDY.uuid, PAGE, PAGE, 0L));
-        assertTrue(repo.pages(Notebook.COMEDY.uuid).size() >= 1);
+        // Bare ensureSheet leaves empty Ready — no auto blank.
+        assertEquals(0, repo.pages(Notebook.COMEDY.uuid).size());
 
         // Forget Scratchpad sheet (simulates cold return / lost cache), ensure again.
         repo.invalidateOpenSheet(null);

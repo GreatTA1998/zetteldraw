@@ -267,7 +267,7 @@ public class RemoteLogTruncateTest {
             Thread.sleep(20);
         }
         String otherId = repo.createNotebook("safe-notes").id();
-        assertTrue(repo.ensureSheet(otherId, PAGE, PAGE, 0L));
+        assertTrue(TestSheets.ready(repo, otherId, PAGE));
         Board otherBlank = repo.pages(otherId).get(0);
         for (int i = 0; i < 5; i++) {
             TestInk.appendCovering(otherBlank.paper, TestInk.stroke(12f, i * PAGE + 30f, 6));

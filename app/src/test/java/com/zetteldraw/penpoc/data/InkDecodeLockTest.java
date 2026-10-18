@@ -46,6 +46,9 @@ public class InkDecodeLockTest {
     public void pagesEmptyUntilReadyThenProjectsWithoutLegacyDecode() {
         assertTrue(repo.scratchpadPages().isEmpty());
         assertTrue(device.ensureReady());
+        // ensureReady = sheet only; Create new page is explicit.
+        assertEquals(0, repo.scratchpadPages().size());
+        assertTrue(device.ensureReadyWithPage(null));
         List<Board> pages = repo.scratchpadPages();
         assertEquals(1, pages.size());
         assertTrue(pages.get(0).isBlank());
@@ -54,7 +57,7 @@ public class InkDecodeLockTest {
         TestInk.draw(pages.get(0), 10f);
         repo.saveInk(pages.get(0));
         List<Board> after = repo.scratchpadPages();
-        assertEquals(2, after.size());
+        assertEquals(1, after.size());
         assertEquals(1, TestInk.strokesOf(after.get(0)).size());
         // notebooks() stays cheap (no ink decode) while Ready pages are projected.
         long started = System.nanoTime();

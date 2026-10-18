@@ -125,6 +125,8 @@ public class WriteBehindTest {
 
     @Test
     public void manySavesOfOnePageCostOneMoreWrite() throws Exception {
+        // createPage flush in setUp already staged writes — measure delta only.
+        int stagesBefore = ink.stages.get();
         Board page = repo.scratchpadPages().get(0);
         TestInk.draw(page, 10f);
         ink.hold();
@@ -137,8 +139,10 @@ public class WriteBehindTest {
         ink.release();
         drain();
 
-        assertTrue("stuck write plus the newest snapshot, not one per stroke: " + ink.stages.get(),
-                ink.stages.get() <= 3);
+        int delta = ink.stages.get() - stagesBefore;
+        assertTrue("stuck write plus the newest snapshot, not one per stroke: delta=" + delta
+                        + " absolute=" + ink.stages.get(),
+                delta <= 3);
         byte[] onDisk = new InkFileStore(inkDir).readLog(NotebookPaper.sheetId(null));
         assertNotNull(onDisk);
         assertEquals(6, TestInk.strokesOf(page).size());
@@ -173,8 +177,9 @@ public class WriteBehindTest {
         repo.saveInk(first);
         drain();
 
+        Board second = repo.createPage(null);
+        assertNotNull(second);
         ink.hold();
-        Board second = repo.scratchpadPages().get(1);
         TestInk.draw(second, 10f);
         repo.saveInk(second);
         ink.awaitStall();
@@ -184,9 +189,9 @@ public class WriteBehindTest {
         drain();
 
         List<Board> pages = repo.scratchpadPages();
-        assertEquals(2, pages.size());
+        // No auto blank after delete — first page only.
+        assertEquals(1, pages.size());
         assertEquals(first.id, pages.get(0).id);
-        assertTrue(pages.get(1).isBlank());
         assertTrue("deleted slice id is gone from paper",
                 pages.get(0).paper.indexOfSliceId(secondId) < 0);
         String sheetId = NotebookPaper.sheetId(null);
