@@ -1027,16 +1027,10 @@ public final class CanvasActivity extends Activity {
         collectionNav.rememberScroll(collectionId, y, count, anchor);
     }
 
-    /** True when the on-screen list came from a Ready sheet (or true legacy boards). */
+    /** True when the on-screen list came from a Ready sheet. */
     private boolean collectionShownReady() {
-        if (currentPages == null || currentPages.isEmpty()) {
-            return false;
-        }
-        if (repository.isSheetReady(notebookKey(collectionId))) {
-            return true;
-        }
-        // Pre-migration lists have no paper on boards.
-        return currentPages.get(0).paper == null;
+        return currentPages != null && !currentPages.isEmpty()
+                && repository.isSheetReady(notebookKey(collectionId));
     }
 
     private CollectionNav.PageLayout pageLayout() {
@@ -1385,8 +1379,7 @@ public final class CanvasActivity extends Activity {
     /**
      * Scroll offset of the last slice that already has ink. Each slice keeps
      * its own height, so a tall page from before v10 and a short page after it
-     * do not share one stride. An index past the last stored slice, or a blank
-     * the padded bottom once named, is not a page to land on.
+     * do not share one stride.
      */
     private int lastInkOffset(List<Board> pages) {
         if (pages.isEmpty() || pages.get(0).paper == null) {
@@ -3279,20 +3272,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private int heightOf(Board page) {
-        if (page.slicePx > 0) {
-            return page.slicePx;
-        }
-        if (page.createdAt >= shortPagesSince) {
-            return pageHeight;
-        }
-        float bottom = 0f;
-        for (InkRenderer.InkStroke stroke : page.strokes) {
-            bottom = Math.max(bottom, stroke.bounds.bottom + stroke.maxWidth);
-        }
-        if (bottom <= pageHeight) {
-            return pageHeight;
-        }
-        return Math.max(legacyPageHeight, (int) Math.ceil(bottom));
+        return page.slicePx > 0 ? page.slicePx : pageHeight;
     }
 
     /**

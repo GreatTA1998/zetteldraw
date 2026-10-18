@@ -324,12 +324,9 @@ public final class NotebookPaper {
 
     public float origin(int index) {
         float y = 0f;
-        int n = Math.min(index, heights.size());
+        int n = Math.min(Math.max(index, 0), heights.size());
         for (int i = 0; i < n; i++) {
             y += heights.get(i);
-        }
-        if (index > heights.size()) {
-            y += (float) (index - heights.size()) * sliceHeight;
         }
         return y;
     }
@@ -369,11 +366,11 @@ public final class NotebookPaper {
     /** Strokes whose bounds meet this slice. The same object, not a copy. */
     public List<InkRenderer.InkStroke> touching(int slice) {
         ArrayList<InkRenderer.InkStroke> hit = new ArrayList<>();
-        if (slice < 0) {
+        if (slice < 0 || slice >= heights.size()) {
             return hit;
         }
         float top = origin(slice);
-        float bottom = top + (slice < heights.size() ? heights.get(slice) : sliceHeight);
+        float bottom = top + heights.get(slice);
         for (InkRenderer.InkStroke stroke : strokes) {
             if (stroke.bounds.bottom >= top && stroke.bounds.top < bottom) {
                 hit.add(stroke);
@@ -396,8 +393,8 @@ public final class NotebookPaper {
             return;
         }
         int index = sliceIndexAt(y);
-        if (index >= heights.size()) {
-            index = heights.size() - 1;
+        if (index < 0) {
+            return;
         }
         if (index > lastInked) {
             lastInked = index;
@@ -412,7 +409,7 @@ public final class NotebookPaper {
     }
 
     public int sliceIndexAt(float paperY) {
-        if (paperY < 0f) {
+        if (paperY < 0f || heights.isEmpty()) {
             return -1;
         }
         float y = 0f;
@@ -423,10 +420,8 @@ public final class NotebookPaper {
             }
             y = next;
         }
-        if (sliceHeight <= 0) {
-            return -1;
-        }
-        return heights.size() + (int) ((paperY - y) / sliceHeight);
+        // Past the last real slice — no soft trailing page geometry.
+        return heights.size() - 1;
     }
 
     /**
