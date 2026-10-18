@@ -2,16 +2,21 @@ import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { isUnowned, ownedByUser, type OwnerTable } from "./accounts.js";
 import { InkFormatError } from "./ink.js";
-import type { BoardRow, NotebookRow } from "./lww.js";
+import type { BoardRow, LogRow, NotebookRow } from "./lww.js";
 import type { SyncScope } from "./sync.js";
 import type { InkStorage } from "./storage.js";
 import type { ImageKind, Thumbnailer } from "./thumbs.js";
 import { BadRequest } from "./validate.js";
 import { ackLostDevice, cancelHandOff, getWriterStatus, handOff } from "./writer.js";
+import { readSliceIndex, ZdlFormatError } from "./zdl.js";
 /**
  * Read endpoints for the web overview. Notebook/page mutations are refused —
  * the companion is strictly read-only for ink. The only write it offers is
  * Hand off / lost-device ack (live-writer lease), which does not touch notebook data.
+ *
+ * Page identity/order prefer Ready {@code notebook_logs} (+ ZDL structure index)
+ * over live {@code boards} rows so log-only notebooks are not empty on the
+ * companion. Hand-off still gates on uncovered BOARD ink via {@link backupStatus}.
  */
 
 export const SCRATCHPAD = "scratchpad";
@@ -71,6 +76,12 @@ export interface PagePlace {
 
 const LIVE = "b.deleted_at IS NULL AND b.conflict_of IS NULL";
 
+/** Board-shaped page list row (Ready-synthesized or SQL boards fallback). */
+type PageListRow = Pick<
+  BoardRow,
+  "id" | "notebook_id" | "position" | "ink_hash" | "ink_bytes" | "created_at" | "updated_at" | "rev"
+>;
+
 function scopeParams(scope: SyncScope): { sql: (table: "notebooks" | "boards", alias: string) => string; params: unknown[] } {
   if (scope.kind === "user") {
     return {
@@ -84,7 +95,67 @@ function scopeParams(scope: SyncScope): { sql: (table: "notebooks" | "boards", a
   };
 }
 
-function toPage(row: BoardRow, links: WebPageLink[] = []): WebPage {
+function logOwnSql(scope: SyncScope): { sql: string; params: unknown[] } {
+  if (scope.kind === "user") {
+    return { sql: ownedByUser("notebook_logs" as OwnerTable, "l", 1), params: [scope.userId] };
+  }
+  return {
+    sql: `NOT EXISTS (SELECT 1 FROM row_owners o WHERE o.table_name = 'notebook_logs' AND o.row_id = l.id)`,
+    params: [],
+  };
+}
+
+async function readyLogForNotebook(
+  db: pg.Pool | pg.PoolClient,
+  notebookId: string | null,
+  scope: SyncScope,
+): Promise<LogRow | null> {
+  const { sql, params } = logOwnSql(scope);
+  const nb =
+    notebookId === null
+      ? "l.notebook_id IS NULL"
+      : `l.notebook_id = $${params.length + 1}`;
+  const res = await db.query<LogRow>(
+    `SELECT l.* FROM notebook_logs l
+     WHERE l.deleted_at IS NULL AND l.conflict_of IS NULL AND ${sql} AND ${nb}
+     ORDER BY l.updated_at DESC, l.rev DESC
+     LIMIT 1`,
+    notebookId === null ? params : [...params, notebookId],
+  );
+  return res.rows[0] ?? null;
+}
+
+async function pagesFromReadyLog(
+  storage: InkStorage,
+  log: LogRow,
+  notebookId: string | null,
+): Promise<PageListRow[] | null> {
+  if (!log.ink_hash) {
+    return [];
+  }
+  try {
+    const bytes = await storage.get(log.ink_hash);
+    const slices = readSliceIndex(bytes);
+    return slices.map((slice, i) => ({
+      id: slice.id,
+      notebook_id: notebookId,
+      position: String(i).padStart(10, "0"),
+      // Whole-log hash is not a per-page ZDI thumb — leave null until ZDL thumbs.
+      ink_hash: null,
+      ink_bytes: 0,
+      created_at: log.created_at,
+      updated_at: log.updated_at,
+      rev: log.rev,
+    }));
+  } catch (err) {
+    if (err instanceof ZdlFormatError) {
+      return null;
+    }
+    return null;
+  }
+}
+
+function toPage(row: PageListRow, links: WebPageLink[] = []): WebPage {
   return {
     id: row.id,
     notebook_id: row.notebook_id,
@@ -109,27 +180,48 @@ interface LinkRowLite {
 /**
  * Resolve notebook + 1-based index/count for each live page id (Android pageRef).
  * Missing / deleted / out-of-scope pages are omitted.
+ * Prefers Ready page lists when {@code storage} is set (log-only notebooks).
  */
 export async function placesOf(
   pool: pg.Pool | pg.PoolClient,
   pageIds: string[],
   scope: SyncScope,
+  storage?: InkStorage,
 ): Promise<Map<string, PagePlace>> {
   const out = new Map<string, PagePlace>();
   if (pageIds.length === 0) {
     return out;
   }
+  const want = new Set(pageIds.map((id) => id.toLowerCase()));
   const { sql, params } = scopeParams(scope);
   const bOwn = sql("boards", "b");
   const nOwn = sql("notebooks", "n");
+
+  const placeFromPages = (
+    pages: PageListRow[],
+    notebookKey: string,
+    title: string,
+  ): void => {
+    const index = new Map(pages.map((p, i) => [p.id.toLowerCase(), i]));
+    for (const id of want) {
+      if (out.has(id)) continue;
+      const idx = index.get(id);
+      if (idx === undefined) continue;
+      out.set(id, {
+        page_id: pages[idx].id,
+        notebook_id: notebookKey,
+        notebook_title: title,
+        index: idx + 1,
+        count: pages.length,
+      });
+    }
+  };
+
   const boards = await pool.query<BoardRow>(
     `SELECT b.* FROM boards b
      WHERE ${LIVE} AND ${bOwn} AND b.id = ANY($${params.length + 1}::uuid[])`,
     [...params, pageIds],
   );
-  if (boards.rows.length === 0) {
-    return out;
-  }
 
   const notebookIds = [
     ...new Set(boards.rows.map((b) => b.notebook_id).filter((id): id is string => id !== null)),
@@ -155,7 +247,7 @@ export async function placesOf(
   }
 
   const scratchPages =
-    inScratchpad.size > 0 ? await pagesIn(pool, null, scope) : [];
+    inScratchpad.size > 0 ? await pagesIn(pool, null, scope, storage) : [];
   const scratchIndex = new Map(scratchPages.map((p, i) => [p.id, i]));
 
   const byNotebook = new Map<string, BoardRow[]>();
@@ -163,7 +255,7 @@ export async function placesOf(
     if (inScratchpad.has(row.id)) {
       const idx = scratchIndex.get(row.id);
       if (idx === undefined) continue;
-      out.set(row.id, {
+      out.set(row.id.toLowerCase(), {
         page_id: row.id,
         notebook_id: SCRATCHPAD,
         notebook_title: "Scratchpad",
@@ -179,19 +271,54 @@ export async function placesOf(
   }
 
   for (const [notebookId, needed] of byNotebook) {
-    const all = await pagesIn(pool, notebookId, scope);
+    const all = await pagesIn(pool, notebookId, scope, storage);
     const index = new Map(all.map((p, i) => [p.id, i]));
     const title = titles.get(notebookId) ?? "";
     for (const row of needed) {
       const idx = index.get(row.id);
       if (idx === undefined || title === "") continue;
-      out.set(row.id, {
+      out.set(row.id.toLowerCase(), {
         page_id: row.id,
         notebook_id: notebookId,
         notebook_title: title,
         index: idx + 1,
         count: all.length,
       });
+    }
+  }
+
+  // Log-only page ids (no board row) — scan Ready logs for leftovers.
+  if (storage && out.size < want.size) {
+    const { sql: logSql, params: logParams } = logOwnSql(scope);
+    const logs = await pool.query<LogRow>(
+      `SELECT l.* FROM notebook_logs l
+       WHERE l.deleted_at IS NULL AND l.conflict_of IS NULL AND l.ink_hash IS NOT NULL AND ${logSql}`,
+      logParams,
+    );
+    const logNbIds = [
+      ...new Set(logs.rows.map((l) => l.notebook_id).filter((id): id is string => id !== null)),
+    ];
+    if (logNbIds.length > 0) {
+      const more = await pool.query<{ id: string; title: string }>(
+        `SELECT n.id, n.title FROM notebooks n
+         WHERE n.deleted_at IS NULL AND ${nOwn} AND n.id = ANY($${params.length + 1}::uuid[])`,
+        [...params, logNbIds],
+      );
+      for (const n of more.rows) {
+        titles.set(n.id, n.title);
+      }
+    }
+    for (const log of logs.rows) {
+      if (out.size >= want.size) break;
+      const nb = log.notebook_id;
+      if (nb !== null && !titles.has(nb)) continue;
+      const pages = await pagesFromReadyLog(storage, log, nb);
+      if (!pages) continue;
+      placeFromPages(
+        pages,
+        nb === null ? SCRATCHPAD : nb,
+        nb === null ? "Scratchpad" : titles.get(nb)!,
+      );
     }
   }
   return out;
@@ -201,6 +328,7 @@ async function linksForPages(
   pool: pg.Pool | pg.PoolClient,
   pageIds: string[],
   scope: SyncScope,
+  storage?: InkStorage,
 ): Promise<Map<string, WebPageLink[]>> {
   const byPage = new Map<string, WebPageLink[]>();
   if (pageIds.length === 0) {
@@ -233,7 +361,7 @@ async function linksForPages(
     otherIds.add(link.source_id);
     otherIds.add(link.target_id);
   }
-  const places = await placesOf(pool, [...otherIds], scope);
+  const places = await placesOf(pool, [...otherIds], scope, storage);
 
   for (const link of links.rows) {
     if (pageIds.includes(link.source_id)) {
@@ -289,7 +417,11 @@ function notebookParam(raw: string): string | null {
   return raw.toLowerCase();
 }
 
-export async function listNotebooks(pool: pg.Pool, scope: SyncScope): Promise<WebNotebook[]> {
+export async function listNotebooks(
+  pool: pg.Pool,
+  scope: SyncScope,
+  storage?: InkStorage,
+): Promise<WebNotebook[]> {
   const { sql, params } = scopeParams(scope);
   const nOwn = sql("notebooks", "n");
   const bOwn = sql("boards", "b");
@@ -311,6 +443,49 @@ export async function listNotebooks(pool: pg.Pool, scope: SyncScope): Promise<We
      ORDER BY n.position, n.id`,
     params,
   );
+
+  const readyCount = async (
+    notebookId: string | null,
+    boardCount: number,
+    boardEdited: number | null,
+  ): Promise<{ page_count: number; last_edited_at: number | null }> => {
+    // Boards still cover historical notebooks; only hit object storage when the
+    // board list is empty but a Ready log exists (the 22 log-only fleet cases).
+    if (!storage || boardCount > 0) {
+      return { page_count: boardCount, last_edited_at: boardEdited };
+    }
+    const log = await readyLogForNotebook(pool, notebookId, scope);
+    if (!log?.ink_hash) {
+      return { page_count: boardCount, last_edited_at: boardEdited };
+    }
+    const pages = await pagesFromReadyLog(storage, log, notebookId);
+    if (!pages) {
+      return { page_count: boardCount, last_edited_at: boardEdited };
+    }
+    return {
+      page_count: pages.length,
+      last_edited_at: log.updated_at ?? boardEdited,
+    };
+  };
+
+  const scratchReady = await readyCount(null, scratch.rows[0].page_count, scratch.rows[0].last_edited_at);
+  const notebookRows = await Promise.all(
+    notebooks.rows.map(async (n) => {
+      const ready = await readyCount(n.id, n.page_count, n.last_edited_at);
+      return {
+        id: n.id,
+        kind: "notebook" as const,
+        title: n.title,
+        position: n.position,
+        parent_id: n.parent_id,
+        page_count: ready.page_count,
+        last_edited_at: ready.last_edited_at,
+        updated_at: n.updated_at,
+        rev: n.rev,
+      };
+    }),
+  );
+
   return [
     {
       id: SCRATCHPAD,
@@ -318,22 +493,12 @@ export async function listNotebooks(pool: pg.Pool, scope: SyncScope): Promise<We
       title: "Scratchpad",
       position: null,
       parent_id: null,
-      page_count: scratch.rows[0].page_count,
-      last_edited_at: scratch.rows[0].last_edited_at,
+      page_count: scratchReady.page_count,
+      last_edited_at: scratchReady.last_edited_at,
       updated_at: null,
       rev: null,
     },
-    ...notebooks.rows.map((n) => ({
-      id: n.id,
-      kind: "notebook" as const,
-      title: n.title,
-      position: n.position,
-      parent_id: n.parent_id,
-      page_count: n.page_count,
-      last_edited_at: n.last_edited_at,
-      updated_at: n.updated_at,
-      rev: n.rev,
-    })),
+    ...notebookRows,
   ];
 }
 
@@ -349,7 +514,11 @@ async function liveNotebook(db: pg.Pool | pg.PoolClient, id: string, scope: Sync
   return res.rows[0];
 }
 
-async function pagesIn(db: pg.Pool | pg.PoolClient, notebookId: string | null, scope: SyncScope): Promise<BoardRow[]> {
+async function pagesInBoards(
+  db: pg.Pool | pg.PoolClient,
+  notebookId: string | null,
+  scope: SyncScope,
+): Promise<PageListRow[]> {
   const { sql, params } = scopeParams(scope);
   const bOwn = sql("boards", "b");
   const nOwn = sql("notebooks", "n");
@@ -369,16 +538,44 @@ async function pagesIn(db: pg.Pool | pg.PoolClient, notebookId: string | null, s
   return res.rows;
 }
 
-export async function listPages(pool: pg.Pool, rawNotebookId: string, scope: SyncScope): Promise<WebPage[]> {
+/**
+ * Live page order for a notebook. Ready {@code .zdl} wins when storage can
+ * index it; otherwise historical {@code boards} rows (thumbs still work).
+ */
+async function pagesIn(
+  db: pg.Pool | pg.PoolClient,
+  notebookId: string | null,
+  scope: SyncScope,
+  storage?: InkStorage,
+): Promise<PageListRow[]> {
+  if (storage) {
+    const log = await readyLogForNotebook(db, notebookId, scope);
+    if (log) {
+      const fromReady = await pagesFromReadyLog(storage, log, notebookId);
+      if (fromReady) {
+        return fromReady;
+      }
+    }
+  }
+  return pagesInBoards(db, notebookId, scope);
+}
+
+export async function listPages(
+  pool: pg.Pool,
+  rawNotebookId: string,
+  scope: SyncScope,
+  storage?: InkStorage,
+): Promise<WebPage[]> {
   const notebookId = notebookParam(rawNotebookId);
   if (notebookId !== null) {
     await liveNotebook(pool, notebookId, scope);
   }
-  const rows = await pagesIn(pool, notebookId, scope);
+  const rows = await pagesIn(pool, notebookId, scope, storage);
   const links = await linksForPages(
     pool,
     rows.map((r) => r.id),
     scope,
+    storage,
   );
   return rows.map((row) => toPage(row, links.get(row.id) ?? []));
 }
@@ -388,11 +585,12 @@ export async function placeOfPage(
   pool: pg.Pool,
   pageId: string,
   scope: SyncScope,
+  storage?: InkStorage,
 ): Promise<PagePlace> {
   if (!UUID.test(pageId)) {
     throw new NotFound("page not found");
   }
-  const places = await placesOf(pool, [pageId.toLowerCase()], scope);
+  const places = await placesOf(pool, [pageId.toLowerCase()], scope, storage);
   const place = places.get(pageId.toLowerCase());
   if (!place) {
     throw new NotFound("page not found");
@@ -505,15 +703,17 @@ export function registerWebRoutes(
   scopeOf: (req: { principal?: import("./auth.js").AuthPrincipal }) => SyncScope,
   storage?: InkStorage,
 ): void {
-  app.get("/web/notebooks", async (req) => ({ notebooks: await listNotebooks(pool, scopeOf(req)) }));
+  app.get("/web/notebooks", async (req) => ({
+    notebooks: await listNotebooks(pool, scopeOf(req), storage),
+  }));
 
   app.get<{ Params: { id: string } }>("/web/notebooks/:id/pages", async (req) => ({
     notebook_id: req.params.id,
-    pages: await listPages(pool, req.params.id, scopeOf(req)),
+    pages: await listPages(pool, req.params.id, scopeOf(req), storage),
   }));
 
   app.get<{ Params: { id: string } }>("/web/pages/:id/place", async (req) =>
-    placeOfPage(pool, req.params.id, scopeOf(req)),
+    placeOfPage(pool, req.params.id, scopeOf(req), storage),
   );
 
   if (storage) {
