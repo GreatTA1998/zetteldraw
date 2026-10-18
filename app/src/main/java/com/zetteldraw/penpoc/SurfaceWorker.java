@@ -293,7 +293,9 @@ final class SurfaceWorker {
             try {
                 applyPen(open, on, lim, exc, st, pen);
                 retryDelay = RETRY_MIN_MS;
-            } catch (RuntimeException | LinkageError e) {
+            } catch (Throwable e) {
+                // Isolate native / Onyx / LinkageError / Error: paint already
+                // ran above when device was null; never kill the process.
                 Log.w(TAG, "Onyx pen call failed; retrying in " + retryDelay + " ms", e);
                 LaunchLog.once("onyx-failed", "Onyx pen call failed (retried with backoff): " + e);
                 scheduleRetry();
@@ -349,6 +351,10 @@ final class SurfaceWorker {
         }
         ensureDevice(lim, exc);
         RawPen h = device;
+        if (h == null) {
+            // TouchHelper.create failed — stay paint-only until a later retry.
+            return;
+        }
         if (!lim.equals(limit) || !exc.equals(excludes)) {
             h.setLimit(lim, exc);
             limit = new Rect(lim);
@@ -393,10 +399,19 @@ final class SurfaceWorker {
             test.open(lim, exc);
             device = test;
         } else {
-            TouchHelper created = timed("TouchHelper.create", () -> TouchHelper.create(surfaceView, callback));
-            OnyxPen onyx = new OnyxPen(created);
-            onyx.open(lim, exc);
-            device = onyx;
+            try {
+                TouchHelper created = timed("TouchHelper.create",
+                        () -> TouchHelper.create(surfaceView, callback));
+                OnyxPen onyx = new OnyxPen(created);
+                onyx.open(lim, exc);
+                device = onyx;
+            } catch (Throwable e) {
+                // Native abort soft-path: leave device null; paint-only mode.
+                Log.e(TAG, "TouchHelper.create failed; continuing without raw pen", e);
+                LaunchLog.once("onyx-create-failed",
+                        "TouchHelper.create failed; paint-only: " + e);
+                return;
+            }
         }
         limit = new Rect(lim);
         excludes = new ArrayList<>(exc);

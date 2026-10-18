@@ -49,6 +49,7 @@ import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.zetteldraw.penpoc.data.BoardRepository;
 import com.zetteldraw.penpoc.data.RoomBoardRepository;
@@ -86,6 +87,16 @@ public final class CanvasActivity extends Activity {
     /** Pages created before this device first ran v10 may keep the old full-window height. */
     private static final String SHORT_PAGES_SINCE = "short_pages_since";
     /**
+     * After Scratchpad/open throws or a prior boot died mid-ensure: skip auto
+     * Scratchpad load and land on notebook tabs + empty shell. Files untouched.
+     */
+    private static final String SAFE_BOOT = "safe_boot";
+    /**
+     * Set before Scratchpad ensure; cleared after successful paint. If still set
+     * on next cold start, prior process died mid-open → promote to {@link #SAFE_BOOT}.
+     */
+    private static final String BOOT_ATTEMPT = "boot_attempt";
+    /**
      * Scroll intent lives in {@link CollectionNav} (Y only — not page count).
      * Length SoT is Ready ink-log via the repository. Remember via
      * {@link #effectiveScrollY()}, never a ScrollView that has not yet applied
@@ -93,6 +104,9 @@ public final class CanvasActivity extends Activity {
      */
     private BoardRepository repository;
     private CollectionNav collectionNav;
+    private SharedPreferences canvasPrefs;
+    /** When true, cold start skips Scratchpad ensure until the user taps it. */
+    private boolean safeBoot;
     private String collectionId = SCRATCHPAD;
     /** Last opened notebook; null until one is chosen or when none exist. */
     private String notebookId;
@@ -197,15 +211,21 @@ public final class CanvasActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         LaunchLog.mark("screen created" + (savedInstanceState != null ? " (restored)" : ""));
-        UiClick.warm(this);
+        // SoundPool deferred until first paint — never block / kill cold start.
         InkRenderer.applyBaseWidthMm(getResources().getDisplayMetrics());
+        canvasPrefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         repository = ZettelData.repository(this);
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        collectionNav = new CollectionNav(prefs);
-        shortPagesSince = prefs.getLong(SHORT_PAGES_SINCE, 0L);
+        collectionNav = new CollectionNav(canvasPrefs);
+        if (canvasPrefs.getBoolean(BOOT_ATTEMPT, false)) {
+            // Prior process died mid-Scratchpad ensure → crash-loop breaker.
+            canvasPrefs.edit().putBoolean(SAFE_BOOT, true).putBoolean(BOOT_ATTEMPT, false).apply();
+            LaunchLog.mark("safe boot: prior open did not finish");
+        }
+        safeBoot = canvasPrefs.getBoolean(SAFE_BOOT, false);
+        shortPagesSince = canvasPrefs.getLong(SHORT_PAGES_SINCE, 0L);
         if (shortPagesSince == 0L) {
             shortPagesSince = System.currentTimeMillis();
-            prefs.edit().putLong(SHORT_PAGES_SINCE, shortPagesSince).apply();
+            canvasPrefs.edit().putLong(SHORT_PAGES_SINCE, shortPagesSince).apply();
         }
         pageGap = dp(24);
         // Restored after inkView is created below.
@@ -378,8 +398,10 @@ public final class CanvasActivity extends Activity {
         syncHistory();
         styleTabs();
         inkView.setLive(true);
-        // Records open intent; cold load waits for pageHeight in onDrawingAreaLaidOut.
-        openCollection(collectionId, null);
+        // Cold start ALWAYS library shell first — never auto-ensure Scratchpad.
+        // Elton v149: process died on open; auto Scratchpad is the kill path.
+        // Tap Scratchpad / a notebook to load ink. All .zdl stay on disk.
+        openCollection(collectionId, null, false);
     }
 
     /**
@@ -836,7 +858,8 @@ public final class CanvasActivity extends Activity {
         } else {
             styleTabs();
         }
-        openCollection(SCRATCHPAD, keepScroll);
+        // Explicit tap: allow Scratchpad even when safe-boot skipped auto-open.
+        openCollection(SCRATCHPAD, keepScroll, true);
     }
 
     private void openNotebook(String id, Integer keepScroll) {
@@ -920,6 +943,14 @@ public final class CanvasActivity extends Activity {
     }
 
     private void openCollection(String id, Integer keepScroll) {
+        openCollection(id, keepScroll, true);
+    }
+
+    /**
+     * @param loadSheet false = library shell only (safe-boot cold start). Files
+     *                  untouched; user taps Scratchpad / a notebook to load ink.
+     */
+    private void openCollection(String id, Integer keepScroll, boolean loadSheet) {
         dismissOverlay();
         String previous = collectionId;
         boolean switched = !id.equals(previous);
@@ -932,13 +963,22 @@ public final class CanvasActivity extends Activity {
         pagesLoaded = true;
         collectionId = id;
         styleTabs();
+        if (!loadSheet) {
+            // Quiet library-first cold start; toast only after a caught open failure.
+            landLibraryShell(false);
+            return;
+        }
         // Snappy path: Ready sheet → same showReady spine as async load.
         String notebook = notebookKey(id);
         if (pageHeight > 0 && repository.isSheetReady(notebook)) {
             List<Board> ready = repository.pages(notebook);
             if (ready != null && !ready.isEmpty()) {
                 ++loadGeneration;
-                showReady(id, ready, keepScroll);
+                try {
+                    showReady(id, ready, keepScroll);
+                } catch (Throwable e) {
+                    enterSafeBoot(e);
+                }
                 return;
             }
         }
@@ -951,6 +991,79 @@ public final class CanvasActivity extends Activity {
             clearShownPages();
         }
         startLoad(id, keepScroll, true);
+    }
+
+    /**
+     * Notebook tabs + empty shell; no ensureSheet. Preserves all {@code .zdl}.
+     */
+    private void landLibraryShell(boolean notifyUser) {
+        ++loadGeneration;
+        shownGeneration = loadGeneration;
+        clearShownPages();
+        inkView.release(PageInkView.Hold.LOADING);
+        try {
+            List<BoardRepository.NotebookInfo> notebooks = repository.notebooks();
+            rebuildNotebookTabs(notebooks);
+        } catch (Throwable e) {
+            Log.e(TAG, "safe boot: notebooks() failed", e);
+        }
+        firstListShown = true;
+        warmDeferredServices();
+        LaunchLog.mark("safe boot: library shell (Scratchpad deferred)");
+        if (notifyUser) {
+            Toast.makeText(this, "Open a notebook — Scratchpad deferred (safe boot)",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /** Catch open death → stay alive on library shell; never wipe files. */
+    private void enterSafeBoot(Throwable cause) {
+        Log.e(TAG, "open failed; entering safe boot", cause);
+        LaunchLog.mark("safe boot after: " + cause);
+        safeBoot = true;
+        if (canvasPrefs != null) {
+            canvasPrefs.edit()
+                    .putBoolean(SAFE_BOOT, true)
+                    .putBoolean(BOOT_ATTEMPT, false)
+                    .apply();
+        }
+        try {
+            if (repository instanceof RoomBoardRepository) {
+                ((RoomBoardRepository) repository).invalidateOpenSheet(notebookKey(collectionId));
+            }
+        } catch (Throwable ignored) {
+        }
+        landLibraryShell(true);
+    }
+
+    private void markBootAttempt() {
+        if (canvasPrefs != null) {
+            canvasPrefs.edit().putBoolean(BOOT_ATTEMPT, true).apply();
+        }
+    }
+
+    private void clearBootFlags() {
+        safeBoot = false;
+        if (canvasPrefs != null) {
+            canvasPrefs.edit()
+                    .putBoolean(SAFE_BOOT, false)
+                    .putBoolean(BOOT_ATTEMPT, false)
+                    .apply();
+        }
+    }
+
+    /** SoundPool + Documents mirror after first stable paint — not on cold create. */
+    private void warmDeferredServices() {
+        try {
+            UiClick.warm(this);
+        } catch (Throwable t) {
+            Log.w(TAG, "UiClick.warm deferred failed", t);
+        }
+        try {
+            ZettelData.enableDocumentsMirror();
+        } catch (Throwable t) {
+            Log.w(TAG, "documents mirror deferred failed", t);
+        }
     }
 
     /** Drops painted slots so a pending load cannot be mistaken for the open notebook. */
@@ -1051,6 +1164,7 @@ public final class CanvasActivity extends Activity {
         String name = label(id);
         Executor executor = retry ? UiExecutors.retryLoader : UiExecutors.loader;
         boolean first = !firstListShown;
+        boolean scratch = notebook == null;
         try {
             executor.execute(() -> {
                 List<BoardRepository.NotebookInfo> notebooks;
@@ -1065,6 +1179,9 @@ public final class CanvasActivity extends Activity {
                             rebuildNotebookTabs(notebooks);
                         }
                     });
+                    if (scratch) {
+                        markBootAttempt();
+                    }
                     ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight, shortPagesSince);
                     if (!ready) {
                         // Deleted notebook: ensureSheet fails; still post so UI can leave it.
@@ -1072,6 +1189,16 @@ public final class CanvasActivity extends Activity {
                             main.post(() -> finishLoad(new Loaded(
                                     generation, id, keepScroll, notebooks,
                                     java.util.Collections.emptyList())));
+                            return;
+                        }
+                        // Scratchpad/huge sheet refused (Error path): escape hatch.
+                        if (scratch) {
+                            main.post(() -> {
+                                if (generation == loadGeneration && !isDestroyed()) {
+                                    enterSafeBoot(new IllegalStateException(
+                                            "ensureSheet returned false for Scratchpad"));
+                                }
+                            });
                             return;
                         }
                         // Not Ready — do not show; armed retry.
@@ -1088,16 +1215,23 @@ public final class CanvasActivity extends Activity {
                                 + inked(pages) + " inked), " + notebooks.size() + " notebooks in "
                                 + (SystemClock.uptimeMillis() - started) + " ms");
                     }
-                } catch (RuntimeException e) {
-                    Log.e(TAG, "page list load failed; armed retry", e);
+                } catch (Throwable e) {
+                    // Incl. OutOfMemoryError — do not die; land library shell.
+                    Log.e(TAG, "page list load failed; safe boot", e);
                     LaunchLog.mark("page list load failed: " + e);
+                    main.post(() -> {
+                        if (generation == loadGeneration && !isDestroyed()) {
+                            enterSafeBoot(e);
+                        }
+                    });
                     return;
                 }
                 main.post(() -> finishLoad(new Loaded(generation, id, keepScroll, notebooks, pages)));
             });
-        } catch (RuntimeException e) {
-            Log.e(TAG, "page list load could not start; armed retry", e);
+        } catch (Throwable e) {
+            Log.e(TAG, "page list load could not start; safe boot", e);
             LaunchLog.mark("page list load could not start: " + e);
+            enterSafeBoot(e);
         }
     }
 
@@ -1145,12 +1279,21 @@ public final class CanvasActivity extends Activity {
             return;
         }
         // Same Ready paint spine as snappy open / reload / delete.
-        showReady(loaded.id(), loaded.pages(), loaded.keepScroll());
+        try {
+            showReady(loaded.id(), loaded.pages(), loaded.keepScroll());
+        } catch (Throwable e) {
+            enterSafeBoot(e);
+            return;
+        }
+        if (SCRATCHPAD.equals(loaded.id())) {
+            clearBootFlags();
+        }
         if (!firstListShown) {
             firstListShown = true;
             LaunchLog.mark("first page list on screen: " + label(loaded.id()) + ", " + loaded.pages().size()
                     + " pages (" + inked(loaded.pages()) + " inked), " + loaded.notebooks().size() + " notebook tabs");
         }
+        warmDeferredServices();
     }
 
     /**

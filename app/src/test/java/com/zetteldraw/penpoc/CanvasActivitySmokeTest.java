@@ -150,6 +150,7 @@ public class CanvasActivitySmokeTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
+        loadScratchpad(root);
         List<View> menus = byDescription(root, "Page options");
         assertEquals("every page shows ⋮; trailing blank is disabled", 3, menus.size());
         assertTrue(menus.get(0).isEnabled());
@@ -252,6 +253,7 @@ public class CanvasActivitySmokeTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
+        loadScratchpad(root);
         PageInkView ink = findInk(root);
         Board page = repo.scratchpadPages().get(0);
 
@@ -314,6 +316,11 @@ public class CanvasActivitySmokeTest {
         idle();
     }
 
+    /** v150 library-first cold start: tap Scratchpad to ensure+paint ink. */
+    private static void loadScratchpad(View root) {
+        clickDesc(root, "Scratchpad");
+    }
+
     @Test
     public void moveFilesPagesIntoExistingAndNewNotebooks() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
@@ -322,6 +329,7 @@ public class CanvasActivitySmokeTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
+        loadScratchpad(root);
 
         Board first = repo.scratchpadPages().get(0);
         first.paper.appendStroke(com.zetteldraw.penpoc.data.TestStrokes.stroke(20f, first.paperOrigin + 20f), first.id);
@@ -534,6 +542,7 @@ public class CanvasActivitySmokeTest {
         CanvasActivity activity = controller.get();
         View root = activity.getWindow().getDecorView();
         idle();
+        loadScratchpad(root);
         PageInkView ink = findInk(root);
         List<Rect> holes = ink.penExcludes();
 

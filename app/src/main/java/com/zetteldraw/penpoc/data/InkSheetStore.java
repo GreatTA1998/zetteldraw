@@ -199,6 +199,12 @@ public final class InkSheetStore {
                 }
                 installSheet(notebookId, sheetId, paper, healed.length, false);
                 return isSheetReady(notebookId);
+            } catch (Error e) {
+                // Legitimate huge replay / OOM: leave .zdl intact (no quarantine).
+                // Caller must safe-boot to library shell — never wipe the library.
+                Log.e(TAG, "ink log replay Error; leaving file intact " + sheetId, e);
+                LaunchLog.mark("ink log Error leave intact " + sheetId + ": " + e);
+                return false;
             } catch (IOException | RuntimeException e) {
                 // Header-level corruption: quarantine the file (keep bytes on disk),
                 // then try page-file migration or empty Ready so *this* sheet opens

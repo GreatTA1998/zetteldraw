@@ -19,7 +19,12 @@ public final class PenApp extends Application {
         super.attachBaseContext(base);
         LaunchLog.start(this);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            HiddenApiBypass.addHiddenApiExemptions("");
+            try {
+                HiddenApiBypass.addHiddenApiExemptions("");
+            } catch (Throwable t) {
+                // Onyx may soft-fail later; never kill cold start for bypass.
+                LaunchLog.mark("hidden-api bypass failed: " + t);
+            }
         }
     }
 
