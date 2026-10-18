@@ -16,8 +16,10 @@ import android.graphics.Paint;
 import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -344,10 +346,8 @@ public final class CanvasActivity extends Activity {
         createPageButton.setGravity(Gravity.CENTER);
         createPageButton.setMinHeight(dp(56));
         createPageButton.setPadding(dp(12), dp(14), dp(12), dp(14));
-        GradientDrawable createBg = new GradientDrawable();
-        createBg.setColor(Color.WHITE);
-        createBg.setStroke(dp(1), Color.BLACK);
-        createPageButton.setBackground(createBg);
+        // No top stroke — clashes with the dashed page separator above the button.
+        createPageButton.setBackground(createNewPageButtonBackground());
         createPageButton.setOnClickListener(v -> onCreateNewPage());
         pageColumn.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
             if (pendingScrollY < 0) {
@@ -1314,6 +1314,27 @@ public final class CanvasActivity extends Activity {
         int target = CollectionNav.scrollYBefore(pages, Math.max(0, pages.size() - 1), pageLayout());
         ++loadGeneration;
         showReady(collectionId, pages, target);
+    }
+
+    /**
+     * White fill with left/right/bottom hairlines only — no top edge so it does
+     * not double the dashed page separator above the control.
+     */
+    private Drawable createNewPageButtonBackground() {
+        int stroke = dp(1);
+        GradientDrawable fill = new GradientDrawable();
+        fill.setColor(Color.WHITE);
+        ColorDrawable left = new ColorDrawable(Color.BLACK);
+        ColorDrawable right = new ColorDrawable(Color.BLACK);
+        ColorDrawable bottom = new ColorDrawable(Color.BLACK);
+        LayerDrawable layers = new LayerDrawable(new Drawable[]{fill, left, right, bottom});
+        layers.setLayerWidth(1, stroke);
+        layers.setLayerGravity(1, Gravity.LEFT | Gravity.FILL_VERTICAL);
+        layers.setLayerWidth(2, stroke);
+        layers.setLayerGravity(2, Gravity.RIGHT | Gravity.FILL_VERTICAL);
+        layers.setLayerHeight(3, stroke);
+        layers.setLayerGravity(3, Gravity.BOTTOM | Gravity.FILL_HORIZONTAL);
+        return layers;
     }
 
     /** Builds the page slots and ink layout for {@code pages}; needs a page height. */
