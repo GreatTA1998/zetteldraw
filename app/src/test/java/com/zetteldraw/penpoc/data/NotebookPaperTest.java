@@ -48,6 +48,19 @@ public class NotebookPaperTest {
     }
 
     @Test
+    public void replayStructureSeesExtendGrownSlicesWithoutStrokes() throws Exception {
+        NotebookPaper paper = NotebookPaper.empty(100);
+        paper.appendStroke(line(null, 4f, 10f, 20f));
+        paper.appendStroke(line(null, 4f, 210f, 250f));
+        NotebookPaper structure = NotebookPaper.replayStructure(paper.bytes());
+        assertEquals(3, structure.sliceCount());
+        assertTrue(structure.strokes().isEmpty());
+        NotebookPaper ready = NotebookPaper.replay(paper.bytes());
+        assertEquals(2, ready.strokes().size());
+        assertEquals(3, ready.sliceCount());
+    }
+
+    @Test
     public void lastInkedSliceIsRememberedWithoutWalkingPages() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(100);
         assertEquals(-1, paper.lastInkedSlice());

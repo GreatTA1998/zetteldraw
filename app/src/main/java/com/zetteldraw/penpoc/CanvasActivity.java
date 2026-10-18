@@ -377,18 +377,16 @@ public final class CanvasActivity extends Activity {
         tools.bind(penButton, eraserButton, lassoButton, toolbar);
         tools.setTool(PageInkView.Tool.PEN);
         syncHistory();
+        // (1) App shell only. Default selection = Scratchpad chrome; no open yet.
+        // (2) First real page height → openScratchpad — exact same path as tapping it.
         styleTabs();
         inkView.setLive(true);
-        // Product default: cold start opens Scratchpad (ensure+paint off main;
-        // Ready first-paint on UiExecutors.renderer). Library-shell-only was
-        // v150 emergency — not the lasting product.
-        openCollection(collectionId, null);
     }
 
     /**
      * Page height follows the drawing area: recomputed on every size change,
      * not fixed by the first layout. Sizes too small to hold a page are ignored.
-     * First real size starts the only cold load when openCollection deferred.
+     * First real size opens the default selection via the shared tap path.
      */
     private void onDrawingAreaLaidOut() {
         int area = drawingArea.getHeight();
@@ -409,9 +407,12 @@ public final class CanvasActivity extends Activity {
                 return;
             }
             if (first) {
-                // openCollection → startLoad deferred until height; same keepScroll intent.
                 if (loading()) {
+                    // Rare: user tapped a tab before height; finish that shared open.
                     startLoad(collectionId, pendingKeepScroll, false);
+                } else {
+                    // Boot default: exact same select/open as tapping Scratchpad.
+                    openScratchpad(null);
                 }
             } else if (currentPages != null && !loading()) {
                 pageReflows.incrementAndGet();
@@ -813,7 +814,7 @@ public final class CanvasActivity extends Activity {
         }
         if (target == null) {
             notebookId = null;
-            openCollection(SCRATCHPAD, null);
+            openScratchpad(null);
         } else {
             openNotebook(target, null);
         }
@@ -831,6 +832,10 @@ public final class CanvasActivity extends Activity {
         }
     }
 
+    /**
+     * Select + open Scratchpad. Cold boot after shell and the Scratchpad tab
+     * both call this — one function, no parallel cold-start open helper.
+     */
     private void openScratchpad(Integer keepScroll) {
         boolean hadBars = !childBars.isEmpty();
         trail.clear();
@@ -941,6 +946,8 @@ public final class CanvasActivity extends Activity {
             List<Board> ready = repository.pages(notebook);
             if (ready != null && !ready.isEmpty()) {
                 ++loadGeneration;
+                // Same tab chrome as async finishLoad (boot snappy must not skip this).
+                rebuildNotebookTabs(repository.notebooks());
                 showReady(id, ready, keepScroll);
                 return;
             }
@@ -1047,10 +1054,10 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Thin open/load spine: ensure Ready off the main thread, then
-     * {@link #showReady}. Not-Ready / empty / fail retries until shown or
-     * superseded. When {@code pageHeight} is still 0, records intent only —
-     * first {@link #onDrawingAreaLaidOut} starts the only cold load.
+     * Shared open/load spine for every collection (Scratchpad tap, notebook tap,
+     * boot-after-shell). Ensure Ready off the main thread, then {@link #showReady}.
+     * When {@code pageHeight} is still 0, records intent only — first layout
+     * resumes via the same {@link #openScratchpad} / {@link #openNotebook} path.
      * {@code keepScroll} null means restore a remembered scroll, else first-open
      * last page / last inked.
      */
@@ -1059,7 +1066,7 @@ public final class CanvasActivity extends Activity {
         if (holdPen) {
             inkView.hold(PageInkView.Hold.LOADING);
         }
-        // No ensure / pages until height is known — deletes cold-start double load.
+        // No ensure / pages until height is known.
         if (pageHeight <= 0) {
             ++loadGeneration;
             return;
@@ -1069,9 +1076,9 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * One ensure→pages→paint pass. Arms a single deferred retry so a dropped /
-     * stuck / not-Ready pass cannot leave the screen empty; {@code retry} uses a
-     * fresh thread so a stuck first loader cannot block recovery.
+     * One ensure→pages→paint pass on the shared open spine (Scratchpad and every
+     * notebook). Structure may paint early (HOLD.LOADING); Ready releases the pen.
+     * Retry only when not shown and ensure is idle — never parallel full replays.
      * Caller guarantees {@code pageHeight > 0}.
      */
     private void requestReadyPages(int generation, String id, Integer keepScroll, boolean retry) {
@@ -1095,7 +1102,13 @@ public final class CanvasActivity extends Activity {
                             rebuildNotebookTabs(notebooks);
                         }
                     });
-                    ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight, shortPagesSince);
+                    ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight,
+                            shortPagesSince, structure -> {
+                                if (structure == null || structure.isEmpty()) {
+                                    return;
+                                }
+                                main.post(() -> showStructure(generation, id, structure, keepScroll));
+                            });
                     if (!ready) {
                         // Deleted notebook: ensureSheet fails; still post so UI can leave it.
                         if (notebook != null && notebookByIdIn(notebooks, notebook) == null) {
@@ -1148,9 +1161,39 @@ public final class CanvasActivity extends Activity {
         }
     }
 
+    /**
+     * Header-only page list while ensure continues. Same scroll bind as Ready;
+     * keeps {@link PageInkView.Hold#LOADING} so drawing waits on data.
+     * Does not advance {@code shownGeneration} — Ready {@link #finishLoad} still paints ink.
+     */
+    private void showStructure(int generation, String id, List<Board> pages, Integer keepScroll) {
+        if (generation != loadGeneration || isDestroyed() || pages == null || pages.isEmpty()) {
+            return;
+        }
+        if (shownGeneration == generation) {
+            return; // Ready already won
+        }
+        CollectionOpen.Bind bind = CollectionOpen.bindScroll(
+                collectionNav, id, pages, keepScroll, SCRATCHPAD.equals(id), pageLayout());
+        if (bind == null) {
+            return;
+        }
+        currentPages = bind.pages();
+        layoutPages(bind.pages(), bind.scrollY());
+        // Keep LOADING — structure is chrome only until Ready finishLoad.
+        inkView.hold(PageInkView.Hold.LOADING);
+        styleTabs();
+        LaunchLog.mark("page structure " + label(id) + ": " + pages.size() + " pages (ink pending)");
+    }
+
     private void scheduleLoadRetry(int generation, String id, Integer keepScroll) {
         main.postDelayed(() -> {
             if (generation != loadGeneration || shownGeneration == generation || isDestroyed()) {
+                return;
+            }
+            // Dense ensure often takes >1s — join the same flight; do not start another.
+            if (repository.isSheetEnsuring(notebookKey(id))) {
+                scheduleLoadRetry(generation, id, keepScroll);
                 return;
             }
             LaunchLog.mark("page list " + label(id) + " not shown after " + LOAD_RETRY_MS

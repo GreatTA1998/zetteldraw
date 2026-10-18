@@ -49,7 +49,7 @@ Tests that lock the guarantees (names encode the claim):
 
 Race invariants assume the process stays alive. They do **not** mean an unbounded Scratchpad fits in ~256 MB heap.
 
-**Cold start:** opens Scratchpad by default (product). Dense Ready first paint runs on `UiExecutors.renderer` so `renderSlice` is not done on the UI thread (`ReadyFirstPaintTest`). v150 library-shell-only was emergency recovery, not the lasting product.
+**Cold start:** shell first, then `openScratchpad` — the same select/open path as tapping Scratchpad (default selection). Dense Ready first paint runs on `UiExecutors.renderer` (`ReadyFirstPaintTest`). Ensure is single-flight; structure chrome can paint before full stroke replay.
 
 | Envelope | Expectation on tip **v69+** |
 | --- | --- |

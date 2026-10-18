@@ -50,6 +50,17 @@ public interface BoardRepository {
     boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince);
 
     /**
+     * Same as {@link #ensureSheet(String, int, int, long)} but may invoke
+     * {@code onStructure} with a slices-only projection after the log header
+     * parses (chrome first; strokes still loading). Drawing waits until Ready.
+     */
+    default boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
+                                long shortPagesSince,
+                                java.util.function.Consumer<java.util.List<Board>> onStructure) {
+        return ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
+    }
+
+    /**
      * Migrate every notebook that still has BoardEntity {@code .zdi} ink onto
      * Ready {@code .zdl} when {@code pageHeight} is known. Used before Prepare
      * transfer / Settings sync so unopened notebooks push LOG instead of BOARD.
@@ -66,6 +77,11 @@ public interface BoardRepository {
      * ink-log sheet (not the legacy Room board-row fallback).
      */
     boolean isSheetReady(String notebookId);
+
+    /** True while an ensure for this notebook is in flight (joiners included). */
+    default boolean isSheetEnsuring(String notebookId) {
+        return false;
+    }
 
     /**
      * Append the page as the newest inked page of the notebook (before its

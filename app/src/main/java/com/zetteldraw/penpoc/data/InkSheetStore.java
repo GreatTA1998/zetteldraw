@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 /**
@@ -107,9 +108,41 @@ public final class InkSheetStore {
 
     private final Deps deps;
     private final HashMap<String, OpenSheet> sheets = new HashMap<>();
+    /** One in-flight ensure per sheet — joins wait; never parallel full replays. */
+    private final HashMap<String, EnsureFlight> ensuring = new HashMap<>();
 
     public InkSheetStore(Deps deps) {
         this.deps = deps;
+    }
+
+    /** True while this sheet's ensure is running (including joiners). */
+    public boolean isEnsuring(String notebookId) {
+        synchronized (deps.lock()) {
+            return ensuring.containsKey(NotebookPaper.sheetId(notebookId));
+        }
+    }
+
+    private static final class EnsureFlight {
+        private boolean finished;
+        private boolean result;
+
+        synchronized void complete(boolean ok) {
+            finished = true;
+            result = ok;
+            notifyAll();
+        }
+
+        synchronized boolean await() {
+            while (!finished) {
+                try {
+                    wait();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return false;
+                }
+            }
+            return result;
+        }
     }
 
     OpenSheet get(String sheetId) {
@@ -158,14 +191,20 @@ public final class InkSheetStore {
 
     /**
      * Switch this notebook onto its ink log. Returns true when Ready afterward.
-     * Meta heal never queues; migration may queue.
+     * Meta heal never queues; migration may queue. Single-flight per sheet:
+     * concurrent callers join the same work (no parallel full replays).
+     *
+     * @param onStructure optional; receives a slices-only paper after header parse
+     *     so the shared open path can paint chrome before stroke replay finishes
      */
     public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
-                               long shortPagesSince) {
+                               long shortPagesSince, Consumer<NotebookPaper> onStructure) {
         if (pageHeight <= 0) {
             return false;
         }
         String sheetId = NotebookPaper.sheetId(notebookId);
+        EnsureFlight mine = null;
+        EnsureFlight join;
         synchronized (deps.lock()) {
             OpenSheet open = sheets.get(sheetId);
             if (open != null && open.ready) {
@@ -177,7 +216,38 @@ public final class InkSheetStore {
                     return false;
                 }
             }
+            join = ensuring.get(sheetId);
+            if (join == null) {
+                mine = new EnsureFlight();
+                ensuring.put(sheetId, mine);
+            }
         }
+        if (join != null) {
+            return join.await();
+        }
+        boolean ok = false;
+        try {
+            ok = ensureSheetBody(notebookId, sheetId, pageHeight, legacyPageHeight,
+                    shortPagesSince, onStructure);
+        } finally {
+            mine.complete(ok);
+            synchronized (deps.lock()) {
+                if (ensuring.get(sheetId) == mine) {
+                    ensuring.remove(sheetId);
+                }
+            }
+        }
+        return ok;
+    }
+
+    public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
+                               long shortPagesSince) {
+        return ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince, null);
+    }
+
+    private boolean ensureSheetBody(String notebookId, String sheetId, int pageHeight,
+                                    int legacyPageHeight, long shortPagesSince,
+                                    Consumer<NotebookPaper> onStructure) {
         byte[] existing;
         try {
             existing = deps.ink().readLog(sheetId);
@@ -187,6 +257,13 @@ public final class InkSheetStore {
         }
         if (existing != null) {
             try {
+                if (onStructure != null) {
+                    try {
+                        onStructure.accept(NotebookPaper.replayStructure(existing));
+                    } catch (RuntimeException e) {
+                        Log.w(TAG, "structure preview failed " + sheetId, e);
+                    }
+                }
                 RoomBoardRepository.logReplays.incrementAndGet();
                 NotebookPaper paper = NotebookPaper.replay(existing);
                 byte[] healed = paper.bytes();
@@ -197,7 +274,7 @@ public final class InkSheetStore {
                     LaunchLog.mark("healed ink log " + sheetId + " "
                             + existing.length + "→" + healed.length + " bytes");
                 }
-                installSheet(notebookId, sheetId, paper, healed.length, false);
+                installSheet(notebookId, sheetId, paper, healed.length, false, healed);
                 return isSheetReady(notebookId);
             } catch (Error e) {
                 // Legitimate huge replay / OOM: leave .zdl intact (no quarantine).
@@ -250,7 +327,7 @@ public final class InkSheetStore {
             Log.e(TAG, "empty Ready heal write failed " + sheetId, e);
             return false;
         }
-        installSheet(notebookId, sheetId, empty, bytes.length, false);
+        installSheet(notebookId, sheetId, empty, bytes.length, false, bytes);
         return isSheetReady(notebookId);
     }
 
@@ -295,18 +372,28 @@ public final class InkSheetStore {
             Log.e(TAG, "migration disk read-back refused " + sheetId);
             return false;
         }
-        installSheet(notebookId, sheetId, readBack, bytes.length, queue);
+        installSheet(notebookId, sheetId, readBack, bytes.length, queue, bytes);
         return isSheetReady(notebookId);
     }
 
-    void installSheet(String notebookId, String sheetId, NotebookPaper paper, int flushed, boolean queue) {
-        // Disk I/O outside the repo lock so main-thread pages()/isSheetReady
-        // are not blocked on large .zdl reads during ensureSheet.
-        byte[] bytes;
-        try {
-            bytes = deps.ink().readLog(sheetId);
-        } catch (IOException e) {
-            return;
+    void installSheet(String notebookId, String sheetId, NotebookPaper paper, int flushed,
+                      boolean queue) {
+        installSheet(notebookId, sheetId, paper, flushed, queue, null);
+    }
+
+    /**
+     * @param knownBytes when non-null (caller just read/replayed), skip a second
+     *     multi-MB {@code readLog} of the same file
+     */
+    void installSheet(String notebookId, String sheetId, NotebookPaper paper, int flushed,
+                      boolean queue, byte[] knownBytes) {
+        byte[] bytes = knownBytes;
+        if (bytes == null) {
+            try {
+                bytes = deps.ink().readLog(sheetId);
+            } catch (IOException e) {
+                return;
+            }
         }
         if (bytes == null) {
             bytes = paper.bytes();
