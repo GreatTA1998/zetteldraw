@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v143: Ready-only paint — delete Board.strokes mutation dual.
-        versionCode = 143
-        versionName = "4.22"
+        // Tip v144: Ready-only display — delete Board.strokes async bitmap dual.
+        versionCode = 144
+        versionName = "4.23"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

@@ -113,9 +113,6 @@ final class PageInkView extends FrameLayout {
     private volatile InkViewport shown = InkViewport.EMPTY;
     /** {@link #shown} when the current pen stroke went down; touched only on the SDK's callback thread. */
     private InkViewport penDownViewport;
-    /** Set while the first screen of a new page list renders off the main thread. */
-    private Object renderToken;
-    private InkViewport.Layout renderingLayout;
     /** Next viewport, or null; {@link #applyViewport} installs it behind queued pen callbacks. */
     private InkViewport requested;
     private boolean applyPosted;
@@ -292,106 +289,10 @@ final class PageInkView extends FrameLayout {
         if (next == null) {
             return;
         }
-        if (renderToken != null && renderingLayout == next.layout) {
-            return;
-        }
-        if (next.layout != shown.layout && !shown.isEmpty() && !shown.mapsLike(next)) {
-            List<RenderJob> jobs = missingBitmaps(next);
-            if (!jobs.isEmpty()) {
-                Object token = new Object();
-                renderToken = token;
-                renderingLayout = next.layout;
-                int width = surfaceView.getWidth();
-                UiExecutors.renderer.execute(() -> {
-                    long started = SystemClock.uptimeMillis();
-                    for (RenderJob job : jobs) {
-                        job.bitmap = renderPage(job.strokes, width, job.height);
-                    }
-                    LaunchLog.once("render", "first screen of pages rendered: " + jobs.size() + " pages in "
-                            + (SystemClock.uptimeMillis() - started) + " ms");
-                    main.post(() -> finishRender(token, jobs));
-                });
-                return;
-            }
-        }
+        // Ready-only display: every shown slice has paper; bitmaps come from
+        // renderSlice on the main thread (no Board.strokes async paint dual).
         requested = null;
         install(next);
-    }
-
-    private void finishRender(Object token, List<RenderJob> jobs) {
-        boolean current = token == renderToken;
-        InkViewport next = requested;
-        if (current) {
-            renderToken = null;
-        }
-        boolean usable = current && next != null && next.layout == renderingLayout;
-        for (RenderJob job : jobs) {
-            if (usable && sameStrokes(job.page.strokes, job.strokes)) {
-                putBitmap(job.page.id, job.bitmap);
-            } else {
-                job.bitmap.recycle();
-            }
-        }
-        if (usable) {
-            renderingLayout = null;
-            requested = null;
-            install(next);
-        } else if (current) {
-            renderingLayout = null;
-            if (next != null && !applyPosted) {
-                applyPosted = true;
-                main.post(applyViewport);
-            }
-        }
-    }
-
-    /** Visible pages of {@code next} with no cached bitmap, with stroke snapshots taken here on the main thread. */
-    private List<RenderJob> missingBitmaps(InkViewport next) {
-        ArrayList<RenderJob> jobs = new ArrayList<>();
-        if (surfaceView.getWidth() <= 0 || next.isEmpty()) {
-            return jobs;
-        }
-        int last = next.lastVisible(surfaceView.getHeight());
-        for (int index = next.firstVisible(); index <= last; index++) {
-            Board page = next.page(index);
-            int height = next.layout.heights[index];
-            // Paper ink is drawn from the sheet in the on-screen slice only.
-            // Snapshotting page.strokes here would cache a blank bitmap.
-            if (page.paper != null) {
-                continue;
-            }
-            Bitmap cached = bitmaps.get(page.id);
-            if (cached == null || cached.getHeight() != height) {
-                jobs.add(new RenderJob(page, new ArrayList<>(page.strokes), height));
-                paintedPageIds.add(page.id);
-            }
-        }
-        return jobs;
-    }
-
-    private static boolean sameStrokes(List<InkRenderer.InkStroke> now, List<InkRenderer.InkStroke> snapshot) {
-        if (now.size() != snapshot.size()) {
-            return false;
-        }
-        for (int i = 0; i < now.size(); i++) {
-            if (now.get(i) != snapshot.get(i)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static final class RenderJob {
-        final Board page;
-        final List<InkRenderer.InkStroke> strokes;
-        final int height;
-        Bitmap bitmap;
-
-        RenderJob(Board page, List<InkRenderer.InkStroke> strokes, int height) {
-            this.page = page;
-            this.strokes = strokes;
-            this.height = height;
-        }
     }
 
     private void install(InkViewport next) {
@@ -644,8 +545,6 @@ final class PageInkView extends FrameLayout {
         main.removeCallbacks(applyViewport);
         main.removeCallbacks(applyDespiteStuckPen);
         applyPosted = false;
-        renderToken = null;
-        renderingLayout = null;
         endSelection();
         live = false;
         worker.close();
@@ -977,14 +876,10 @@ final class PageInkView extends FrameLayout {
             return bitmap;
         }
         int width = surfaceView.getWidth();
-        if (width <= 0) {
+        if (width <= 0 || page.paper == null) {
             return null;
         }
-        if (page.paper != null) {
-            bitmap = renderSlice(page, width, height, null);
-        } else {
-            bitmap = renderPage(page.strokes, width, height);
-        }
+        bitmap = renderSlice(page, width, height, null);
         putBitmap(page.id, bitmap);
         return bitmap;
     }
@@ -998,20 +893,6 @@ final class PageInkView extends FrameLayout {
             it.remove();
         }
         bitmaps.put(pageId, bitmap);
-    }
-
-    /** Any thread: {@code strokes} must not change while this runs (pass a snapshot off the main thread). */
-    static Bitmap renderPage(List<InkRenderer.InkStroke> strokes, int width, int height) {
-        Paint ink = new Paint(Paint.ANTI_ALIAS_FLAG);
-        ink.setStyle(Paint.Style.STROKE);
-        ink.setColor(Color.BLACK);
-        ink.setStrokeCap(Paint.Cap.ROUND);
-        ink.setStrokeJoin(Paint.Join.ROUND);
-        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        bitmap.eraseColor(Color.WHITE);
-        Canvas canvas = new Canvas(bitmap);
-        InkRenderer.drawAll(canvas, ink, strokes);
-        return bitmap;
     }
 
     // ---- Lasso ----
