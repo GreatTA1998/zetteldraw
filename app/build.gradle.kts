@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v142: drag-reorder notebook names on the Boox top nav strip.
-        versionCode = 142
-        versionName = "4.21"
+        // Tip v148: exact v142 code (DnD nav reorder) + version bump only — restore usable tip after v143–v147 Boox crashes.
+        versionCode = 148
+        versionName = "4.27"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.
