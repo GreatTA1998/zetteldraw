@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import pg from "pg";
 import { beforeAll, describe, expect, it } from "vitest";
 import { encodeInk, type InkStroke } from "../../src/ink.js";
 import { S3InkStorage } from "../../src/storage.js";
@@ -8,6 +9,8 @@ import { imageKey } from "../../src/thumbs.js";
 // Runs against a live stack: `npm run test:integration` brings it up with docker compose.
 const URL_BASE = process.env.SYNC_URL ?? "http://127.0.0.1:8787";
 const TOKEN = process.env.SYNC_TOKEN ?? "dev-device-token";
+const DATABASE_URL =
+  process.env.DATABASE_URL ?? "postgres://zetteldraw:zetteldraw@127.0.0.1:55432/zetteldraw";
 
 const storage = S3InkStorage.fromConfig({
   endpoint: process.env.S3_ENDPOINT ?? "http://127.0.0.1:59000",
@@ -94,27 +97,41 @@ beforeAll(async () => {
     deleted_at: null,
     base_rev: 0,
   });
-  const board = (i: number, notebookId: string | null, position: string) => ({
-    id: pages[i],
-    notebook_id: notebookId,
-    position,
-    ink_hash: inks[i].hash,
-    ink_bytes: inks[i].bytes.length,
-    thumb_hash: null,
-    conflict_of: null,
-    created_at: now,
-    updated_at: now,
-    deleted_at: null,
-    base_rev: 0,
-  });
+  // BOARD push retired — notebooks via /sync/push; page rows + blobs via SQL/S3.
   const res = await call("POST", "/sync/push", {
     schema_version: schema,
     device_id: "web-test",
     notebooks: [notebook(notebookA, "Web test A", notebookKey), notebook(notebookB, "Web test B", `${notebookKey}V`)],
-    boards: [board(0, notebookA, "a0"), board(1, notebookA, "a1"), board(2, notebookA, "a2"), board(3, notebookB, "a0")],
-    blobs: Object.fromEntries(inks.map((k) => [k.hash, k.bytes.toString("base64")])),
+    boards: [],
+    logs: [],
+    links: [],
+    blobs: {},
   });
   expect(res.status).toBe(200);
+  for (const ink of inks) {
+    await storage.put(ink.hash, ink.bytes);
+  }
+  const pool = new pg.Pool({ connectionString: DATABASE_URL });
+  const boardRows: Array<{ i: number; notebookId: string; position: string }> = [
+    { i: 0, notebookId: notebookA, position: "a0" },
+    { i: 1, notebookId: notebookA, position: "a1" },
+    { i: 2, notebookId: notebookA, position: "a2" },
+    { i: 3, notebookId: notebookB, position: "a0" },
+  ];
+  try {
+    for (const row of boardRows) {
+      const ink = inks[row.i];
+      await pool.query(
+        `INSERT INTO boards (
+           id, notebook_id, position, ink_hash, ink_bytes, thumb_hash,
+           conflict_of, created_at, updated_at, deleted_at, rev
+         ) VALUES ($1,$2,$3,$4,$5,null,null,$6,$6,null, nextval('sync_rev'))`,
+        [pages[row.i], row.notebookId, row.position, ink.hash, ink.bytes.length, now],
+      );
+    }
+  } finally {
+    await pool.end();
+  }
 });
 
 describe("web auth", () => {

@@ -74,8 +74,7 @@ public final class InkSheetStore {
 
     /**
      * Pulled log staged outside the lock (hash-checked + replayed once).
-     * Same idea as {@link MetaPullApply.Staged} for unmigrated board residue —
-     * apply under lock must not replay again.
+     * Apply under lock must not replay again.
      */
     record StagedLog(byte[] bytes, NotebookPaper paper) {
     }

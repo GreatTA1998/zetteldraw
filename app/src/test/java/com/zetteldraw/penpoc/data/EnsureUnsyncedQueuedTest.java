@@ -117,7 +117,7 @@ public class EnsureUnsyncedQueuedTest {
         assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
 
         SyncStore.PushBatch batch = repo.pendingPush(50);
-        assertTrue(batch.boards.isEmpty());
+        assertTrue(batch.isEmpty());
         assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
         // Local .zdi residue remains until open / Prepare migrate → LOG.
         assertNotNull(device.db.dao().board(page.id).inkHash);
