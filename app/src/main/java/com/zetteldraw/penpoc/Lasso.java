@@ -6,15 +6,12 @@ import com.onyx.android.sdk.data.note.TouchPoint;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 /**
- * Lasso selection on one page, in page-local coordinates. A move rewrites
- * the selected strokes' points and keeps their ids.
+ * Lasso hit-testing and clamping on strokes, in the coordinates the caller passes.
  */
 final class Lasso {
     /** Share of a stroke's points that must fall inside the lasso. */
@@ -189,17 +186,6 @@ final class Lasso {
     }
 
     /**
-     * Limits an offset so {@code bounds} stays on a page of the given size.
-     * Ink already past an edge may stay there but is not pushed further out.
-     */
-    static float[] clampOffset(RectF bounds, float dx, float dy, float pageWidth, float pageHeight) {
-        return new float[]{
-                clamp(dx, Math.min(0f, -bounds.left), Math.max(0f, pageWidth - bounds.right)),
-                clamp(dy, Math.min(0f, -bounds.top), Math.max(0f, pageHeight - bounds.bottom)),
-        };
-    }
-
-    /**
      * Keeps {@code bounds} inside the paper rectangle that is already on screen.
      * Ink already past an edge may stay there but is not pushed further out.
      */
@@ -256,51 +242,16 @@ final class Lasso {
         return ids;
     }
 
-    /**
-     * Shifts the strokes with these ids in place (order and ids kept).
-     * Returns null when nothing moved.
-     */
-    static Move move(Board page, Set<String> ids, float dx, float dy) {
-        if (page == null || ids == null || ids.isEmpty() || (dx == 0f && dy == 0f)) {
-            return null;
-        }
-        HashMap<String, InkRenderer.InkStroke> before = new HashMap<>();
-        HashMap<String, InkRenderer.InkStroke> after = new HashMap<>();
-        for (int i = 0; i < page.strokes.size(); i++) {
-            InkRenderer.InkStroke stroke = page.strokes.get(i);
-            if (ids.contains(stroke.id)) {
-                InkRenderer.InkStroke moved = stroke.translated(dx, dy);
-                before.put(stroke.id, stroke);
-                after.put(stroke.id, moved);
-                page.strokes.set(i, moved);
-            }
-        }
-        return before.isEmpty() ? null : new Move(page, before, after, dx, dy);
-    }
-
-    /** One committed lasso move: the strokes before and after, by id. */
+    /** One committed lasso move of the paper selection. */
     static final class Move {
         final Board page;
         final float dx;
         final float dy;
-        private final Map<String, InkRenderer.InkStroke> before;
-        private final Map<String, InkRenderer.InkStroke> after;
 
-        Move(Board page, Map<String, InkRenderer.InkStroke> before,
-             Map<String, InkRenderer.InkStroke> after, float dx, float dy) {
+        Move(Board page, float dx, float dy) {
             this.page = page;
-            this.before = before;
-            this.after = after;
             this.dx = dx;
             this.dy = dy;
-        }
-
-        int size() {
-            return before.size();
-        }
-
-        InkHistory.Part historyPart() {
-            return InkHistory.Part.moved(page, before, after);
         }
     }
 }

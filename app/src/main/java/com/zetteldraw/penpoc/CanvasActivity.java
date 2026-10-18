@@ -977,16 +977,10 @@ public final class CanvasActivity extends Activity {
         collectionNav.rememberScroll(collectionId, y, count, anchor);
     }
 
-    /** True when the on-screen list came from a Ready sheet (or true legacy boards). */
+    /** True when the on-screen list came from a Ready sheet. */
     private boolean collectionShownReady() {
-        if (currentPages == null || currentPages.isEmpty()) {
-            return false;
-        }
-        if (repository.isSheetReady(notebookKey(collectionId))) {
-            return true;
-        }
-        // Pre-migration lists have no paper on boards.
-        return currentPages.get(0).paper == null;
+        return currentPages != null && !currentPages.isEmpty()
+                && repository.isSheetReady(notebookKey(collectionId));
     }
 
     private CollectionNav.PageLayout pageLayout() {
@@ -3162,11 +3156,6 @@ public final class CanvasActivity extends Activity {
         return null;
     }
 
-    /**
-     * Pages are {@link #pageHeight} tall, except a page from before v10 whose
-     * ink reaches below that: it keeps the old full-window height, so nothing
-     * is cropped or shifted.
-     */
     /** The dashed line is a mark. On a one-sheet notebook it adds no gap. */
     private int layoutGap(List<Board> pages) {
         if (pages != null && !pages.isEmpty() && pages.get(0).paper != null) {
@@ -3176,20 +3165,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private int heightOf(Board page) {
-        if (page.slicePx > 0) {
-            return page.slicePx;
-        }
-        if (page.createdAt >= shortPagesSince) {
-            return pageHeight;
-        }
-        float bottom = 0f;
-        for (InkRenderer.InkStroke stroke : page.strokes) {
-            bottom = Math.max(bottom, stroke.bounds.bottom + stroke.maxWidth);
-        }
-        if (bottom <= pageHeight) {
-            return pageHeight;
-        }
-        return Math.max(legacyPageHeight, (int) Math.ceil(bottom));
+        return page.slicePx > 0 ? page.slicePx : pageHeight;
     }
 
     /**
