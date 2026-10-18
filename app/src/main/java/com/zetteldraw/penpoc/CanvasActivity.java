@@ -952,13 +952,13 @@ public final class CanvasActivity extends Activity {
                 return;
             }
         }
-        // Different collection not Ready yet: never leave the previous notebook's
-        // ink painted under the new tab selection (Dating/Stacey "same sheet" bug).
-        // Same-collection cold reload may keep the old list briefly with pen held.
-        // Keep pages during Link/Reorder — clearing would drop the target ref in the
-        // mode bar until Ready returns.
-        if (switched && linkSourceId == null && reorderSourceId == null) {
+        // Not Ready: no page chrome / viewport until ink is Ready (shared open
+        // path — cold start and every notebook tap). Nav tabs stay; blank pages
+        // that tempt drawing are never shown. Keep pages during Link/Reorder so
+        // the mode bar target ref survives until Ready returns.
+        if (linkSourceId == null && reorderSourceId == null) {
             clearShownPages();
+            showOpenLoadingShell();
         }
         startLoad(id, keepScroll, true);
     }
@@ -1077,7 +1077,7 @@ public final class CanvasActivity extends Activity {
 
     /**
      * One ensure→pages→paint pass on the shared open spine (Scratchpad and every
-     * notebook). Structure may paint early (HOLD.LOADING); Ready releases the pen.
+     * notebook). No page chrome until Ready — structure preview is not shown.
      * Retry only when not shown and ensure is idle — never parallel full replays.
      * Caller guarantees {@code pageHeight > 0}.
      */
@@ -1102,13 +1102,10 @@ public final class CanvasActivity extends Activity {
                             rebuildNotebookTabs(notebooks);
                         }
                     });
+                    // Null structure callback: UI must not paint blank page chrome
+                    // while strokes are still replaying (v153 draw-on-blank race).
                     ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight,
-                            shortPagesSince, structure -> {
-                                if (structure == null || structure.isEmpty()) {
-                                    return;
-                                }
-                                main.post(() -> showStructure(generation, id, structure, keepScroll));
-                            });
+                            shortPagesSince);
                     if (!ready) {
                         // Deleted notebook: ensureSheet fails; still post so UI can leave it.
                         if (notebook != null && notebookByIdIn(notebooks, notebook) == null) {
@@ -1162,28 +1159,21 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Header-only page list while ensure continues. Same scroll bind as Ready;
-     * keeps {@link PageInkView.Hold#LOADING} so drawing waits on data.
-     * Does not advance {@code shownGeneration} — Ready {@link #finishLoad} still paints ink.
+     * Nav-only open shell while ensure runs: no page slots, empty ink viewport.
+     * Cleared by {@link #layoutPages} when Ready arrives.
      */
-    private void showStructure(int generation, String id, List<Board> pages, Integer keepScroll) {
-        if (generation != loadGeneration || isDestroyed() || pages == null || pages.isEmpty()) {
+    private void showOpenLoadingShell() {
+        if (pageColumn.getChildCount() > 0) {
             return;
         }
-        if (shownGeneration == generation) {
-            return; // Ready already won
-        }
-        CollectionOpen.Bind bind = CollectionOpen.bindScroll(
-                collectionNav, id, pages, keepScroll, SCRATCHPAD.equals(id), pageLayout());
-        if (bind == null) {
-            return;
-        }
-        currentPages = bind.pages();
-        layoutPages(bind.pages(), bind.scrollY());
-        // Keep LOADING — structure is chrome only until Ready finishLoad.
-        inkView.hold(PageInkView.Hold.LOADING);
-        styleTabs();
-        LaunchLog.mark("page structure " + label(id) + ": " + pages.size() + " pages (ink pending)");
+        TextView loading = new TextView(this);
+        loading.setText(R.string.open_loading);
+        loading.setTextSize(16f);
+        loading.setGravity(Gravity.CENTER);
+        loading.setPadding(dp(24), dp(48), dp(24), dp(48));
+        pageColumn.addView(loading, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        LaunchLog.mark("open loading shell " + label(collectionId));
     }
 
     private void scheduleLoadRetry(int generation, String id, Integer keepScroll) {

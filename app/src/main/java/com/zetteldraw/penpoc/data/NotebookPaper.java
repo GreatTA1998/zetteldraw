@@ -171,8 +171,8 @@ public final class NotebookPaper {
 
     /**
      * Slices-only paper: header + {@code EXTEND}/{@code TEAR} (skip stroke ops).
-     * Cheap pass so the shared open path can paint chrome before full stroke
-     * materialization. Drawing must wait for {@link #replay}.
+     * For tests / tooling. The shared UI open path waits for full {@link #replay}
+     * (Ready) before showing any page chrome.
      */
     public static NotebookPaper replayStructure(byte[] bytes) throws IOException {
         return replayOps(bytes, false);

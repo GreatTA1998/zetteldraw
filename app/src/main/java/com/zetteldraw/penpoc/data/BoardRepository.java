@@ -52,7 +52,8 @@ public interface BoardRepository {
     /**
      * Same as {@link #ensureSheet(String, int, int, long)} but may invoke
      * {@code onStructure} with a slices-only projection after the log header
-     * parses (chrome first; strokes still loading). Drawing waits until Ready.
+     * parses. The shared UI open path does not use this — pages stay hidden
+     * until Ready ink; optional for tests / tooling only.
      */
     default boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
                                 long shortPagesSince,
