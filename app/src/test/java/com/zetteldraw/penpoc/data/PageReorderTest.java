@@ -154,6 +154,21 @@ public class PageReorderTest {
         assertNotNull(repo.pages(notebook).get(0).paper.stroke("solo"));
     }
 
+    /** Create-new-page blanks are real slices — place/move do not require ink. */
+    @Test
+    public void blankReadySlicePlacesAndMoves() {
+        Board blank = repo.createPage(notebook);
+        Board anchor = inkNearBottom(notebook, "anchor");
+        assertTrue(blank.isBlank());
+        assertTrue(repo.placePageBefore(blank.id, anchor.id));
+        assertEquals(blank.id, repo.pages(notebook).get(0).id);
+        String other = repo.createNotebook("blank-dest").id();
+        repo.ensureSheet(other, PAGE, PAGE, 0L);
+        assertTrue(repo.movePageToNotebook(blank.id, other));
+        assertEquals(blank.id, repo.pages(other).get(0).id);
+        assertTrue(repo.pages(notebook).stream().noneMatch(p -> blank.id.equals(p.id)));
+    }
+
     @Test
     public void densePlaceBeforeTrailingKeepsEveryStroke() throws Exception {
         Board blank = repo.createPage(notebook);

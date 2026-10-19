@@ -96,7 +96,7 @@ public interface BoardRepository {
      * destination (so a stale midline page from the notebook you just left
      * cannot steal the move). Dense pages stay atomic.
      *
-     * @return false when nothing changed (missing source/dest, blank source, etc.)
+     * @return false when nothing changed (missing source/dest, noop append, etc.)
      */
     boolean placePageBefore(String boardId, String beforeBoardId, String destNotebookId);
 

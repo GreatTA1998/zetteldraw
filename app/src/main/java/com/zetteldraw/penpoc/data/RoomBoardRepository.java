@@ -304,9 +304,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         synchronized (lock) {
             InkSheetStore.OpenSheet dest = sheetStore.get(destSheetId);
             int sourceIndex = moving.paper.indexOfSliceId(boardId);
-            if (dest == null || !dest.ready || sourceIndex < 0
-                    || !moving.paper.containsInk(sourceIndex)) {
-                LaunchLog.mark("place-before refused: dest not ready or source has no ink"
+            if (dest == null || !dest.ready || sourceIndex < 0) {
+                LaunchLog.mark("place-before refused: dest not ready or source missing"
                         + " destReady=" + (dest != null && dest.ready)
                         + " sourceIndex=" + sourceIndex);
                 return false;
@@ -711,13 +710,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return true;
         }
         ensureSheet(null, height, legacy, knownShortPagesSince);
-        ArrayList<String> inked = new ArrayList<>();
+        // Every Ready slice is real — blank Create-new-page slices return too.
+        ArrayList<String> ids = new ArrayList<>();
         for (Board page : pages(notebookId)) {
-            if (!page.isBlank()) {
-                inked.add(page.id);
-            }
+            ids.add(page.id);
         }
-        for (String id : inked) {
+        for (String id : ids) {
             if (!movePageToNotebook(id, null)) {
                 LaunchLog.mark("returnReady Move failed " + id + " from " + notebookId);
                 return false;

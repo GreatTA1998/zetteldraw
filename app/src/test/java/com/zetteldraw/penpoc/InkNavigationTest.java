@@ -370,10 +370,6 @@ public class InkNavigationTest {
         }
 
         @Override
-        public void onPageBecameNonEmpty(Board page) {
-        }
-
-        @Override
         public void onLassoSelected(int selected) {
         }
 

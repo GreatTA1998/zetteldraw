@@ -28,11 +28,11 @@ Seed top-level notebooks: comedy, journal, actions.life, miscellaneous. Scratchp
 
 **Tool row.** Undo · Redo | Pen · Eraser · Lasso. Active tool gets the same 2 dp underline. Pen is **black only** (fountain ~4.75 px). Eraser deletes whole strokes; Wipe clears a page (via **⋮**). One `ToolController.setTool` path keeps chrome, `PageInkView`, and the raw brush aligned. Root overlays must not cover the tool row.
 
-**Drawing area.** Continuous vertical scroll of pages split by a dashed line. Finger scrolls; stylus draws. Every list ends with one trailing blank. First stroke on the blank stores it and grows a new blank. Page chrome: top-left **k/n**; bottom-left link refs then **Link · Reorder**; bottom-right **Move · ⋮**.
+**Drawing area.** Continuous vertical scroll of pages split by a dashed line. Finger scrolls; stylus draws. Ready slices only; append via **Create new page** (not a soft trailing blank). Page chrome: top-left **k/n**; bottom-left link refs then **Link · Reorder**; bottom-right **Move · ⋮**.
 
 **Mode UIs.** Link and Reorder use a **bottom snackbar** with Confirm/Cancel and normal nav (bars + scroll). Do **not** fold temporary mode chrome into the top bars or rename the standing Link / Move / Reorder labels. Move and Place under use the **shared hierarchy notebook menu** (wide multi-column packed tree over the drawing area), not snackbar+nav.
 
-**Blank pages.** Link / Reorder / Move visible but disabled (same alpha). On the trailing blank, **⋮** stays visible with that disabled look; taps no-op.
+**Pages.** Every Ready slice is a real page — blank or inked — with the same Link / Reorder / Move / ⋮ actions. Create-new-page is a control, not a page.
 
 **Tap feedback.** Quiet ambient micro-sounds on UI `ACTION_DOWN` (cycle leaf → water → wood → fabric → pebble). Ink path stays silent.
 
@@ -40,7 +40,7 @@ Seed top-level notebooks: comedy, journal, actions.life, miscellaneous. Scratchp
 
 ## Notebook open and navigation
 
-- **First open** of a collection → last page (Scratchpad: trailing blank; notebook: last inked, or first if empty).
+- **First open** of a collection → last page (or empty sheet + Create new page).
 - **Return** → restore prior scroll (session + SharedPreferences). Page **links** still jump to the linked page.
 - Paint only when the ink-log sheet is **Ready**. Page counts and `k/n` come from the Ready paper projection (ink log), not stale Room board rows.
 - Switching collections clears previous ink if the target sheet is not Ready yet (no parent ink under a child’s tab).
@@ -52,8 +52,8 @@ Seed top-level notebooks: comedy, journal, actions.life, miscellaneous. Scratchp
 | Control | Behavior |
 | --- | --- |
 | **Link** | Snackbar; navigate to target; Confirm stores two page ids. Copy: *Linking A to B*. |
-| **Reorder** | Snackbar; target = page under viewport midline; Confirm places source **before** target (cross-notebook allowed). Trailing blank → append. Dest = **open collection**. |
-| **Move** | Hierarchy menu; pick notebook or **+ New notebook**; page appends as newest (place-before trailing blank; page id + move safety kept). |
+| **Reorder** | Snackbar; target = page under viewport midline; Confirm places source **before** target (cross-notebook allowed). Midline past last page (over Create new page) → append. Dest = **open collection**. |
+| **Move** | Hierarchy menu; pick notebook or **+ New notebook**; page appends as newest (page id + move safety kept). |
 | **Place under…** | Same hierarchy menu; pick parent (self/descendants omitted). Sets `parent_id` only — does not merge sheets. |
 | **⋮** | Wipe / Delete page. |
 
@@ -108,11 +108,11 @@ Use this as a smoke list against tip/Play builds. Prefer failing closed over shi
 - [ ] Pen / Eraser / Lasso underline matches what the stylus does (single tool path).
 - [ ] After lasso drag, tool stays **Lasso**; selection remains until tap-outside.
 - [ ] Link · Reorder stay bottom-left snackbar flows; Move · Place under stay hierarchy menu; labels unchanged.
-- [ ] Blank pages: Link/Reorder/Move disabled (visible); trailing blank **⋮** disabled-look, not invisible.
+- [ ] Blank Ready slices: Link / Reorder / Move / ⋮ enabled (same as inked).
 
 **Navigation**
 
-- [ ] First open → last page; return → prior scroll; links still jump.
+- [ ] First open → last page (or empty + Create new page); return → prior scroll; links still jump.
 - [ ] `k/n` / page list match Ready ink-log projection (not a short Room-only list like “23/23” on a long Scratchpad).
 
 **Pages / hierarchy**
@@ -120,7 +120,7 @@ Use this as a smoke list against tip/Play builds. Prefer failing closed over shi
 - [ ] Reorder Confirm places before midline page in the **open** collection; Move appends via menu without requiring a dest visit.
 - [ ] Cross-notebook move keeps page id; no silent drop mid-tear.
 - [ ] Place under sets parent only; children’s pages stay on their own sheets.
-- [ ] Delete notebook: children promote; deleted notebook’s pages → Scratchpad.
+- [ ] Delete notebook: children promote; deleted notebook’s pages (incl. blank) → Scratchpad.
 
 **Sync / restore**
 

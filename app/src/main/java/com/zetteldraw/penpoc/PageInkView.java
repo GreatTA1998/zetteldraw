@@ -54,8 +54,6 @@ final class PageInkView extends FrameLayout {
     interface Listener {
         void onPageChanged(Board page);
 
-        void onPageBecameNonEmpty(Board page);
-
         /** A lasso closed; {@code selected == 0} means it caught nothing. */
         void onLassoSelected(int selected);
 
@@ -1404,9 +1402,6 @@ final class PageInkView extends FrameLayout {
         historyChanged();
         redrawAll();
         notifyChanged(page);
-        if (listener != null) {
-            listener.onPageBecameNonEmpty(page);
-        }
         return true;
     }
 
@@ -1469,7 +1464,6 @@ final class PageInkView extends FrameLayout {
         }
         Board page = drawnOn.page(index);
         NotebookPaper paper = page.paper;
-        boolean wasBlank = page.isBlank();
         ArrayList<TouchPoint> paperPoints = toPaper(points, drawnOn.scrollY);
         InkRenderer.InkStroke stroke = InkRenderer.strokeFrom(paperPoints);
         paper.appendStroke(stroke);
@@ -1481,9 +1475,6 @@ final class PageInkView extends FrameLayout {
         // was blank without Color CU.
         paintStrokeOntoPaperCaches(drawnOn, paper, stroke);
         notifyChanged(page);
-        if (wasBlank && listener != null) {
-            listener.onPageBecameNonEmpty(page);
-        }
     }
 
     private void erasePaper(List<TouchPoint> eraserPath, InkViewport view) {

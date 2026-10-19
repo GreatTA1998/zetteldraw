@@ -33,7 +33,7 @@ The **web companion** (https://zetteldraw.com) is **read-only** for ink and libr
 
 **Mode UIs.** Link and Reorder use a **bottom snackbar** with Confirm/Cancel and normal nav. Do **not** fold temporary mode chrome into the top bars. Move and Place under use the **shared hierarchy notebook menu** (wide multi-column packed tree).
 
-**Blank pages.** Link / Reorder / Move visible but disabled. On the trailing blank, **⋮** stays visible with that disabled look; taps no-op.
+**Pages.** Every Ready slice is real (blank or inked) with the same Link / Reorder / Move / ⋮ actions.
 
 **Tap feedback.** Quiet ambient micro-sounds on UI `ACTION_DOWN` (cycle leaf → water → wood → fabric → pebble). Ink path stays silent.
 
@@ -107,7 +107,7 @@ Prefer failing closed over shipping a “heal” that shortens or clobbers ink.
 - [ ] Pen / Eraser / Lasso underline matches what the stylus does (single tool path).
 - [ ] After lasso drag, tool stays **Lasso**; selection remains until tap-outside.
 - [ ] Link · Reorder stay bottom snackbar flows; Move · Place under stay hierarchy menu; labels unchanged.
-- [ ] Blank pages: Link/Reorder/Move disabled (visible); trailing blank **⋮** disabled-look, not invisible.
+- [ ] Blank Ready slices: Link / Reorder / Move / ⋮ enabled (same as inked).
 
 ### Navigation
 

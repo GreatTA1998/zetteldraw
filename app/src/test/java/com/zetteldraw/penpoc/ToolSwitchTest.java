@@ -144,10 +144,6 @@ public class ToolSwitchTest {
             }
 
             @Override
-            public void onPageBecameNonEmpty(Board changed) {
-            }
-
-            @Override
             public void onLassoSelected(int selected) {
             }
 

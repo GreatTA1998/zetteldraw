@@ -272,21 +272,10 @@ public final class CanvasActivity extends Activity {
             public void onPageChanged(Board page) {
                 repository.saveInk(page);
                 PageSlot slot = slotFor(page.id);
-                if (slot != null) {
-                    slot.syncEnabled();
-                }
                 // Wipe/delete/trim can change Ready slice count; reload when lists disagree.
                 if (slot != null && !loading()
                         && pagesIn(collectionId).size() != slots.size()) {
                     reloadPages(effectiveScrollY());
-                }
-            }
-
-            @Override
-            public void onPageBecameNonEmpty(Board page) {
-                PageSlot slot = slotFor(page.id);
-                if (slot != null) {
-                    slot.syncEnabled();
                 }
             }
 
@@ -1139,8 +1128,8 @@ public final class CanvasActivity extends Activity {
                     pages = repository.pages(notebook);
                     // Empty Ready sheet is valid — Create new page button only.
                     if (first) {
-                        LaunchLog.mark("page list " + name + " read: " + pages.size() + " pages ("
-                                + inked(pages) + " inked), " + notebooks.size() + " notebooks in "
+                        LaunchLog.mark("page list " + name + " read: " + pages.size() + " pages, "
+                                + notebooks.size() + " notebooks in "
                                 + (SystemClock.uptimeMillis() - started) + " ms");
                     }
                 } catch (Throwable e) {
@@ -1197,16 +1186,6 @@ public final class CanvasActivity extends Activity {
         }, LOAD_RETRY_MS);
     }
 
-    private static int inked(List<Board> pages) {
-        int n = 0;
-        for (Board page : pages) {
-            if (!page.isBlank()) {
-                n++;
-            }
-        }
-        return n;
-    }
-
     /** Launch-log name: Scratchpad as-is, else quoted title via {@link #titleOf}. */
     private String label(String id) {
         if (SCRATCHPAD.equals(id)) {
@@ -1232,7 +1211,7 @@ public final class CanvasActivity extends Activity {
         if (!firstListShown) {
             firstListShown = true;
             LaunchLog.mark("first page list on screen: " + label(loaded.id()) + ", " + loaded.pages().size()
-                    + " pages (" + inked(loaded.pages()) + " inked), " + loaded.notebooks().size() + " notebook tabs");
+                    + " pages, " + loaded.notebooks().size() + " notebook tabs");
         }
     }
 
@@ -1359,9 +1338,6 @@ public final class CanvasActivity extends Activity {
         }
         slotTops[pages.size()] = cursor;
         slotStride = uniform && stride > 0 ? stride : 0;
-        for (PageSlot slot : slots) {
-            slot.syncEnabled();
-        }
         // Short full-width Create new page control under the last real page.
         LinearLayout.LayoutParams createLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
@@ -1640,9 +1616,6 @@ public final class CanvasActivity extends Activity {
 
     /** Link or Reorder: one clear + source capture + chrome. */
     private void startMode(PageSlot slot, boolean reorder) {
-        if (slot.page.isBlank()) {
-            return;
-        }
         clearModeSources();
         if (reorder) {
             reorderSourceId = slot.page.id;
@@ -2054,14 +2027,9 @@ public final class CanvasActivity extends Activity {
 
     /** Wipe and Delete for one page, anchored to its ⋮; each confirms in the same spot. */
     private void showPageMenu(PageSlot slot) {
-        if (!slot.moreButton.isEnabled()) {
-            return;
-        }
         LinearLayout menu = panel();
         menu.setMinimumWidth(dp(200));
-        if (!slot.page.isBlank()) {
-            addPanelButton(menu, getString(R.string.wipe), () -> confirmPageAction(slot, false));
-        }
+        addPanelButton(menu, getString(R.string.wipe), () -> confirmPageAction(slot, false));
         addPanelButton(menu, getString(R.string.delete_page), () -> confirmPageAction(slot, true));
         showOverlay(menu, pageAnchoredLp(slot.moreButton, menu), drawingArea);
     }
@@ -2122,10 +2090,9 @@ public final class CanvasActivity extends Activity {
      * as newest in the chosen notebook. Uses the shared hierarchy menu.
      */
     private void showMoveMenu(PageSlot slot) {
-        // Reseat by id before enabling the menu — stale sliceIndex can make a
-        // blank/orphaned chrome look inked (or the reverse) after prior Moves.
+        // Reseat by id — Ready list is SoT; missing id means the slot is stale.
         Board live = livePageIn(notebookKey(collectionId), slot.page.id);
-        if (live == null || live.isBlank()) {
+        if (live == null) {
             showHint(getString(R.string.move_failed), true);
             reloadPages(effectiveScrollY());
             return;
@@ -2298,7 +2265,7 @@ public final class CanvasActivity extends Activity {
             return;
         }
         Board live = livePageIn(notebookKey(collectionId), pageId);
-        boolean ok = live != null && !live.isBlank();
+        boolean ok = live != null;
         if (ok) {
             repository.saveInk(live);
             ok = repository.movePageToNotebook(pageId, targetNotebookId);
@@ -2425,7 +2392,7 @@ public final class CanvasActivity extends Activity {
         if (pageHeight > 0) {
             repository.ensureSheet(id, pageHeight, legacyPageHeight, shortPagesSince);
         }
-        int pages = inked(repository.pages(id));
+        int pages = repository.pages(id).size();
         LinearLayout box = panel();
         box.addView(panelText(getString(R.string.delete_notebook_title, titleOf(id)), 15));
         box.addView(panelText(pages == 0
@@ -2974,7 +2941,6 @@ public final class CanvasActivity extends Activity {
             reloadPages(effectiveScrollY());
         } else {
             inkView.redrawAll();
-            slot.syncEnabled();
         }
     }
 
@@ -3379,31 +3345,12 @@ public final class CanvasActivity extends Activity {
                     FrameLayout.LayoutParams.MATCH_PARENT, mark);
             dashLp.gravity = Gravity.BOTTOM;
             addView(new DashedRule(context), dashLp);
-            syncEnabled();
         }
 
         void setIndex(int index, int total) {
             this.index = index;
             number.setText(index + "/" + total);
             number.setContentDescription(getString(R.string.page_number, index, total));
-        }
-
-        /**
-         * Blank pages: Link, Reorder, and Move greyed alike. ⋮ stays enabled so
-         * Wipe / Delete work on stored blank slices.
-         */
-        void syncEnabled() {
-            boolean blank = page.isBlank();
-            setChromeEnabled(linkButton, !blank);
-            setChromeEnabled(reorderButton, !blank);
-            setChromeEnabled(moveButton, !blank);
-            moreButton.setVisibility(View.VISIBLE);
-            setChromeEnabled(moreButton, true);
-        }
-
-        private void setChromeEnabled(Button button, boolean enabled) {
-            button.setEnabled(enabled);
-            button.setAlpha(enabled ? 1f : 0.35f);
         }
 
         /** Outgoing lines first, then backlinks. A missing page is not shown. */

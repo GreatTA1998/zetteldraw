@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v164: delete boards-coupled web list SQL (Ready-only companion pages).
-        versionCode = 164
-        versionName = "4.43"
+        // Tip v165: delete stroke-gated page actions (every Ready slice is real).
+        versionCode = 165
+        versionName = "4.44"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

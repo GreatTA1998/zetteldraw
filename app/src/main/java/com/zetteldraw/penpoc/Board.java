@@ -33,17 +33,14 @@ public final class Board {
     }
 
     /**
-     * Blank when this id has no ink on the live paper. Resolve by
-     * {@linkplain NotebookPaper#indexOfSliceId(String) page id}, not a cached
-     * {@link #sliceIndex}: after a session of Moves that field can still point
-     * at a neighbor, which made Move chrome look enabled on a dead/blank slice
-     * (or greyed on an inked one) until the collection was reopened.
+     * True when this id has no ink on the live paper (or is orphaned). Content
+     * helper only — Ready slices are real pages either way; Link / Reorder /
+     * Move / ⋮ do not gate on this.
      */
     public boolean isBlank() {
         if (paper != null) {
             int index = paper.indexOfSliceId(id);
             if (index < 0) {
-                // Orphaned chrome (id no longer on this paper).
                 return true;
             }
             return !paper.containsInk(index);
