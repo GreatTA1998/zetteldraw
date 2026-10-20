@@ -182,7 +182,8 @@ public class CanvasActivitySmokeTest {
 
         byDescription(root, "Page options").get(0).performClick();
         idle();
-        assertNull("nothing to wipe on a blank page", find(root, "Wipe"));
+        // Blank Ready pages keep full ⋮ (Wipe is a no-op on empty ink).
+        assertNotNull("Wipe stays on blank Ready pages", find(root, "Wipe"));
         click(root, "Delete page");
         assertNotNull(find(root, "Delete this page?"));
         clickLast(root, "Delete");
@@ -200,7 +201,7 @@ public class CanvasActivitySmokeTest {
         pages = repo.scratchpadPages();
         assertTrue("empty Ready sheet is valid", pages.isEmpty());
         assertTrue(pageLabels(root).isEmpty());
-        assertNotNull("Create new page remains", find(root, "Create new page"));
+        assertEquals("Create new page remains", 1, byDescription(root, "Create new page").size());
         controller.pause().stop().destroy();
     }
 
@@ -213,11 +214,11 @@ public class CanvasActivitySmokeTest {
         idle();
 
         click(root, "comedy");
-        assertNotNull("empty notebook shows Create new page", find(root, "Create new page"));
+        assertEquals("empty notebook shows Create new page", 1, byDescription(root, "Create new page").size());
         assertTrue(pageLabels(root).isEmpty());
         assertNull("no empty-notebook hint any more", find(root, "No notebooks yet. Tap + to add one."));
 
-        click(root, "Create new page");
+        clickDesc(root, "Create new page");
         idle();
         assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));
         List<View> emptyMenus = byDescription(root, "Page options");
@@ -245,7 +246,7 @@ public class CanvasActivitySmokeTest {
         pages = repo.notebookPages(Notebook.COMEDY.uuid);
         assertTrue("empty Ready notebook is valid", pages.isEmpty());
         assertTrue(pageLabels(root).isEmpty());
-        assertNotNull("Create new page remains", find(root, "Create new page"));
+        assertEquals("Create new page remains", 1, byDescription(root, "Create new page").size());
 
         clickDesc(root, "Scratchpad");
         assertEquals(java.util.Arrays.asList("1/1"), pageLabels(root));

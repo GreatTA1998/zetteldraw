@@ -38,7 +38,7 @@ UI bugs are recoverable. These three are not — they permanently lose or corrup
 
 - **Multi-device concurrent edit of one notebook** without Hand off: whole-log LWW (loser → hidden conflict copy), not stroke CRDT merge.
 - **Kill** after dest rewrite / before source flush (brief duplicate), or in the write-behind window (newest unflushed snapshot may be lost).
-- **Web titles/thumbs ≠ restore-safe.** Postgres metadata and cached PNGs do not prove `notebook_logs` are in S3.
+- **Web titles ≠ restore-safe.** Postgres metadata does not prove `notebook_logs` are in S3.
 - Partial outbox + uninstall; missing S3 objects; Documents mirror is not auto-imported after uninstall.
 - Intentional Wipe / Delete / Lasso Cut (by design). Pre-v63 wrong-dest Moves already synced.
 
@@ -134,7 +134,7 @@ Tested target: Boox Go 7 Color II (Android 13, Kaleido 3, optional InkSense styl
 
 ## Web overview (`web/`)
 
-A read-only companion for a big monitor: notebooks sidebar, dense thumbnail grid (column slider / `−` / `=`), full-size viewer (click a page; arrows flip, Esc closes). **No drawing and no library edits from the browser** — rename/move/reorder are refused. The intentional web writes are the lease ceremony: Settings → **Move to a new device** → **Hand off** / Cancel / lost-device confirm (Hand off blocked until the live Boox **Prepare transfer** or lost-device ack, and backup-status is ready). Notebook titles and thumbs are not a hydrate proof; use the backup banner before Play cutover.
+A read-only companion for a big monitor: notebooks sidebar, text page list (column slider / `−` / `=`), full-size viewer that **replays Ready `.zdl` strokes on a canvas** (click a page; arrows flip, Esc closes). **No drawing and no library edits from the browser** — rename/move/reorder are refused. The intentional web writes are the lease ceremony: Settings → **Move to a new device** → **Hand off** / Cancel / lost-device confirm (Hand off blocked until the live Boox **Prepare transfer** or lost-device ack, and backup-status is ready). Notebook titles alone are not a hydrate proof; use the backup banner before Play cutover.
 
 Next.js 16 + TypeScript + Tailwind + shadcn/ui. Sign in with Google (or a local device token for demos). The token is kept in an httpOnly cookie, and the Next server proxies `/api/zd/*` to the sync server's `/web/*`, so the browser never talks to the sync server directly.
 
@@ -157,19 +157,15 @@ ZD_SERVER_URL=http://127.0.0.1:8787 npm run dev            # http://localhost:43
 npm test && npm run lint && npm run typecheck
 ```
 
-**Thumbnails.** The server renders PNGs from the stored ink with the same width model as `InkRenderer` (pressure, end taper, 0.50 mm at 300 PPI). It reads `.zdi` versions 1 and 2. Rendering starts in the background after every push. `thumb/<ink_hash>.png` (480 px wide) and `render/<ink_hash>.png` (1264 px, the device width) go in the same bucket as the ink. Missing images are also rendered on first request. Images are keyed by ink hash rather than written into `boards.thumb_hash`, so they can never go stale and the server never writes a column the device also writes. The app is unchanged. The page size is not in the ink file, so the server assumes the Go 7 portrait page (`PAGE_WIDTH` / `PAGE_HEIGHT`). Ink beyond that grows the page at the same aspect instead of being cropped. To render thumbnails for ink synced before this existed:
-
-```bash
-docker compose run --rm sync node dist/scripts/backfill-thumbs.js
-```
+**Ink preview.** There is no separate thumbnail / ZDI picture pipeline. The companion fetches the Ready notebook log (`GET /web/notebooks/:id/ink`) and the browser replays strokes onto a canvas (same APPEND/DELETE/TRANSLATE/TEAR/EXTEND rules as `NotebookPaper`). Lists are text-only; opening a page shows real Ready ink, not a blank placeholder or a parallel `.zdi` PNG SoT. See [docs/web-ready-stroke-preview.md](docs/web-ready-stroke-preview.md).
 
 Web endpoints (bearer device token, no schema header):
 
 | Endpoint | |
 | --- | --- |
 | `GET /web/notebooks` | Scratchpad first (`id: "scratchpad"`), then notebooks by `position`, with page counts |
-| `GET /web/notebooks/:id/pages` | Live pages in `position` order with `thumb_url` / `render_url` (null for blank pages) |
-| `GET /web/thumbs/<ink_hash>.png`, `GET /web/renders/<ink_hash>.png` | PNGs, immutable cache headers |
+| `GET /web/notebooks/:id/pages` | Live Ready pages in order; includes `ink_url` for the notebook log |
+| `GET /web/notebooks/:id/ink` | Ready `.zdl` bytes (client canvas replay) |
 | `GET /web/backup-status` | Ready only when every owned board + `notebook_log` ink blob exists in S3 |
 | `GET /web/writer`, `POST /web/writer/hand-off`, `POST /web/writer/lost-device`, `POST /web/writer/cancel` | Live-writer status and Hand off ceremony (Hand off requires Prepare transfer or lost-device ack + backup ready) |
 | `POST /sync/prepare-transfer` | Live Boox final-sync ack; unlocks web Hand off |
@@ -254,7 +250,7 @@ Then point `implementation` at `files("libs/onyxsdk-pen-1.5.5.aar")` plus the tr
 - `data/BoardRepository` — what the UI calls: one `pages(notebookId)` list for the Scratchpad (`null`) and each notebook, always ending with a blank page; save ink, move, wipe, delete pages, and create / rename / delete notebooks. `RoomBoardRepository` implements it with Room, ink files and the Documents mirror.
 - `data/LegacyBoardImporter` — one-time import of the old `zetteldraw-boards.json`.
 - `sync/` — `SyncEngine` (on a never-synced device: pull, claim live writer, then push; otherwise claim → push → pull), `SyncClient` (HTTP, including `/sync/claim-writer`), `SyncWorker` / `SyncScheduler` (WorkManager), `SyncConfig`.
-- `server/` — sync service, shared SQL migrations, live-writer lease, thumbnail rendering, web endpoints, docker-compose.
+- `server/` — sync service, shared SQL migrations, live-writer lease, web endpoints (Ready ink bytes), docker-compose.
 - `web/` — Next.js read-only overview + Hand off Settings ceremony.
 - `docs/CORRECTNESS.md` — invariants, concurrency model, tests, non-guarantees, and **Scale** (heap / sync payload / OOM envelope) for the three irreversible bugs.
 - `docs/greenfield/` — **Greenfield rewrite pack** (specs + screenshots only; implementation is in the separate **zetteldraw rewritten** Project).

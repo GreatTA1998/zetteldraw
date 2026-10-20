@@ -321,10 +321,12 @@ public final class CanvasActivity extends Activity {
         pageColumn = new LinearLayout(this);
         pageColumn.setOrientation(LinearLayout.VERTICAL);
         createPageButton = new Button(this, null, android.R.attr.borderlessButtonStyle);
-        createPageButton.setText(R.string.create_new_page);
+        // Same full-width block; visible mark is "+" (label kept for a11y).
+        createPageButton.setText(R.string.create_new_page_mark);
+        createPageButton.setContentDescription(getString(R.string.create_new_page));
         createPageButton.setAllCaps(false);
         createPageButton.setTextColor(Color.BLACK);
-        createPageButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        createPageButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
         createPageButton.setGravity(Gravity.CENTER);
         createPageButton.setMinHeight(dp(56));
         createPageButton.setPadding(dp(12), dp(14), dp(12), dp(14));
@@ -1330,7 +1332,7 @@ public final class CanvasActivity extends Activity {
         }
         slotTops[pages.size()] = cursor;
         slotStride = uniform && stride > 0 ? stride : 0;
-        // Short full-width Create new page control under the last real page.
+        // Full-width Create new page (+) control under the last real page.
         LinearLayout.LayoutParams createLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         if (createPageButton.getParent() instanceof ViewGroup) {

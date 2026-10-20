@@ -1,22 +1,24 @@
 "use client";
 
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { proxied, type Page, type PageLink } from "@/lib/api";
+import { type Page, type PageLink } from "@/lib/api";
 import { dateTime } from "@/lib/format";
 import { PAGE_ASPECT } from "@/components/page-grid";
+import { PageInkCanvas } from "@/components/page-ink-canvas";
 
 interface Props {
   pages: Page[];
   index: number | null;
   notebookTitle: string;
+  /** Proxied Ready log URL for this notebook, or null when missing. */
+  inkUrl: string | null;
   onIndexChange: (index: number | null) => void;
   onFollowLink: (link: PageLink) => void;
 }
 
-export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollowLink }: Props) {
+export function PageViewer({ pages, index, notebookTitle, inkUrl, onIndexChange, onFollowLink }: Props) {
   const open = index !== null && index < pages.length;
   const page = open ? pages[index] : null;
   const prev = open && index > 0 ? pages[index - 1] : null;
@@ -40,14 +42,6 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
       onIndexChange(to);
     }
   };
-
-  useEffect(() => {
-    if (!open) return;
-    for (const neighbour of [pages[index - 1], pages[index + 1], pages[index - 2], pages[index + 2]]) {
-      const src = neighbour && proxied(neighbour.render_url);
-      if (src) new Image().src = src;
-    }
-  }, [open, index, pages]);
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onIndexChange(null)}>
@@ -81,16 +75,12 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
               </Button>
             </header>
 
-            {/*
-              Center page + narrow cropped peeks. Peeks are a clip window over a
-              correctly aspect-ratio page (no stretch/perspective) — only a
-              strip of the neighbor shows, tight against the center.
-            */}
             <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-3">
               <div className="flex h-full max-h-full items-stretch justify-center gap-1">
                 {prev ? (
                   <NeighborPeek
                     page={prev}
+                    inkUrl={inkUrl}
                     side="left"
                     label={String(index)}
                     onClick={() => onIndexChange(index - 1)}
@@ -99,10 +89,10 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
                   <div className="hidden w-14 shrink-0 sm:block" aria-hidden />
                 )}
                 <div
-                  className="relative h-full max-h-full min-h-0 shrink-0"
+                  className="relative h-full max-h-full min-h-0 shrink-0 overflow-hidden rounded-sm bg-white shadow-2xl"
                   style={{ aspectRatio: PAGE_ASPECT }}
                 >
-                  <FullPage key={page.id} page={page} />
+                  <PageInkCanvas key={page.id} inkUrl={inkUrl} pageId={page.id} className="absolute inset-0 size-full" />
                   {(page.links?.length ?? 0) > 0 && (
                     <div className="absolute bottom-3 left-3 z-20 flex max-w-[85%] flex-col items-start gap-0.5">
                       {(page.links ?? []).map((link) => (
@@ -122,6 +112,7 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
                 {next ? (
                   <NeighborPeek
                     page={next}
+                    inkUrl={inkUrl}
                     side="right"
                     label={String(index + 2)}
                     onClick={() => onIndexChange(index + 1)}
@@ -140,19 +131,19 @@ export function PageViewer({ pages, index, notebookTitle, onIndexChange, onFollo
   );
 }
 
-/** Narrow clip over a correct-aspect page; shows the edge nearest the center. */
 function NeighborPeek({
   page,
+  inkUrl,
   side,
   label,
   onClick,
 }: {
   page: Page;
+  inkUrl: string | null;
   side: "left" | "right";
   label: string;
   onClick: () => void;
 }) {
-  const src = proxied(page.thumb_url);
   return (
     <button
       type="button"
@@ -167,14 +158,9 @@ function NeighborPeek({
           ...(side === "left" ? { right: 0 } : { left: 0 }),
         }}
       >
-        {src ? (
-          // eslint-disable-next-line @next/next/no-img-element -- auth-proxied PNG
-          <img src={src} alt="" draggable={false} className="size-full object-contain" />
-        ) : (
-          <div className="flex size-full items-center justify-center text-[0.65rem] text-neutral-400">Blank</div>
-        )}
+        <PageInkCanvas inkUrl={inkUrl} pageId={page.id} compact className="absolute inset-0 size-full" />
         <span
-          className={`absolute top-1 text-[0.65rem] tabular-nums text-neutral-500 ${
+          className={`absolute top-1 z-10 text-[0.65rem] tabular-nums text-neutral-500 ${
             side === "left" ? "left-1.5" : "right-1.5"
           }`}
         >
@@ -182,38 +168,6 @@ function NeighborPeek({
         </span>
       </div>
     </button>
-  );
-}
-
-function FullPage({ page }: { page: Page }) {
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const thumb = proxied(page.thumb_url);
-  const full = proxied(page.render_url);
-  return (
-    <div className="relative size-full overflow-hidden rounded-sm bg-white shadow-2xl">
-      {thumb && !failed && (
-        // eslint-disable-next-line @next/next/no-img-element -- auth-proxied PNG
-        <img src={thumb} alt="" aria-hidden className="absolute inset-0 size-full object-contain" />
-      )}
-      {full && failed ? (
-        <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-neutral-500">
-          This page&apos;s ink could not be rendered.
-        </div>
-      ) : full ? (
-        // eslint-disable-next-line @next/next/no-img-element -- auth-proxied PNG
-        <img
-          src={full}
-          alt="Page"
-          onLoad={() => setLoaded(true)}
-          onError={() => setFailed(true)}
-          className="absolute inset-0 size-full object-contain transition-opacity duration-150"
-          style={{ opacity: loaded ? 1 : 0 }}
-        />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center text-sm text-neutral-400">Blank page</div>
-      )}
-    </div>
   );
 }
 

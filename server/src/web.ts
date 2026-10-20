@@ -1,11 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import type pg from "pg";
 import { isUnowned, ownedByUser, type OwnerTable } from "./accounts.js";
-import { InkFormatError } from "./ink.js";
 import type { BoardRow, LogRow, NotebookRow } from "./lww.js";
 import type { SyncScope } from "./sync.js";
 import type { InkStorage } from "./storage.js";
-import type { ImageKind, Thumbnailer } from "./thumbs.js";
 import { BadRequest } from "./validate.js";
 import { ackLostDevice, cancelHandOff, getWriterStatus, handOff } from "./writer.js";
 import { readSliceIndex, ZdlFormatError } from "./zdl.js";
@@ -15,13 +13,14 @@ import { readSliceIndex, ZdlFormatError } from "./zdl.js";
  * Hand off / lost-device ack (live-writer lease), which does not touch notebook data.
  *
  * Page identity/order is Ready-only: {@code notebook_logs} + ZDL structure index.
+ * Ink preview is the Ready {@code .zdl} bytes ({@code GET .../ink}); the browser
+ * replays strokes. No separate thumbnail / ZDI picture pipeline.
  * Live {@code boards} rows are not a companion list SoT (Hand-off still scans
  * uncovered BOARD ink via {@link backupStatus}).
  */
 
 export const SCRATCHPAD = "scratchpad";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const IMAGE_FILE = /^([0-9a-f]{64})\.png$/;
 
 export class NotFound extends Error {}
 export class Forbidden extends Error {}
@@ -61,8 +60,6 @@ export interface WebPage {
   created_at: number;
   updated_at: number;
   rev: number;
-  thumb_url: string | null;
-  render_url: string | null;
   links: WebPageLink[];
 }
 
@@ -76,7 +73,7 @@ export interface PagePlace {
 
 const LIVE = "b.deleted_at IS NULL AND b.conflict_of IS NULL";
 
-/** Ready-synthesized page list row (thumbs null until ZDL→PNG). */
+/** Ready-synthesized page list row (structure only; ink is the notebook log). */
 type PageListRow = Pick<
   BoardRow,
   "id" | "notebook_id" | "position" | "ink_hash" | "ink_bytes" | "created_at" | "updated_at" | "rev"
@@ -140,7 +137,7 @@ async function pagesFromReadyLog(
       id: slice.id,
       notebook_id: notebookId,
       position: String(i).padStart(10, "0"),
-      // Whole-log hash is not a per-page ZDI thumb — leave null until ZDL thumbs.
+      // Per-page ink lives in the Ready log; companion fetches GET .../ink.
       ink_hash: null,
       ink_bytes: 0,
       created_at: log.created_at,
@@ -165,8 +162,6 @@ function toPage(row: PageListRow, links: WebPageLink[] = []): WebPage {
     created_at: row.created_at,
     updated_at: row.updated_at,
     rev: row.rev,
-    thumb_url: row.ink_hash ? `/web/thumbs/${row.ink_hash}.png` : null,
-    render_url: row.ink_hash ? `/web/renders/${row.ink_hash}.png` : null,
     links,
   };
 }
@@ -489,7 +484,7 @@ export interface BackupMissing {
 /**
  * Whether Hand-off / lost-device restore may unlock.
  *
- * Notebook list / page thumbs on the web can look fine while a notebook_log
+ * Notebook list on the web can look fine while a notebook_log
  * (the Boox source of truth after v20) is missing from S3 — this check catches that.
  *
  * Uncovered live BOARD ink (no Ready {@code notebook_logs} for the same notebook)
@@ -578,10 +573,34 @@ export async function backupStatus(
   };
 }
 
+/** Serve Ready {@code .zdl} bytes for client canvas replay. */
+async function notebookInkBytes(
+  pool: pg.Pool,
+  rawNotebookId: string,
+  scope: SyncScope,
+  storage: InkStorage,
+): Promise<Buffer> {
+  const notebookId = rawNotebookId === SCRATCHPAD ? null : rawNotebookId;
+  if (notebookId !== null) {
+    if (!UUID.test(notebookId)) {
+      throw new NotFound("notebook not found");
+    }
+    await liveNotebook(pool, notebookId, scope);
+  }
+  const log = await readyLogForNotebook(pool, notebookId, scope);
+  if (!log?.ink_hash) {
+    throw new NotFound("ink log not found");
+  }
+  try {
+    return await storage.get(log.ink_hash);
+  } catch {
+    throw new NotFound("ink log blob missing");
+  }
+}
+
 export function registerWebRoutes(
   app: FastifyInstance,
   pool: pg.Pool,
-  thumbs: Thumbnailer,
   scopeOf: (req: { principal?: import("./auth.js").AuthPrincipal }) => SyncScope,
   storage?: InkStorage,
 ): void {
@@ -592,6 +611,7 @@ export function registerWebRoutes(
   app.get<{ Params: { id: string } }>("/web/notebooks/:id/pages", async (req) => ({
     notebook_id: req.params.id,
     pages: await listPages(pool, req.params.id, scopeOf(req), storage),
+    ink_url: `/web/notebooks/${req.params.id}/ink`,
   }));
 
   app.get<{ Params: { id: string } }>("/web/pages/:id/place", async (req) =>
@@ -599,6 +619,14 @@ export function registerWebRoutes(
   );
 
   if (storage) {
+    app.get<{ Params: { id: string } }>("/web/notebooks/:id/ink", async (req, reply) => {
+      const bytes = await notebookInkBytes(pool, req.params.id, scopeOf(req), storage);
+      return reply
+        .header("content-type", "application/octet-stream")
+        .header("cache-control", "private, max-age=60")
+        .send(bytes);
+    });
+
     app.get("/web/backup-status", async (req) => backupStatus(pool, storage, scopeOf(req)));
 
     app.get("/web/writer", async (req) => {
@@ -653,30 +681,4 @@ export function registerWebRoutes(
   app.post("/web/pages/:id/move", async (_req, reply) =>
     reply.code(405).send({ error: "read_only", message: "The web companion cannot move or reorder pages." }),
   );
-
-  const image = (kind: ImageKind) =>
-    async (req: { params: { file: string } }, reply: import("fastify").FastifyReply) => {
-      const match = IMAGE_FILE.exec(req.params.file);
-      if (!match) {
-        throw new NotFound("image not found");
-      }
-      let png: Buffer | null;
-      try {
-        png = await thumbs.image(kind, match[1]);
-      } catch (err) {
-        if (err instanceof InkFormatError) {
-          return reply.code(422).send({ error: "unreadable_ink", message: err.message });
-        }
-        throw err;
-      }
-      if (!png) {
-        throw new NotFound("ink not found");
-      }
-      return reply
-        .header("content-type", "image/png")
-        .header("cache-control", "private, max-age=31536000, immutable")
-        .send(png);
-    };
-  app.get<{ Params: { file: string } }>("/web/thumbs/:file", image("thumb"));
-  app.get<{ Params: { file: string } }>("/web/renders/:file", image("render"));
 }

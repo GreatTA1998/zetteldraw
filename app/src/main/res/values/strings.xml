@@ -56,6 +56,7 @@
     <string name="cancel">Cancel</string>
     <string name="create">Create</string>
     <string name="create_new_page">Create new page</string>
+    <string name="create_new_page_mark">+</string>
     <string name="create_page_failed">Couldn’t create a page.</string>
     <string name="save">Save</string>
     <string name="notebook_name_hint">Notebook name</string>

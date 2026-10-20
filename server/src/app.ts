@@ -10,7 +10,6 @@ import {
 import { AuthService, issueAccessToken, type AuthPrincipal } from "./auth.js";
 import type { InkStorage } from "./storage.js";
 import { logHeads, pull, push, sha256Hex, type SyncScope } from "./sync.js";
-import type { Thumbnailer } from "./thumbs.js";
 import { BadRequest, parsePushBody } from "./validate.js";
 import { Forbidden, NotFound, registerWebRoutes } from "./web.js";
 import { backupStatus } from "./web.js";
@@ -34,8 +33,8 @@ export interface AppDeps {
   schemaVersion: number;
   auth: AuthService;
   sessionSecret: string | undefined;
-  /** Renders page images; enables the /web/* endpoints and thumbnails on push. */
-  thumbs?: Thumbnailer;
+  /** When false, skip /web/* companion routes (tests that only need sync). Default true. */
+  enableWeb?: boolean;
   logger?: boolean;
 }
 
@@ -280,7 +279,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     return { logs: await logHeads(deps.pool, scopeOf(req.principal)) };
   });
 
-  if (deps.thumbs) {
+  if (deps.enableWeb !== false) {
     app.get("/web/session", async (req) => ({
       ok: true,
       schema_version: deps.schemaVersion,
@@ -289,7 +288,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           ? { kind: "google", user: { id: req.principal.user.id, email: req.principal.user.email } }
           : { kind: "device" },
     }));
-    registerWebRoutes(app, deps.pool, deps.thumbs, (req) => scopeOf(req.principal), deps.storage);
+    registerWebRoutes(app, deps.pool, (req) => scopeOf(req.principal), deps.storage);
   }
 
   return app;
