@@ -157,39 +157,6 @@ public class ConflictTest {
     }
 
     @Test
-    public void catchUpIgnoresRemoteBoardInk() throws Exception {
-        // Hand-off unlocks only when Ready covers every inked notebook — pull
-        // never adopts BOARD .zdi (catch-up restores via notebook_logs only).
-        Device bare = new Device("bare", tmp.newFolder("bare"), 11_000_000L);
-        try {
-            Board page = Board.blank();
-            TestInk.draw(page, 10f);
-            bare.seedUnmigrated(page);
-            BoardEntity local = bare.db.dao().board(page.id);
-            assertNotNull(local);
-            String localHash = local.inkHash;
-            assertNotNull(bare.db.dao().outbox(OutboxEntry.BOARD, page.id));
-
-            // Pull has no BOARD channel (bag deleted); cursor-only page must not
-            // touch local .zdi residue.
-            SyncStore.PullPage pulled = new SyncStore.PullPage();
-            pulled.cursor = local.rev + 10;
-            bare.repo.setInkPullPolicy(SyncStore.InkPullPolicy.CATCH_UP);
-            bare.repo.applyPull(pulled);
-
-            BoardEntity after = bare.db.dao().board(page.id);
-            assertEquals(local.rev, after.rev);
-            assertEquals(localHash, after.inkHash);
-            assertNotNull(bare.db.dao().outbox(OutboxEntry.BOARD, page.id));
-            assertTrue(bare.db.dao().conflictCopies().isEmpty());
-            TestInk.assertSameInk(page.strokes, InkCodec.decode(
-                    new InkFileStore(bare.inkDir()).read(page.id)));
-        } finally {
-            bare.close();
-        }
-    }
-
-    @Test
     public void pushResultsAdvanceLogRevAndClearOutboxUnlessEditedMidFlight() throws Exception {
         Board ready = repo.scratchpadPages().get(0);
         TestInk.draw(ready, 10f);

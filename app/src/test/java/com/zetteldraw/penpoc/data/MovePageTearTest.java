@@ -51,8 +51,8 @@ public class MovePageTearTest {
         device = new Device("a", tmp.newFolder("a"), 2_000_000L);
         repo = device.repo;
         doodles = repo.createNotebook("doodles").id();
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(doodles, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
+        repo.ensureSheet(doodles, PAGE);
     }
 
     @After

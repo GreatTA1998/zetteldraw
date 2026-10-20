@@ -168,27 +168,6 @@ public class NotebookManagementTest {
     }
 
     @Test
-    public void deleteRefusesWhenEnsureFailsWithInkedBoardEntity() throws Exception {
-        // Fleet endgame: ensure refuses unmigrated BoardEntity ink — do not
-        // tombstone and strand .zdi (no blank-wipe migrate-on-open).
-        assertTrue(device.ensureReady());
-        BoardRepository.NotebookInfo book = repo.createNotebook("residue-book");
-        Board page = Board.blank();
-        TestInk.draw(page, 7f);
-        device.seedUnmigrated(page);
-        BoardEntity row = device.db.dao().board(page.id);
-        row.notebookId = book.id();
-        device.db.dao().upsertBoard(row);
-        assertFalse(repo.ensureSheet(book.id(), Device.PAGE, Device.PAGE, 0L));
-
-        repo.deleteNotebook(book.id());
-
-        assertNull(device.db.dao().notebook(book.id()).deletedAt);
-        assertEquals(book.id(), device.db.dao().board(page.id).notebookId);
-        assertNotNull(device.db.dao().board(page.id).inkHash);
-    }
-
-    @Test
     public void parentPagesExcludeTheChildsInk() {
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
         BoardRepository.NotebookInfo chapter = repo.createNotebook("chapter", shelf.id());

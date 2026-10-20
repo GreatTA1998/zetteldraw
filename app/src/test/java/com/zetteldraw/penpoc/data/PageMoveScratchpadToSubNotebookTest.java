@@ -79,7 +79,7 @@ public class PageMoveScratchpadToSubNotebookTest {
     public void lastScratchpadPageIntoActionsLifeSubNotebookKeepsPageAndInk() {
         String actions = repo.createNotebook("actions.life").id();
         String sub = repo.createNotebook("today", actions).id();
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         assertTrue(TestSheets.ready(repo, sub, PAGE));
 
         Board earlier = inkNearBottom(null, "keep");
@@ -119,7 +119,7 @@ public class PageMoveScratchpadToSubNotebookTest {
     public void placeIntoHomePageChildIgnoresStaleParentMidlineTarget() {
         String actions = repo.createNotebook("actions.life").id();
         String home = repo.createNotebook("home page", actions).id();
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         assertTrue(TestSheets.ready(repo, actions, PAGE));
         assertTrue(TestSheets.ready(repo, home, PAGE));
 
@@ -145,7 +145,7 @@ public class PageMoveScratchpadToSubNotebookTest {
     public void saveInkFlushBeforeDestPersistCannotDropLastScratchpadPage() throws Exception {
         String actions = repo.createNotebook("actions.life").id();
         String sub = repo.createNotebook("errands", actions).id();
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         assertTrue(TestSheets.ready(repo, sub, PAGE));
 
         inkNearBottom(null, "keep");
@@ -169,8 +169,8 @@ public class PageMoveScratchpadToSubNotebookTest {
         deferWriter = false;
         deferred.clear();
         openRepo(Runnable::run);
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
+        repo.ensureSheet(sub, PAGE);
 
         boolean onScratch = hasPageWithStroke(null, movedId, "race-ink");
         boolean onSub = hasPageWithStroke(sub, movedId, "race-ink");
@@ -186,7 +186,7 @@ public class PageMoveScratchpadToSubNotebookTest {
     public void syncPullDuringHeldCrossNotebookMoveCannotDropPage() throws Exception {
         String actions = repo.createNotebook("actions.life").id();
         String sub = repo.createNotebook("pull-race", actions).id();
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         assertTrue(TestSheets.ready(repo, sub, PAGE));
 
         Board last = inkNearBottom(null, "pull-ink");
@@ -227,8 +227,8 @@ public class PageMoveScratchpadToSubNotebookTest {
 
         db.close();
         openRepo(Runnable::run);
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
+        repo.ensureSheet(sub, PAGE);
 
         boolean onScratch = hasPageWithStroke(null, movedId, "pull-ink");
         boolean onSub = hasPageWithStroke(sub, movedId, "pull-ink");
@@ -248,7 +248,7 @@ public class PageMoveScratchpadToSubNotebookTest {
     @Test
     public void menuPathEnsureThenPlaceIntoInvalidatedTopLevelKeepsPage() {
         String top = repo.createNotebook("journal-like").id();
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         assertTrue(TestSheets.ready(repo, top, PAGE));
         // Touch dest so the ink log exists on disk, then drop the Ready sheet
         // (as after a long Scratchpad-only session that never opened it).
@@ -263,7 +263,7 @@ public class PageMoveScratchpadToSubNotebookTest {
         String movedId = drawing.id;
 
         // Exact fixed Move-menu path (CanvasActivity.movePageToNotebook).
-        assertTrue(repo.ensureSheet(top, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(top, PAGE));
         List<Board> destPages = repo.pages(top);
         assertFalse(destPages.isEmpty());
         Board trailing = destPages.get(destPages.size() - 1);
@@ -281,7 +281,7 @@ public class PageMoveScratchpadToSubNotebookTest {
     public void fullConfirmMovingQueueLandsLastPageInSubNotebookAfterDrain() throws Exception {
         String actions = repo.createNotebook("actions.life").id();
         String sub = repo.createNotebook("inbox", actions).id();
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         assertTrue(TestSheets.ready(repo, sub, PAGE));
 
         inkNearBottom(null, "keep");
@@ -303,8 +303,8 @@ public class PageMoveScratchpadToSubNotebookTest {
 
         db.close();
         openRepo(Runnable::run);
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
-        repo.ensureSheet(sub, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
+        repo.ensureSheet(sub, PAGE);
 
         assertFalse(hasPageWithStroke(null, movedId, "drained"));
         assertTrue(hasPageWithStroke(sub, movedId, "drained"));

@@ -51,7 +51,7 @@ public class PageChromeOpticalTest {
 
         BoardRepository _repo = ZettelData.repository(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext());
-        _repo.ensureSheet(null, 800, 800, 0L);
+        _repo.ensureSheet(null, 800);
         if (_repo.scratchpadPages().isEmpty()) {
             _repo.createPage(null);
         }
@@ -63,7 +63,7 @@ public class PageChromeOpticalTest {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("chrome");
-        repo.ensureSheet(book.id(), 800, 800, 0L);
+        repo.ensureSheet(book.id(), 800);
         if (repo.pages(book.id()).isEmpty()) {
             repo.createPage(book.id());
         }

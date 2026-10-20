@@ -46,7 +46,7 @@ public class PageMoveUiTest {
 
         BoardRepository _repo = ZettelData.repository(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext());
-        _repo.ensureSheet(null, 800, 800, 0L);
+        _repo.ensureSheet(null, 800);
         if (_repo.scratchpadPages().isEmpty()) {
             _repo.createPage(null);
         }
@@ -186,7 +186,7 @@ public class PageMoveUiTest {
         ensureNotebookPage(repo, book.id());
         BoardRepository.NotebookInfo top = repo.createNotebook("top-level");
         // Install once so the dest is log-backed, then drop Ready (Scratchpad-only session).
-        repo.ensureSheet(top.id(), 800, 800, 0L);
+        repo.ensureSheet(top.id(), 800);
         if (repo.pages(top.id()).isEmpty()) {
             repo.createPage(top.id());
         }
@@ -259,7 +259,7 @@ public class PageMoveUiTest {
     }
 
     private static void ensureNotebookPage(BoardRepository repo, String notebookId) {
-        repo.ensureSheet(notebookId, 800, 800, 0L);
+        repo.ensureSheet(notebookId, 800);
         if (repo.pages(notebookId).isEmpty()) {
             repo.createPage(notebookId);
         }

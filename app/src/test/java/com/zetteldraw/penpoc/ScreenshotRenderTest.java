@@ -47,7 +47,7 @@ public class ScreenshotRenderTest {
 
         BoardRepository _repo = ZettelData.repository(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext());
-        _repo.ensureSheet(null, 800, 800, 0L);
+        _repo.ensureSheet(null, 800);
         if (_repo.scratchpadPages().isEmpty()) {
             _repo.createPage(null);
         }
@@ -86,7 +86,7 @@ public class ScreenshotRenderTest {
     public void pageMenu() throws Exception {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
-        assertTrue(repo.ensureSheet(Notebook.JOURNAL.uuid, 800, 800, 0L));
+        assertTrue(repo.ensureSheet(Notebook.JOURNAL.uuid, 800));
         if (repo.pages(Notebook.JOURNAL.uuid).isEmpty()) {
             repo.createPage(Notebook.JOURNAL.uuid);
         }

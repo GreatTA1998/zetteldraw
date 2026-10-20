@@ -12,8 +12,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * blocks until {@link #release()} (or a safety timeout, so a regression
  * fails instead of hanging the build). Pull staging is not slowed.
  *
- * <p>Stalls both legacy {@code .zdi} {@link #stage} and Ready {@code .zdl}
- * {@link #appendLog} / {@code zdl} stage paths.
+ * <p>Stalls Ready {@code .zdl} {@link #appendLog} / {@code zdl} stage paths.
  */
 public final class SlowInkFileStore extends InkFileStore {
     public static final long SAFETY_TIMEOUT_MS = 5_000;
@@ -28,7 +27,7 @@ public final class SlowInkFileStore extends InkFileStore {
 
     @Override
     public File stage(String boardId, String tag, byte[] bytes) throws IOException {
-        if ("zdi".equals(tag) || "zdl".equals(tag)) {
+        if ("zdl".equals(tag)) {
             stallOnce();
         }
         return super.stage(boardId, tag, bytes);

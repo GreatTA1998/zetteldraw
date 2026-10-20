@@ -1,9 +1,7 @@
 package com.zetteldraw.penpoc.data;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
@@ -82,55 +80,6 @@ public class EnsureUnsyncedQueuedTest {
         // ensureUnsyncedQueued is a no-op when everything is already queued.
         assertEquals(0, repo.ensureUnsyncedQueued());
         assertTrue(repo.outboxSize() > 0);
-    }
-
-    @Test
-    public void skipsBoardQueueWhenNotebookLogBacked() throws Exception {
-        Board page = Board.blank();
-        TestInk.draw(page, 9f);
-        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
-        legacy.scratchpad.add(page);
-        assertEquals(1, repo.importLegacy(legacy, Device.PAGE, Device.PAGE, 0L));
-        // Plant stale BOARD outbox against log-backed notebook.
-        OutboxEntry stale = new OutboxEntry();
-        stale.entity = OutboxEntry.BOARD;
-        stale.id = page.id;
-        stale.op = OutboxEntry.UPSERT;
-        stale.queuedAt = device.clock.get();
-        device.db.dao().upsertOutbox(stale);
-        // Residue path: re-queue must not revive BOARD after Ready owns ink.
-        assertEquals(0, repo.ensureUnsyncedQueued());
-        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        assertNotNull(device.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(null)));
-    }
-
-    @Test
-    public void doesNotQueueBoardUpsertForUnopenedHistorical() throws Exception {
-        Board page = Board.blank();
-        TestInk.draw(page, 11f);
-        device.seedUnmigrated(page);
-        // Drop seed outbox — SyncWorker must not revive BOARD UPSERT.
-        device.db.dao().deleteOutbox(OutboxEntry.BOARD, page.id);
-        assertEquals(0, repo.ensureUnsyncedQueued());
-        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        // Unmigrated residue stays local; tip never revives BOARD UPSERT.
-        assertNotNull(device.db.dao().board(page.id).inkHash);
-        assertFalse(device.ensureReady());
-    }
-
-    @Test
-    public void pendingPushDropsBoardOutboxWithoutPushing() throws Exception {
-        Board page = Board.blank();
-        TestInk.draw(page, 13f);
-        device.seedUnmigrated(page);
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-
-        SyncStore.PushBatch batch = repo.pendingPush(50);
-        assertTrue(batch.isEmpty());
-        assertNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-        // Local .zdi residue remains; ensure refuses blank-wipe (fleet endgame).
-        assertNotNull(device.db.dao().board(page.id).inkHash);
-        assertFalse(device.ensureReady());
     }
 
     @Test

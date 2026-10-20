@@ -68,7 +68,7 @@ public class InkNavigationTest {
         ZettelData.resetForTest();
         UiExecutors.useSynchronousForTest();
         BoardRepository repo = ZettelData.repository(context);
-        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        assertTrue(repo.ensureSheet(null, 800));
         if (repo.scratchpadPages().isEmpty()) {
             org.junit.Assert.assertNotNull(repo.createPage(null));
         }
@@ -227,7 +227,7 @@ public class InkNavigationTest {
                 Runnable::run, System::currentTimeMillis);
         try {
             disk.release();
-            assertTrue(repo.ensureSheet(null, 1000, 1000, 0L));
+            assertTrue(repo.ensureSheet(null, 1000));
             if (repo.scratchpadPages().isEmpty()) {
                 repo.createPage(null);
             }
@@ -315,7 +315,7 @@ public class InkNavigationTest {
     }
 
     private static void seed(BoardRepository repo, String notebookId) {
-        assertTrue(repo.ensureSheet(notebookId, 800, 800, 0L));
+        assertTrue(repo.ensureSheet(notebookId, 800));
         Board blank = repo.createPage(notebookId);
         // One flush grows 40 inked slices (was 40×60 BoardEntity saves before Ready-only).
         for (int p = 0; p < 40; p++) {

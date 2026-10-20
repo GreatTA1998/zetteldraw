@@ -67,7 +67,7 @@ public class EnsureSheetSingleFlightTest {
             pool.execute(() -> {
                 try {
                     start.await(2, TimeUnit.SECONDS);
-                    results.add(device.repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+                    results.add(device.repo.ensureSheet(null, Device.PAGE));
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     results.add(false);

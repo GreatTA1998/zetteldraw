@@ -21,8 +21,7 @@ public interface SyncStore {
 
     /**
      * Next outbox rows to push, with the ink blobs they reference.
-     * Never includes BOARD ink — Ready {@code .zdl} / LOG is ink push SoT;
-     * historical BOARD outbox rows are dropped without upload.
+     * Ready {@code .zdl} / LOG is ink push SoT.
      */
     PushBatch pendingPush(int limit);
 
@@ -61,8 +60,7 @@ public interface SyncStore {
 
     /**
      * Defensive: queue never-pushed NOTEBOOK / LOG / LINK ({@code rev == 0}) missing
-     * from the outbox. No BOARD UPSERT — Ready {@code .zdl} is ink push SoT; unopened
-     * {@code .zdi} waits for open/Prepare. Used on Sign-In / SyncWorker.
+     * from the outbox. Ready {@code .zdl} is ink push SoT. Used on Sign-In / SyncWorker.
      *
      * @return how many new outbox rows were added
      */

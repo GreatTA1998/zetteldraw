@@ -56,7 +56,7 @@ public class LaunchTest {
         // Seed one real blank page (replaces the old soft trailing blank) so cold
         // launch still has a page list to show; empty Ready only shows Create.
         RoomBoardRepository repo = ZettelData.repository(app);
-        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        assertTrue(repo.ensureSheet(null, 800));
         if (repo.scratchpadPages().isEmpty()) {
             assertNotNull(repo.createPage(null));
         }

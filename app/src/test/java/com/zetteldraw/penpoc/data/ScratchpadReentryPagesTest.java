@@ -48,7 +48,7 @@ public class ScratchpadReentryPagesTest {
 
     @Test
     public void openScratchpadMultiPageSwitchNotebookAndBackKeepsPagesAndInk() throws Exception {
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -73,7 +73,7 @@ public class ScratchpadReentryPagesTest {
         // Cold open of the same on-disk log (no OpenSheet), then visit another notebook.
         device.reopen();
         repo = device.repo;
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -82,7 +82,7 @@ public class ScratchpadReentryPagesTest {
         assertEquals(inkedBefore, inked(opened));
         assertFalse(opened.get(0).isBlank());
 
-        repo.ensureSheet(Notebook.COMEDY.uuid, PAGE, PAGE, 0L);
+        repo.ensureSheet(Notebook.COMEDY.uuid, PAGE);
         // Bare ensureSheet = empty Ready OK (no auto blank).
         assertEquals(0, repo.pages(Notebook.COMEDY.uuid).size());
 

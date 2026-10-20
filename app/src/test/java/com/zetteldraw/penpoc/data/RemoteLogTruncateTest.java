@@ -49,7 +49,7 @@ public class RemoteLogTruncateTest {
 
     @Test
     public void installSheetRegistersNotebookLogEvenForDiskReplay() throws Exception {
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -68,7 +68,7 @@ public class RemoteLogTruncateTest {
         repo.invalidateOpenSheet(null);
         device.db.dao().deleteNotebookLog(sheetId);
         device.db.dao().deleteOutbox(OutboxEntry.LOG, sheetId);
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -138,7 +138,7 @@ public class RemoteLogTruncateTest {
 
     @Test
     public void diskReplayDoesNotQueueTruncatedLogForPush() throws Exception {
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -155,7 +155,7 @@ public class RemoteLogTruncateTest {
         device.db.dao().deleteNotebookLog(sheetId);
         repo.invalidateOpenSheet(null);
         int before = repo.outboxSize();
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         assertNotNull(device.db.dao().notebookLog(sheetId));
         assertEquals("meta heal must not enqueue truncated disk as push SoT",
                 before, repo.outboxSize());
@@ -168,7 +168,7 @@ public class RemoteLogTruncateTest {
         byte[] shortBytes = shortLogBytes(22);
         String sheetId = NotebookPaper.sheetId(null);
         new InkFileStore(device.inkDir()).writeLog(sheetId, shortBytes);
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -230,7 +230,7 @@ public class RemoteLogTruncateTest {
         byte[] shortBytes = shortLogBytes(22);
         String sheetId = NotebookPaper.sheetId(null);
         new InkFileStore(device.inkDir()).writeLog(sheetId, shortBytes);
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         assertTrue(repo.localInkLogBytes(sheetId) < 1_000_000L);
 
         byte[] longBytes = shortLogBytes(40);
@@ -254,7 +254,7 @@ public class RemoteLogTruncateTest {
 
     @Test
     public void longerScratchpadPullDoesNotTouchOtherNotebookLog() throws Exception {
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -285,7 +285,7 @@ public class RemoteLogTruncateTest {
         byte[] shortBytes = shortLogBytes(10);
         new InkFileStore(device.inkDir()).writeLog(scratchId, shortBytes);
         repo.invalidateOpenSheet(null);
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
 
         byte[] longScratch = shortLogBytes(30);
         NotebookLogEntity remote = device.db.dao().notebookLog(scratchId).copy();
@@ -308,7 +308,7 @@ public class RemoteLogTruncateTest {
     }
 
     private int seedDenseScratchpad(int inkedSlices) throws Exception {
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }

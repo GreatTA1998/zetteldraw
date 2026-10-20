@@ -86,8 +86,6 @@ public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
     private static final String SCRATCHPAD = "scratchpad";
     private static final String PREFS = "canvas";
-    /** Pages created before this device first ran v10 may keep the old full-window height. */
-    private static final String SHORT_PAGES_SINCE = "short_pages_since";
     /**
      * Scroll intent lives in {@link CollectionNav} (Y only — not page count).
      * Length SoT is Ready ink-log via the repository. Remember via
@@ -170,8 +168,8 @@ public final class CanvasActivity extends Activity {
     /** Height of a page: the drawing area minus the gap, so a whole page and its controls fit on screen. */
     private volatile int pageHeight;
     /** Full-window page height of v4–v9; old pages whose ink reaches below {@link #pageHeight} keep it. */
+    /** Last root window height — layout resize gate only (not ink migration). */
     private volatile int legacyPageHeight;
-    private long shortPagesSince;
     private int pageGap;
     private boolean scrolling;
     private boolean pagesLoaded;
@@ -207,11 +205,6 @@ public final class CanvasActivity extends Activity {
         repository = ZettelData.repository(this);
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         collectionNav = new CollectionNav(prefs);
-        shortPagesSince = prefs.getLong(SHORT_PAGES_SINCE, 0L);
-        if (shortPagesSince == 0L) {
-            shortPagesSince = System.currentTimeMillis();
-            prefs.edit().putLong(SHORT_PAGES_SINCE, shortPagesSince).apply();
-        }
         pageGap = dp(24);
         // Restored after inkView is created below.
 
@@ -1101,8 +1094,7 @@ public final class CanvasActivity extends Activity {
                     });
                     // ensureSheet is Ready-only — no structure-before-strokes dual
                     // (v153 draw-on-blank race deleted at the API, not just UI null).
-                    ready = repository.ensureSheet(notebook, pageHeight, legacyPageHeight,
-                            shortPagesSince);
+                    ready = repository.ensureSheet(notebook, pageHeight);
                     if (!ready) {
                         // Deleted notebook: ensureSheet fails; still post so UI can leave it.
                         if (notebook != null && notebookByIdIn(notebooks, notebook) == null) {
@@ -2390,7 +2382,7 @@ public final class CanvasActivity extends Activity {
     private void confirmDelete(String id, View anchor) {
         // pages() is Ready-only; ensure when height is known so the count is real.
         if (pageHeight > 0) {
-            repository.ensureSheet(id, pageHeight, legacyPageHeight, shortPagesSince);
+            repository.ensureSheet(id, pageHeight);
         }
         int pages = repository.pages(id).size();
         LinearLayout box = panel();
@@ -2718,7 +2710,6 @@ public final class CanvasActivity extends Activity {
             try {
                 SyncConfig cfg = SyncConfig.load(CanvasActivity.this);
                 com.zetteldraw.penpoc.data.SyncStore store = ZettelData.repository(CanvasActivity.this);
-                // Migrate unopened .zdi → Ready before queue (BOARD UPSERT arm is gone).
                 queueLocalInkForSync();
                 SyncClient client = new SyncClient(cfg, ZettelDatabase.SCHEMA_VERSION);
                 SyncEngine engine = new SyncEngine(

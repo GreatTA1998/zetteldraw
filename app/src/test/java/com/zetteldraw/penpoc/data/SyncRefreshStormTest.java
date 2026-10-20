@@ -69,7 +69,7 @@ public class SyncRefreshStormTest {
         repo = new RoomBoardRepository(db, new InkFileStore(new File(root, "ink")), InkMirror.NONE,
                 Runnable::run, Runnable::run, uiQueue::add, System::currentTimeMillis);
         repo.addRemoteChangeListener(refreshes::incrementAndGet);
-        assertTrue(repo.ensureSheet(null, PAGE_HEIGHT, PAGE_HEIGHT, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE_HEIGHT));
     }
 
     @After

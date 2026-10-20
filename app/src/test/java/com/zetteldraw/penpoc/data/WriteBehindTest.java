@@ -71,7 +71,7 @@ public class WriteBehindTest {
         repo = new RoomBoardRepository(db, ink, InkMirror.NONE, writer, Runnable::run, Runnable::run, clock::get);
         ink.release();
         drain();
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             assertNotNull(repo.createPage(null));
         }

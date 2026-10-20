@@ -11,10 +11,9 @@ import com.zetteldraw.penpoc.data.db.ZettelDao;
  * One live writer — not peer merge.
  *
  * <p>Caller holds the repository lock and runs inside the pull transaction.
- * Remote BOARD ink is not adopted here: Hand-off unlocks only when Ready
- * {@code notebook_logs} cover every inked notebook, so catch-up restores via
- * {@link InkSheetStore#applyRemoteLogLocked} alone. Local BoardEntity
- * {@code .zdi} is residue cleared on Ready install — not a migrate-on-open path.
+ * Ink restore is Ready {@code notebook_logs} only via
+ * {@link InkSheetStore#applyRemoteLogLocked}. Hand-off unlocks when Ready-cover
+ * is complete (server {@code backupStatus}); this class does not touch ink blobs.
  *
  * @see Lww
  * @see docs/ink-sot-rewrite.md

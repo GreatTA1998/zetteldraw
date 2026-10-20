@@ -45,7 +45,7 @@ public class CanvasActivitySmokeTest {
         UiExecutors.useSynchronousForTest();
         BoardRepository repo = ZettelData.repository(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext());
-        repo.ensureSheet(null, 800, 800, 0L);
+        repo.ensureSheet(null, 800);
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -146,7 +146,7 @@ public class CanvasActivitySmokeTest {
     public void pageMenuWipesAndDeletesWithConfirmAndEmptySheetShowsCreate() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
-        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        assertTrue(repo.ensureSheet(null, 800));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -386,7 +386,7 @@ public class CanvasActivitySmokeTest {
     public void lassoDragMovesStrokesThenUndoAndRedo() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
-        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        assertTrue(repo.ensureSheet(null, 800));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -395,7 +395,7 @@ public class CanvasActivitySmokeTest {
         TestInk.appendCovering(page.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(500f, page.paperOrigin + 700f), page.id);
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("lasso");
-        assertTrue(repo.ensureSheet(notebook.id(), 800, 800, 0L));
+        assertTrue(repo.ensureSheet(notebook.id(), 800));
         repo.movePageToNotebook(page.id, notebook.id());
         InkRenderer.InkStroke original = page.paper.strokes().get(0);
         InkRenderer.InkStroke other = page.paper.strokes().get(1);
@@ -499,7 +499,7 @@ public class CanvasActivitySmokeTest {
     public void lassoLongPressPastesAtHoldPoint() {
         Application app = androidx.test.core.app.ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
-        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        assertTrue(repo.ensureSheet(null, 800));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -507,7 +507,7 @@ public class CanvasActivitySmokeTest {
         TestInk.appendCovering(page.paper, com.zetteldraw.penpoc.data.TestStrokes.stroke(200f, page.paperOrigin + 200f), page.id);
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("longpress-paste");
-        assertTrue(repo.ensureSheet(notebook.id(), 800, 800, 0L));
+        assertTrue(repo.ensureSheet(notebook.id(), 800));
         repo.movePageToNotebook(page.id, notebook.id());
         InkRenderer.InkStroke original = page.paper.strokes().get(0);
 

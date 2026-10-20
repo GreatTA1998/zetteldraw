@@ -497,7 +497,7 @@ public class ToolSwitchTest {
         ZettelData.resetForTest();
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
-        assertTrue(repo.ensureSheet(null, 800, 800, 0L));
+        assertTrue(repo.ensureSheet(null, 800));
         Board page = repo.scratchpadPages().isEmpty()
                 ? repo.createPage(null)
                 : repo.scratchpadPages().get(0);
@@ -505,7 +505,7 @@ public class ToolSwitchTest {
         page.paper.appendStroke(TestStrokes.stroke(200f, page.paperOrigin + 200f));
         repo.saveInk(page);
         BoardRepository.NotebookInfo notebook = repo.createNotebook("stay-lasso");
-        assertTrue(repo.ensureSheet(notebook.id(), 800, 800, 0L));
+        assertTrue(repo.ensureSheet(notebook.id(), 800));
         repo.movePageToNotebook(page.id, notebook.id());
 
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();

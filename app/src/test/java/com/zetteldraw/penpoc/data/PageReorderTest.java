@@ -48,7 +48,7 @@ public class PageReorderTest {
         device = new Device("a", tmp.newFolder("a"), 2_000_000L);
         repo = device.repo;
         notebook = repo.createNotebook("reorder-book").id();
-        repo.ensureSheet(notebook, PAGE, PAGE, 0L);
+        repo.ensureSheet(notebook, PAGE);
     }
 
     @After
@@ -87,7 +87,7 @@ public class PageReorderTest {
     @Test
     public void placePageBeforeMovesAcrossNotebooksAndKeepsId() {
         String other = repo.createNotebook("other").id();
-        repo.ensureSheet(other, PAGE, PAGE, 0L);
+        repo.ensureSheet(other, PAGE);
         Board first = inkNearBottom(other, "stay");
         Board second = inkNearBottom(other, "anchor");
         Board source = inkNearBottom(notebook, "moved");
@@ -122,7 +122,7 @@ public class PageReorderTest {
     @Test
     public void densePlacePageBeforeKeepsEveryStroke() throws Exception {
         String other = repo.createNotebook("dense-dest").id();
-        repo.ensureSheet(other, PAGE, PAGE, 0L);
+        repo.ensureSheet(other, PAGE);
         Board anchor = inkNearBottom(other, "anchor");
         Board blank = repo.createPage(notebook);
         String adopted = blank.id;
@@ -163,7 +163,7 @@ public class PageReorderTest {
         assertTrue(repo.placePageBefore(blank.id, anchor.id));
         assertEquals(blank.id, repo.pages(notebook).get(0).id);
         String other = repo.createNotebook("blank-dest").id();
-        repo.ensureSheet(other, PAGE, PAGE, 0L);
+        repo.ensureSheet(other, PAGE);
         assertTrue(repo.movePageToNotebook(blank.id, other));
         assertEquals(blank.id, repo.pages(other).get(0).id);
         assertTrue(repo.pages(notebook).stream().noneMatch(p -> blank.id.equals(p.id)));

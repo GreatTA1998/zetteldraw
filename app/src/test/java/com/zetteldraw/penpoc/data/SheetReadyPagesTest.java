@@ -48,7 +48,7 @@ public class SheetReadyPagesTest {
 
     @Test
     public void pagesWithoutReadySheetReturnsEmptyWhenLogExists() throws Exception {
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -75,7 +75,7 @@ public class SheetReadyPagesTest {
         List<Board> beforeEnsure = repo.scratchpadPages();
         assertEquals("log present ⇒ refuse legacy BoardEntity list", 0, beforeEnsure.size());
 
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -86,7 +86,7 @@ public class SheetReadyPagesTest {
 
     @Test
     public void pagesRefusesLegacyWhenZdlExistsEvenWithoutNotebookLogRow() throws Exception {
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -107,7 +107,7 @@ public class SheetReadyPagesTest {
 
     @Test
     public void switchNotebookDuringReadyDoesNotTruncateScratchpad() throws Exception {
-        repo.ensureSheet(null, PAGE, PAGE, 0L);
+        repo.ensureSheet(null, PAGE);
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -124,7 +124,7 @@ public class SheetReadyPagesTest {
         int scratchpadCount = repo.scratchpadPages().size();
         assertTrue(scratchpadCount > 30);
 
-        assertTrue(repo.ensureSheet(Notebook.COMEDY.uuid, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(Notebook.COMEDY.uuid, PAGE));
         // Bare ensureSheet leaves empty Ready — no auto blank.
         assertEquals(0, repo.pages(Notebook.COMEDY.uuid).size());
 
@@ -132,7 +132,7 @@ public class SheetReadyPagesTest {
         repo.invalidateOpenSheet(null);
         assertFalse(repo.isSheetReady(null));
         assertEquals(0, repo.scratchpadPages().size());
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }

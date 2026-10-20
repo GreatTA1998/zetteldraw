@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.io.File;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -50,15 +49,10 @@ import java.util.function.LongSupplier;
  * orchestration.
  *
  * <p>Ink saves are Ready-only write-behind: {@code page.paper != null} queues
- * {@link InkSheetStore#flushSheetOrFalse}. There is no BoardEntity {@code .zdi}
- * write-behind or board conflict shelf. {@link #importLegacy} writes Ready
- * {@code .zdl} from in-memory SourcePages once pageHeight is known — never
- * {@code .zdi} / BOARD outbox. Tip never pushes BOARD ink ({@link #pendingPush}
- * drops BOARD outbox). Live push-only never adopts remote BOARD; catch-up is
- * Ready {@code notebook_logs} only. Documents index catalogs Ready {@code .zdl}
- * only. {@link #retireBoardEntityInkLocked} clears any leftover {@code .zdi}
- * after Ready install. Page-file migration is gone (fleet {@code boards_with_ink}
- * == 0).
+ * {@link InkSheetStore#flushSheetOrFalse}. Ready {@code .zdl} / LOG is the only
+ * ink SoT — no BoardStore JSON import, no {@code .zdi} page files, no BOARD
+ * outbox. Live push-only never adopts remote ink; catch-up is Ready
+ * {@code notebook_logs} only. Documents index catalogs Ready {@code .zdl} only.
  */
 public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /**
@@ -101,13 +95,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /** Notebook / link meta LWW during pull (exception shelf). */
     private final MetaPullApply metaPull;
     private int knownPageHeight;
-    private int knownLegacyHeight;
-    private long knownShortPagesSince;
-    /**
-     * App files dir holding {@link LegacyBoardImporter#FILE_NAME}. Import runs
-     * from {@link #ensureSheet} once pageHeight is known — not at open.
-     */
-    private File legacyFilesDir;
     /** Sync-pass ink policy; default catch-up so unit tests can adopt. */
     private volatile SyncStore.InkPullPolicy inkPullPolicy = SyncStore.InkPullPolicy.CATCH_UP;
 
@@ -158,12 +145,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
     }
 
-    /** Caller holds {@link #lock}. Ready {@code .zdl} / notebook_logs owns ink. */
-    private boolean notebookLogBackedLocked(String notebookId) {
-        String sheetId = NotebookPaper.sheetId(notebookId);
-        return dao.notebookLog(sheetId) != null || ink.hasLog(sheetId);
-    }
-
     /** Bridge for {@link InkSheetStore} — keeps Room/outbox/mirror in this class. */
     private final class SheetDeps implements InkSheetStore.Deps {
         @Override public Object lock() { return RoomBoardRepository.this.lock; }
@@ -182,19 +163,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         @Override public boolean allowRemoteInkAdopt() {
             return RoomBoardRepository.this.allowRemoteInkAdopt();
-        }
-        @Override
-        public boolean hasInkedBoardEntity(String notebookId) {
-            for (BoardEntity row : rowsLocked(notebookId)) {
-                if (row.conflictOf == null && row.inkHash != null) {
-                    return true;
-                }
-            }
-            return false;
-        }
-        @Override
-        public void retireBoardEntityInk(String notebookId) {
-            retireBoardEntityInkLocked(notebookId);
         }
         @Override
         public void bindPaperToBoards(String sheetId, NotebookPaper paper) {
@@ -299,7 +267,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         String destSheetId = NotebookPaper.sheetId(destNotebookId);
         if (knownPageHeight > 0) {
-            ensureSheet(destNotebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
+            ensureSheet(destNotebookId, knownPageHeight);
         }
         synchronized (lock) {
             InkSheetStore.OpenSheet dest = sheetStore.get(destSheetId);
@@ -473,7 +441,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return false;
         }
         if (knownPageHeight > 0) {
-            ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
+            ensureSheet(notebookId, knownPageHeight);
         }
         if (!isSheetReady(notebookId)) {
             LaunchLog.mark("movePageToNotebook refused: dest not Ready " + notebookId);
@@ -485,7 +453,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     @Override
     public Board createPage(String notebookId) {
         if (knownPageHeight > 0) {
-            ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
+            ensureSheet(notebookId, knownPageHeight);
         }
         synchronized (lock) {
             String sheetId = NotebookPaper.sheetId(notebookId);
@@ -597,7 +565,7 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     /** Opens the sheet if this screen already knows a page height, then looks the id up. */
     private PagePlace placeIn(String notebookId, String pageId) {
         if (knownPageHeight > 0) {
-            ensureSheet(notebookId, knownPageHeight, knownLegacyHeight, knownShortPagesSince);
+            ensureSheet(notebookId, knownPageHeight);
         }
         List<Board> list = pages(notebookId);
         for (int i = 0; i < list.size(); i++) {
@@ -694,22 +662,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             return true;
         }
         int height = knownPageHeight > 0 ? knownPageHeight : 800;
-        int legacy = knownLegacyHeight > 0 ? knownLegacyHeight : height;
-        if (!ensureSheet(notebookId, height, legacy, knownShortPagesSince)) {
-            // Put-back (~10%): blank-only / empty may delete; inked BoardEntity
-            // left behind would be invisible on Ready-only Scratchpad.
-            synchronized (lock) {
-                for (BoardEntity row : dao.notebookBoards(notebookId)) {
-                    if (row.inkHash != null && row.deletedAt == null) {
-                        LaunchLog.mark("returnReady refused: ensure failed with inked BoardEntity "
-                                + notebookId);
-                        return false;
-                    }
-                }
-            }
-            return true;
+        if (!ensureSheet(notebookId, height)) {
+            // Ensure failed (corrupt leave-intact, etc.) — do not tombstone.
+            LaunchLog.mark("returnReady refused: ensure failed " + notebookId);
+            return false;
         }
-        ensureSheet(null, height, legacy, knownShortPagesSince);
+        ensureSheet(null, height);
         // Every Ready slice is real — blank Create-new-page slices return too.
         ArrayList<String> ids = new ArrayList<>();
         for (Board page : pages(notebookId)) {
@@ -776,10 +734,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                     takeQueued(entry, dao::notebookLog, logs::add, batch);
                 } else if (OutboxEntry.LINK.equals(entry.entity)) {
                     takeQueued(entry, dao::pageLink, batch.links::add, batch);
-                } else if (OutboxEntry.BOARD.equals(entry.entity)) {
-                    // Tip never pushes BOARD .zdi — Ready LOG is ink push SoT.
-                    dao.deleteOutbox(entry.entity, entry.id);
                 } else {
+                    // Unknown / historical entity rows (incl. old BOARD) — drop.
                     dao.deleteOutbox(entry.entity, entry.id);
                 }
             }
@@ -1153,12 +1109,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
                         added[0]++;
                     }
                 }
-                // No BOARD UPSERT — Ready .zdl only. Drop stale BOARD outbox on log-backed.
-                for (BoardEntity row : dao.liveBoardsForIndex()) {
-                    if (notebookLogBackedLocked(row.notebookId)) {
-                        dao.deleteOutbox(OutboxEntry.BOARD, row.id);
-                    }
-                }
                 for (NotebookLogEntity row : dao.liveNotebookLogs()) {
                     if (row.rev == 0 && row.inkHash != null
                             && queueIfAbsent(OutboxEntry.LOG, row.id)) {
@@ -1206,118 +1156,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         }
         queueLocked(entity, id, OutboxEntry.UPSERT);
         return true;
-    }
-
-    // endregion
-
-    // region legacy import
-
-    /** Where BoardStore JSON may still sit — set by {@link ZettelData} at open. */
-    void setLegacyFilesDir(File filesDir) {
-        this.legacyFilesDir = filesDir;
-    }
-
-    /**
-     * Ready-direct BoardStore import: identity BoardEntity rows + {@code .zdl}
-     * from in-memory SourcePages. Never writes {@code .zdi} or BOARD outbox.
-     * Requires {@code pageHeight > 0}. Returns the count imported.
-     */
-    int importLegacy(LegacyBoardImporter.Legacy legacy, int pageHeight, int legacyPageHeight,
-                     long shortPagesSince) throws IOException {
-        if (pageHeight <= 0) {
-            return 0;
-        }
-        LinkedHashMap<String, ArrayList<Board>> groups = new LinkedHashMap<>();
-        ArrayList<BoardEntity> rows = new ArrayList<>();
-        synchronized (lock) {
-            String last = dao.lastScratchpadPosition();
-            ArrayList<Board> scratch = new ArrayList<>(legacy.scratchpad);
-            scratch.addAll(legacy.orphans);
-            ArrayList<Board> scratchKept = new ArrayList<>();
-            for (Board board : scratch) {
-                if (board.isBlank() || dao.board(board.id) != null) {
-                    continue;
-                }
-                last = Positions.after(last);
-                rows.add(legacyRow(board, null, last));
-                scratchKept.add(board);
-            }
-            if (!scratchKept.isEmpty()) {
-                groups.put("", scratchKept);
-            }
-            for (Map.Entry<Notebook, List<Board>> entry : legacy.notebooks.entrySet()) {
-                String notebookId = entry.getKey().uuid;
-                String pos = dao.lastNotebookBoardPosition(notebookId);
-                ArrayList<Board> kept = new ArrayList<>();
-                for (Board board : entry.getValue()) {
-                    if (dao.board(board.id) != null) {
-                        continue;
-                    }
-                    pos = Positions.after(pos);
-                    rows.add(legacyRow(board, notebookId, pos));
-                    kept.add(board);
-                }
-                if (!kept.isEmpty()) {
-                    groups.put(notebookId, kept);
-                }
-            }
-            if (rows.isEmpty()) {
-                return 0;
-            }
-            // Identity / createdAt only — ink lives on Ready .zdl.
-            db.runInTransaction(() -> {
-                for (BoardEntity row : rows) {
-                    dao.upsertBoard(row);
-                }
-            });
-        }
-        for (Map.Entry<String, ArrayList<Board>> entry : groups.entrySet()) {
-            String notebookId = entry.getKey().isEmpty() ? null : entry.getKey();
-            ArrayList<NotebookPaper.SourcePage> sources = new ArrayList<>();
-            for (Board board : entry.getValue()) {
-                int height = NotebookPaper.measuredHeight(
-                        board.createdAt, board.strokes, pageHeight, legacyPageHeight, shortPagesSince);
-                sources.add(new NotebookPaper.SourcePage(board.id, height, board.strokes));
-            }
-            if (!sheetStore.installFromSources(notebookId, sources, pageHeight, true)) {
-                throw new IOException("Ready import failed for "
-                        + (notebookId == null ? "scratchpad" : notebookId));
-            }
-        }
-        synchronized (lock) {
-            scheduleIndex();
-        }
-        return rows.size();
-    }
-
-    private BoardEntity legacyRow(Board board, String notebookId, String position) {
-        BoardEntity row = new BoardEntity();
-        row.id = board.id;
-        row.notebookId = notebookId;
-        row.position = position;
-        row.createdAt = board.createdAt;
-        row.updatedAt = clock.getAsLong();
-        return row;
-    }
-
-    /** Drain parked BoardStore JSON on first known pageHeight. */
-    private void importLegacyIfPresent(int pageHeight, int legacyPageHeight, long shortPagesSince) {
-        if (legacyFilesDir == null || pageHeight <= 0) {
-            return;
-        }
-        File pending = new File(legacyFilesDir, LegacyBoardImporter.FILE_NAME);
-        if (!pending.exists()) {
-            return;
-        }
-        try {
-            int imported = LegacyBoardImporter.importIfPresent(
-                    legacyFilesDir, this, pageHeight, legacyPageHeight, shortPagesSince);
-            if (imported > 0) {
-                LaunchLog.mark("Ready-direct import " + imported + " board(s)");
-            }
-        } catch (IOException e) {
-            Log.e(TAG, "legacy import failed; will retry next ensureSheet", e);
-        }
     }
 
     // endregion
@@ -1678,70 +1516,19 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     @Override
-    public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince) {
+    public boolean ensureSheet(String notebookId, int pageHeight) {
         notebookReads.incrementAndGet();
         if (pageHeight <= 0) {
             return false;
         }
         knownPageHeight = pageHeight;
-        knownLegacyHeight = legacyPageHeight;
-        knownShortPagesSince = shortPagesSince;
-        // BoardStore JSON → Ready .zdl once height is real (never mid-open .zdi).
-        importLegacyIfPresent(pageHeight, legacyPageHeight, shortPagesSince);
         // One path: full Ready replay only — no slices-before-strokes structure dual.
-        return sheetStore.ensureSheet(notebookId, pageHeight, legacyPageHeight, shortPagesSince);
+        return sheetStore.ensureSheet(notebookId, pageHeight);
     }
 
     @Override
     public boolean isSheetEnsuring(String notebookId) {
         return sheetStore.isEnsuring(notebookId);
-    }
-
-    /**
-     * Ready {@code .zdl} is SoT — clear leftover BoardEntity {@code .zdi} so it
-     * cannot remain a second ink SoT after Ready install / catch-up.
-     * Keeps BoardEntity rows (identity / blank slots) but drops {@code .zdi},
-     * inkHash, and BOARD outbox. Conflict copies are left for Hand-off history.
-     * Caller holds {@link #lock}.
-     */
-    private void retireBoardEntityInkLocked(String notebookId) {
-        List<BoardEntity> rows = rowsLocked(notebookId);
-        if (rows.isEmpty()) {
-            return;
-        }
-        boolean touched = false;
-        for (BoardEntity row : rows) {
-            if (row.conflictOf != null) {
-                continue;
-            }
-            boolean hadFile = ink.fileFor(row.id).exists();
-            boolean hadHash = row.inkHash != null;
-            boolean hadOutbox = dao.outbox(OutboxEntry.BOARD, row.id) != null;
-            if (!hadFile && !hadHash && !hadOutbox) {
-                continue;
-            }
-            if (hadFile) {
-                ink.delete(row.id);
-            }
-            row.inkHash = null;
-            row.inkBytes = 0;
-            if (hadHash) {
-                row.updatedAt = clock.getAsLong();
-            }
-            BoardEntity toSave = row;
-            db.runInTransaction(() -> {
-                if (hadHash || hadFile) {
-                    dao.upsertBoard(toSave);
-                }
-                dao.deleteOutbox(OutboxEntry.BOARD, toSave.id);
-            });
-            touched = true;
-        }
-        if (touched) {
-            LaunchLog.mark("retired BoardEntity ink for "
-                    + (notebookId == null ? "scratchpad" : notebookId));
-            scheduleIndex();
-        }
     }
 
     /** Ready slices only — no ephemeral trailing blank. */

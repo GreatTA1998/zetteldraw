@@ -11,7 +11,7 @@ public final class TestSheets {
     }
 
     public static boolean ready(BoardRepository repo, String notebookId, int pageHeight) {
-        if (!repo.ensureSheet(notebookId, pageHeight, pageHeight, 0L)) {
+        if (!repo.ensureSheet(notebookId, pageHeight)) {
             return false;
         }
         if (repo.pages(notebookId).isEmpty()) {

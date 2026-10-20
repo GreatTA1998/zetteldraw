@@ -64,104 +64,10 @@ public final class NotebookPaper {
         return notebookId == null ? SCRATCHPAD_ID : notebookId;
     }
 
-    /**
-     * The height a page is shown at today: {@code pageHeight} for anything
-     * drawn since v10, and the old full-window height when earlier ink runs
-     * past that. Matches the screen rule so migration does not move a point.
-     */
-    public static int measuredHeight(long createdAt, List<InkRenderer.InkStroke> strokes,
-                                     int pageHeight, int legacyPageHeight, long shortPagesSince) {
-        if (createdAt >= shortPagesSince || pageHeight <= 0) {
-            return Math.max(1, pageHeight);
-        }
-        float bottom = 0f;
-        if (strokes != null) {
-            for (InkRenderer.InkStroke stroke : strokes) {
-                bottom = Math.max(bottom, stroke.bounds.bottom + stroke.maxWidth);
-            }
-        }
-        if (bottom <= pageHeight) {
-            return pageHeight;
-        }
-        return Math.max(legacyPageHeight, (int) Math.ceil(bottom));
-    }
-
-    /** True when every migrated point still sits at {@code origin + local y}. */
-    public static boolean readsBack(List<SourcePage> pages, NotebookPaper paper) {
-        if (paper == null) {
-            return false;
-        }
-        int seen = 0;
-        float origin = 0f;
-        for (SourcePage page : pages) {
-            for (InkRenderer.InkStroke stroke : page.strokes()) {
-                InkRenderer.InkStroke got = paper.stroke(stroke.id);
-                if (got == null || got.points.size() != stroke.points.size()) {
-                    return false;
-                }
-                for (int i = 0; i < stroke.points.size(); i++) {
-                    TouchPoint want = stroke.points.get(i);
-                    TouchPoint have = got.points.get(i);
-                    if (have.x != want.x || have.y != want.y + origin) {
-                        return false;
-                    }
-                }
-                seen++;
-            }
-            origin += page.height();
-        }
-        return seen == paper.strokes().size() && paper.sliceCount() == pages.size();
-    }
-
     /** A new notebook: one frozen slice height, no ink. */
     public static NotebookPaper empty(int sliceHeight) {
         NotebookPaper paper = new NotebookPaper(sliceHeight, new byte[0]);
         paper.log = paper.headerBytes();
-        return paper;
-    }
-
-    /**
-     * Build a log from page-local strokes. Each page contributes its real
-     * height, so a 1420 page followed by a 1680 page does not move a point.
-     * The caller leaves hidden conflict copies out (and any legacy soft blank).
-     */
-    public static NotebookPaper migrate(List<SourcePage> pages, int newSliceHeight) {
-        int frozen = newSliceHeight;
-        if (pages != null) {
-            Integer shared = null;
-            boolean uniform = true;
-            for (SourcePage page : pages) {
-                if (page == null || page.height() <= 0) {
-                    throw new IllegalArgumentException("page height");
-                }
-                if (shared == null) {
-                    shared = page.height();
-                } else if (shared != page.height()) {
-                    uniform = false;
-                }
-            }
-            if (uniform && shared != null) {
-                frozen = shared;
-            }
-        }
-        NotebookPaper paper = new NotebookPaper(frozen, new byte[0]);
-        if (pages != null) {
-            for (SourcePage page : pages) {
-                paper.heights.add(page.height());
-                paper.sliceIds.add(page.id());
-            }
-        }
-        paper.log = paper.headerBytes();
-        if (pages == null) {
-            return paper;
-        }
-        float origin = 0f;
-        for (SourcePage page : pages) {
-            for (InkRenderer.InkStroke stroke : page.strokes()) {
-                paper.appendStroke(shiftY(stroke, origin));
-            }
-            origin += page.height();
-        }
         return paper;
     }
 
@@ -1127,13 +1033,6 @@ public final class NotebookPaper {
             ids.add(readId(in));
         }
         return ids;
-    }
-
-    /** One page file's ink, already in that page's own coordinates, and the height it was drawn at. */
-    public record SourcePage(String id, int height, List<InkRenderer.InkStroke> strokes) {
-        public SourcePage {
-            strokes = strokes == null ? List.of() : strokes;
-        }
     }
 
     /** What a tear did. {@link #newIds} is empty unless a stroke crossed the edge. */

@@ -47,7 +47,7 @@ public class NestedNotebooksTest {
 
         BoardRepository _repo = ZettelData.repository(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext());
-        _repo.ensureSheet(null, 800, 800, 0L);
+        _repo.ensureSheet(null, 800);
         if (_repo.scratchpadPages().isEmpty()) {
             _repo.createPage(null);
         }

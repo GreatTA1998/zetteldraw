@@ -44,15 +44,13 @@ public interface BoardRepository {
     void saveInk(Board page);
 
     /**
-     * Switches this notebook onto its ink log. Page files are not rewritten
-     * or deleted. The log is not pushed until it reads back identical to those pages.
+     * Switches this notebook onto its Ready ink log ({@code .zdl}).
      *
-     * @return true when the sheet is {@linkplain #isSheetReady Ready} afterward
-     *     (already was, or install/migrate succeeded). False when height is
-     *     unknown, the notebook is gone, or replay/migrate could not finish —
-     *     the UI must not show or remember scroll for that collection yet.
+     * @return true when the sheet is {@linkplain #isSheetReady Ready} afterward.
+     *     False when height is unknown, the notebook is gone, or replay could
+     *     not finish — the UI must not show or remember scroll yet.
      */
-    boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight, long shortPagesSince);
+    boolean ensureSheet(String notebookId, int pageHeight);
 
     /**
      * True when {@link #pages} for this notebook projects from a fully installed

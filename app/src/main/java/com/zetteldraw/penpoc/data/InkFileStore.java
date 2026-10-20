@@ -11,10 +11,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 /**
- * App-private ink files. Ready SoT is {@code <dir>/<sheetId>.zdl}.
- * {@code .zdi} page-file helpers remain only to retire leftover residue after
- * Ready install. Writing is split so the slow half can run without the
- * repository lock: {@link #stage} + {@link #commit}.
+ * App-private Ready ink files: {@code <dir>/<sheetId>.zdl}.
+ * Writing is split so the slow half can run without the repository lock:
+ * {@link #stage} + {@link #commitTo}.
  */
 public class InkFileStore {
     private final File dir;
@@ -25,31 +24,19 @@ public class InkFileStore {
         dir.mkdirs();
     }
 
-    public File fileFor(String boardId) {
-        return new File(dir, boardId + ".zdi");
-    }
-
     /** Notebook ink log ({@code .zdl}) — Ready SoT. */
     public File logFile(String sheetId) {
         return new File(dir, sheetId + ".zdl");
     }
 
-    public void write(String boardId, byte[] bytes) throws IOException {
-        commit(stage(boardId, "zdi", bytes), boardId);
-    }
-
-    /** Writes and fsyncs {@code <boardId>.<tag>.tmp}; nothing is visible until {@link #commit}. */
-    public File stage(String boardId, String tag, byte[] bytes) throws IOException {
-        File tmp = new File(dir, boardId + "." + tag + ".tmp");
+    /** Writes and fsyncs {@code <id>.<tag>.tmp}; nothing is visible until {@link #commitTo}. */
+    public File stage(String id, String tag, byte[] bytes) throws IOException {
+        File tmp = new File(dir, id + "." + tag + ".tmp");
         try (FileOutputStream out = new FileOutputStream(tmp)) {
             out.write(bytes);
             out.getFD().sync();
         }
         return tmp;
-    }
-
-    public void commit(File staged, String boardId) throws IOException {
-        commitTo(staged, fileFor(boardId));
     }
 
     public void commitTo(File staged, File target) throws IOException {
@@ -105,12 +92,7 @@ public class InkFileStore {
         }
     }
 
-    /** Null when the board has no ink file. */
-    public byte[] read(String boardId) throws IOException {
-        return readFile(fileFor(boardId));
-    }
-
-    /** Null when missing; one read spine for {@code .zdi} and {@code .zdl}. */
+    /** Null when missing. */
     private static byte[] readFile(File file) throws IOException {
         if (!file.exists()) {
             return null;
@@ -131,11 +113,6 @@ public class InkFileStore {
             }
         }
         return buf;
-    }
-
-    public void delete(String boardId) {
-        //noinspection ResultOfMethodCallIgnored
-        fileFor(boardId).delete();
     }
 
     public static String sha256(byte[] bytes) {

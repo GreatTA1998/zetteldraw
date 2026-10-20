@@ -3,7 +3,6 @@ package com.zetteldraw.penpoc.data;
 import android.content.Context;
 import android.os.Build;
 import android.os.Environment;
-import android.util.Log;
 
 import com.zetteldraw.penpoc.LaunchLog;
 import com.zetteldraw.penpoc.data.db.ZettelDatabase;
@@ -14,12 +13,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Process-wide repository. BoardStore JSON stays on disk until the first
- * {@link RoomBoardRepository#ensureSheet} with a real page height — then Ready
- * {@code .zdl} is written directly (no importer {@code .zdi} / BOARD outbox).
+ * Process-wide repository. Ready {@code .zdl} is the only ink SoT.
  */
 public final class ZettelData {
-    private static final String TAG = "zd-data";
     private static RoomBoardRepository repository;
     private static boolean synchronousForTest;
 
@@ -48,8 +44,6 @@ public final class ZettelData {
                     mirrorExecutor,
                     app.getMainExecutor(),
                     System::currentTimeMillis);
-            repository.setLegacyFilesDir(app.getFilesDir());
-            Log.i(TAG, "legacy JSON deferred until pageHeight (Ready-direct import)");
         }
         return repository;
     }

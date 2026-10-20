@@ -52,19 +52,6 @@ public final class InkSheetStore {
 
         void mirrorLog(String sheetId, byte[] bytes);
 
-        /**
-         * True when live BoardEntity rows still hold {@code inkHash} for this
-         * notebook (historical {@code .zdi} residue). Fleet endgame refuses
-         * blank-wipe ensure rather than page-file migrate.
-         */
-        boolean hasInkedBoardEntity(String notebookId);
-
-        /**
-         * After Ready {@code .zdl} install: clear BoardEntity {@code .zdi} ink for
-         * this notebook so page files are residue only — not a second SoT.
-         */
-        void retireBoardEntityInk(String notebookId);
-
         /** After remote/local paper install: point cached boards at the new paper. */
         void bindPaperToBoards(String sheetId, NotebookPaper paper);
 
@@ -190,12 +177,11 @@ public final class InkSheetStore {
 
     /**
      * Switch this notebook onto its ink log. Returns true when Ready afterward.
-     * Meta heal never queues; migration may queue. Single-flight per sheet:
+     * Meta heal never queues; first empty open queues. Single-flight per sheet:
      * concurrent callers join the same work (no parallel full replays).
      * Full {@link NotebookPaper#replay} only — no slices-before-strokes dual.
      */
-    public boolean ensureSheet(String notebookId, int pageHeight, int legacyPageHeight,
-                               long shortPagesSince) {
+    public boolean ensureSheet(String notebookId, int pageHeight) {
         if (pageHeight <= 0) {
             return false;
         }
@@ -224,7 +210,7 @@ public final class InkSheetStore {
         }
         boolean ok = false;
         try {
-            ok = ensureSheetBody(notebookId, sheetId, pageHeight, legacyPageHeight, shortPagesSince);
+            ok = ensureSheetBody(notebookId, sheetId, pageHeight);
         } finally {
             mine.complete(ok);
             synchronized (deps.lock()) {
@@ -236,8 +222,7 @@ public final class InkSheetStore {
         return ok;
     }
 
-    private boolean ensureSheetBody(String notebookId, String sheetId, int pageHeight,
-                                    int legacyPageHeight, long shortPagesSince) {
+    private boolean ensureSheetBody(String notebookId, String sheetId, int pageHeight) {
         byte[] existing;
         try {
             existing = deps.ink().readLog(sheetId);
@@ -267,93 +252,41 @@ public final class InkSheetStore {
                 return false;
             } catch (IOException | RuntimeException e) {
                 // Header-level corruption: quarantine the file (keep bytes on disk),
-                // then empty Ready so *this* sheet opens and other notebooks stay
-                // usable. Page-file .zdi migration is gone (fleet Ready-covered).
+                // then empty Ready so *this* sheet opens and other notebooks stay usable.
                 Log.e(TAG, "ink log will not replay " + sheetId + "; quarantining", e);
                 File quarantined = deps.ink().quarantineLog(sheetId);
                 LaunchLog.mark("quarantined ink log " + sheetId
                         + (quarantined == null ? "" : (" → " + quarantined.getName())));
-                return installEmptyReady(notebookId, pageHeight);
+                return installEmptyReady(notebookId, pageHeight, false);
             }
         }
         synchronized (deps.lock()) {
-            if (deps.hasInkedBoardEntity(notebookId)) {
-                // Refuse blank-wipe over historical .zdi — Hand-off / catch-up
-                // restores via Ready logs only (fleet boards_with_ink == 0).
-                LaunchLog.mark("ensure refused: unmigrated BoardEntity ink " + sheetId);
-                return false;
-            }
             if (deps.dao().notebookLog(sheetId) != null) {
                 // Meta says log-backed but file gone — open blank locally; cloud
                 // blob untouched (queue=false). Hand-off only if user chooses later.
                 LaunchLog.mark("ink log missing for " + sheetId + "; empty Ready heal");
-                return installEmptyReady(notebookId, pageHeight);
+                return installEmptyReady(notebookId, pageHeight, false);
             }
         }
         // First open of an empty notebook — Ready .zdl, queue LOG.
-        return installFromSources(notebookId, java.util.Collections.emptyList(), pageHeight, true);
+        return installEmptyReady(notebookId, pageHeight, true);
     }
 
     /**
-     * Last-resort local open: blank Ready sheet so UI paints. Does not delete
-     * quarantined {@code .zdl.corrupt.*} files and does not queue cloud push.
+     * Blank Ready sheet so UI paints. Quarantine heal / missing-file heal use
+     * {@code queue=false}; first empty open uses {@code queue=true}.
      */
-    private boolean installEmptyReady(String notebookId, int pageHeight) {
+    private boolean installEmptyReady(String notebookId, int pageHeight, boolean queue) {
         String sheetId = NotebookPaper.sheetId(notebookId);
         NotebookPaper empty = NotebookPaper.empty(pageHeight);
         byte[] bytes = empty.bytes();
         try {
             deps.ink().writeLog(sheetId, bytes);
         } catch (IOException e) {
-            Log.e(TAG, "empty Ready heal write failed " + sheetId, e);
+            Log.e(TAG, "empty Ready write failed " + sheetId, e);
             return false;
         }
-        installSheet(notebookId, sheetId, empty, bytes.length, false, bytes);
-        return isSheetReady(notebookId);
-    }
-
-    /**
-     * Write {@code .zdl} from {@link NotebookPaper.SourcePage}s and install Ready.
-     * Used by Ready-direct {@link RoomBoardRepository#importLegacy} and empty
-     * first-open — never writes {@code .zdi}.
-     */
-    boolean installFromSources(String notebookId, List<NotebookPaper.SourcePage> sources,
-                               int pageHeight, boolean queue) {
-        if (sources == null) {
-            return false;
-        }
-        String sheetId = NotebookPaper.sheetId(notebookId);
-        RoomBoardRepository.logReplays.incrementAndGet();
-        NotebookPaper built = NotebookPaper.migrate(sources, pageHeight);
-        NotebookPaper readBack;
-        try {
-            readBack = NotebookPaper.replay(built.bytes());
-        } catch (IOException e) {
-            Log.e(TAG, "migration log will not replay " + sheetId, e);
-            return false;
-        }
-        if (!NotebookPaper.readsBack(sources, built) || !NotebookPaper.readsBack(sources, readBack)) {
-            Log.e(TAG, "migration refused for " + sheetId + "; page files left untouched");
-            return false;
-        }
-        byte[] bytes = built.bytes();
-        try {
-            deps.ink().writeLog(sheetId, bytes);
-            byte[] onDisk = deps.ink().readLog(sheetId);
-            if (onDisk == null || !java.util.Arrays.equals(bytes, onDisk)) {
-                Log.e(TAG, "migration read-back mismatch " + sheetId);
-                return false;
-            }
-            readBack = NotebookPaper.replay(onDisk);
-        } catch (IOException e) {
-            Log.e(TAG, "migration write failed " + sheetId, e);
-            return false;
-        }
-        if (!NotebookPaper.readsBack(sources, readBack)) {
-            Log.e(TAG, "migration disk read-back refused " + sheetId);
-            return false;
-        }
-        installSheet(notebookId, sheetId, readBack, bytes.length, queue, bytes);
+        installSheet(notebookId, sheetId, empty, bytes.length, queue, bytes);
         return isSheetReady(notebookId);
     }
 
@@ -387,8 +320,6 @@ public final class InkSheetStore {
             if (queue && bytes != null) {
                 deps.mirrorLog(sheetId, bytes);
             }
-            // Ready owns ink — drop page-file dual left by importer / old tips.
-            deps.retireBoardEntityInk(notebookId);
         }
     }
 
@@ -540,9 +471,6 @@ public final class InkSheetStore {
         }
         open.ready = true;
         deps.bindPaperToBoards(remote.id, paper);
-        // Catch-up log install: same retire as local ensure (boards may have
-        // landed in an earlier pull before this tip reordered logs-first).
-        deps.retireBoardEntityInk(remote.notebookId);
     }
 
     private int localReadySliceCountLocked(String sheetId, OpenSheet open) {

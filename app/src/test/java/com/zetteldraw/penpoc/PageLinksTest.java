@@ -45,7 +45,7 @@ public class PageLinksTest {
 
         BoardRepository _repo = ZettelData.repository(
                 androidx.test.core.app.ApplicationProvider.getApplicationContext());
-        _repo.ensureSheet(null, 800, 800, 0L);
+        _repo.ensureSheet(null, 800);
         if (_repo.scratchpadPages().isEmpty()) {
             _repo.createPage(null);
         }
@@ -85,11 +85,11 @@ public class PageLinksTest {
         // Logs on disk, sheets dropped. The old press replayed each of them once and cached the
         // sheet, so the first press froze and the tenth did not.
         RoomBoardRepository room = (RoomBoardRepository) repo;
-        room.ensureSheet(otherA.id(), height, height, 1L);
+        room.ensureSheet(otherA.id(), height);
         if (room.pages(otherA.id()).isEmpty()) {
             room.createPage(otherA.id());
         }
-        room.ensureSheet(otherB.id(), height, height, 1L);
+        room.ensureSheet(otherB.id(), height);
         if (room.pages(otherB.id()).isEmpty()) {
             room.createPage(otherB.id());
         }
@@ -483,7 +483,7 @@ public class PageLinksTest {
 
 
     private static void ensureNotebookPage(BoardRepository repo, String notebookId) {
-        repo.ensureSheet(notebookId, 800, 800, 0L);
+        repo.ensureSheet(notebookId, 800);
         if (repo.pages(notebookId).isEmpty()) {
             repo.createPage(notebookId);
         }

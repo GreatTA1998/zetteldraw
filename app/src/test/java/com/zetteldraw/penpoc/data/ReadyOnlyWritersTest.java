@@ -75,7 +75,7 @@ public class ReadyOnlyWritersTest {
 
     @Test
     public void readySaveFlushesLogAndNeverCreatesZdi() throws Exception {
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -101,7 +101,7 @@ public class ReadyOnlyWritersTest {
 
     @Test
     public void logBackedPaperNullRefusesBoardEntityWriteBehind() throws Exception {
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }
@@ -141,27 +141,8 @@ public class ReadyOnlyWritersTest {
     }
 
     @Test
-    public void importLegacyWritesReadyLogWithoutPageFilesOrBoardOutbox() throws Exception {
-        Board page = Board.blank();
-        TestInk.draw(page, 7f);
-        LegacyBoardImporter.Legacy legacy = new LegacyBoardImporter.Legacy();
-        legacy.scratchpad.add(page);
-        assertEquals(1, repo.importLegacy(legacy, PAGE, PAGE, 0L));
-
-        assertFalse("Ready-direct import must not write .zdi",
-                new File(inkDir, page.id + ".zdi").exists());
-        assertTrue(ink.hasLog(NotebookPaper.sheetId(null)));
-        BoardEntity row = db.dao().board(page.id);
-        assertNotNull(row);
-        assertNull("identity row only — ink on .zdl", row.inkHash);
-        assertNull(db.dao().outbox(OutboxEntry.BOARD, page.id));
-        assertNotNull(db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(null)));
-        assertTrue(repo.isSheetReady(null));
-    }
-
-    @Test
     public void placePageBeforeRequiresPaperOnLogBackedSheets() throws Exception {
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }

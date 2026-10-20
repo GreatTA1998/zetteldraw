@@ -101,33 +101,8 @@ public class LiveWriterInkPolicyTest {
         assertTrue(repo.scratchpadPages().size() > 20);
     }
 
-    @Test
-    public void livePushOnlyKeepsUnmigratedBoardResidue() throws Exception {
-        // Pull never adopts BOARD (live or catch-up); residue stays local.
-        Board page = Board.blank();
-        TestInk.draw(page, 10f);
-        device.seedUnmigrated(page);
-        BoardEntity local = device.db.dao().board(page.id);
-        assertNotNull(local);
-        String localHash = local.inkHash;
-        assertNotNull(device.db.dao().outbox(OutboxEntry.BOARD, page.id));
-
-        // Pull has no BOARD channel (bag deleted); cursor-only page must not
-        // adopt over local .zdi residue.
-        repo.setInkPullPolicy(SyncStore.InkPullPolicy.LIVE_PUSH_ONLY);
-        SyncStore.PullPage pulled = new SyncStore.PullPage();
-        pulled.cursor = local.rev + 10;
-        repo.applyPull(pulled);
-
-        BoardEntity after = device.db.dao().board(page.id);
-        assertEquals("pull must not adopt remote BOARD over local .zdi", localHash, after.inkHash);
-        assertEquals(local.rev, after.rev);
-        TestInk.assertSameInk(page.strokes,
-                InkCodec.decode(new InkFileStore(device.inkDir()).read(page.id)));
-    }
-
     private int seedDense(int inkedSlices) throws Exception {
-        assertTrue(repo.ensureSheet(null, PAGE, PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, PAGE));
         if (repo.scratchpadPages().isEmpty()) {
             repo.createPage(null);
         }

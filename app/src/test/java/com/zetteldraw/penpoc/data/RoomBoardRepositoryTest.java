@@ -66,13 +66,13 @@ public class RoomBoardRepositoryTest {
     @Test
     public void pagesEmptyUntilReady() {
         assertTrue("Ready-only: no fallthrough to BoardEntity rows", repo.scratchpadPages().isEmpty());
-        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, Device.PAGE));
         assertTrue("Ready empty sheet has no soft trailing blank", repo.scratchpadPages().isEmpty());
     }
 
     @Test
     public void createPageAddsRealBlankSlice() {
-        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, Device.PAGE));
         assertTrue(repo.scratchpadPages().isEmpty());
         Board page = repo.createPage(null);
         assertNotNull(page);
@@ -85,7 +85,7 @@ public class RoomBoardRepositoryTest {
 
     @Test
     public void firstStrokeFlushesLogWithoutMintingSoftBlank() {
-        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, Device.PAGE));
         Board page = repo.createPage(null);
         TestInk.draw(page, 10f);
         repo.saveInk(page);
@@ -102,7 +102,7 @@ public class RoomBoardRepositoryTest {
 
     @Test
     public void createPageThenInkKeepsSameSliceId() {
-        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, Device.PAGE));
         Board blank = repo.createPage(null);
         assertTrue(blank.isBlank());
         String id = blank.id;
@@ -210,7 +210,7 @@ public class RoomBoardRepositoryTest {
     public void notebookCreatePageThenInk() {
         BoardRepository.NotebookInfo notebook = repo.createNotebook("grows");
         assertTrue("pages() empty until ensure", repo.pages(notebook.id()).isEmpty());
-        assertTrue(repo.ensureSheet(notebook.id(), Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.ensureSheet(notebook.id(), Device.PAGE));
         assertTrue(repo.pages(notebook.id()).isEmpty());
         Board first = repo.createPage(notebook.id());
         assertNotNull(first);
@@ -225,7 +225,7 @@ public class RoomBoardRepositoryTest {
         List<Board> pages = repo.pages(notebook.id());
         assertEquals(1, pages.size());
         assertSame(first, pages.get(0));
-        assertTrue(repo.ensureSheet(null, Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.ensureSheet(null, Device.PAGE));
         assertTrue("the Scratchpad is untouched", repo.scratchpadPages().isEmpty());
 
         Board second = repo.createPage(notebook.id());
@@ -244,7 +244,7 @@ public class RoomBoardRepositoryTest {
     @Test
     public void deletedOrUnknownNotebookHasNoPages() {
         BoardRepository.NotebookInfo notebook = repo.createNotebook("brief");
-        assertTrue(repo.ensureSheet(notebook.id(), Device.PAGE, Device.PAGE, 0L));
+        assertTrue(repo.ensureSheet(notebook.id(), Device.PAGE));
         assertTrue(repo.pages(notebook.id()).isEmpty());
         repo.deleteNotebook(notebook.id());
         assertTrue(repo.pages(notebook.id()).isEmpty());

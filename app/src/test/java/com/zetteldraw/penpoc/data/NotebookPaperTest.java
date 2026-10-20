@@ -222,32 +222,6 @@ public class NotebookPaperTest {
     }
 
     @Test
-    public void migrationOfMixedPageHeightsDoesNotMoveExistingPoints() throws Exception {
-        String first = UUID.randomUUID().toString();
-        String second = UUID.randomUUID().toString();
-        InkRenderer.InkStroke onShort = line("a", 12f, 100f, 400f);
-        InkRenderer.InkStroke onTall = line("b", 18f, 50f, 1600f);
-        NotebookPaper paper = NotebookPaper.migrate(List.of(
-                new NotebookPaper.SourcePage(first, 1420, List.of(onShort)),
-                new NotebookPaper.SourcePage(second, 1680, List.of(onTall))), 1420);
-
-        assertEquals(100f, paper.stroke("a").points.get(0).y, 0.01f);
-        assertEquals(400f, paper.stroke("a").points.get(2).y, 0.01f);
-        assertEquals("the tall page starts after 1420, not after 1680",
-                1420f + 50f, paper.stroke("b").points.get(0).y, 0.01f);
-        assertEquals(1420f + 1600f, paper.stroke("b").points.get(2).y, 0.01f);
-        assertEquals(1420, paper.heightAt(0));
-        assertEquals(1680, paper.heightAt(1));
-
-        NotebookPaper read = NotebookPaper.replay(paper.bytes());
-        assertEquals(paper.stroke("a").points.get(0).y, read.stroke("a").points.get(0).y, 0f);
-        assertEquals(paper.stroke("b").points.get(0).y, read.stroke("b").points.get(0).y, 0f);
-        assertEquals(paper.stroke("b").points.get(2).y, read.stroke("b").points.get(2).y, 0f);
-        assertEquals("a", read.stroke("a").id);
-        assertEquals("b", read.stroke("b").id);
-    }
-
-    @Test
     public void appendDoesNotRewriteEarlierBytes() throws Exception {
         NotebookPaper paper = NotebookPaper.empty(1420);
         TestInk.appendCovering(paper, line("first", 1f, 10f, 20f));
