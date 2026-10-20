@@ -13,7 +13,6 @@ import { createPool, migrate } from "../db.js";
 import { demoLibrary } from "../demo.js";
 import { S3InkStorage } from "../storage.js";
 import { push } from "../sync.js";
-import { Thumbnailer } from "../thumbs.js";
 
 if (existsSync(".env")) {
   process.loadEnvFile(".env");
@@ -73,15 +72,8 @@ for (const b of boards) {
   );
 }
 
-const thumbs = new Thumbnailer(storage, config.page);
-let rendered = 0;
-for (const hash of library.blobs.keys()) {
-  if (await thumbs.ensureThumb(hash)) {
-    rendered++;
-  }
-}
 await pool.end();
 console.log(
   `seeded ${notebooks.length} notebooks and ${boards.length} pages ` +
-    `(${existing.size} already present); rendered ${rendered} thumbnails`,
+    `(${existing.size} already present)`,
 );

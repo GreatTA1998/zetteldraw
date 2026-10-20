@@ -30,8 +30,6 @@ export interface Page {
   created_at: number;
   updated_at: number;
   rev: number;
-  thumb_url: string | null;
-  render_url: string | null;
   /** Absent on older servers until /web pages enrichment ships. */
   links?: PageLink[];
 }
@@ -55,9 +53,14 @@ export class ApiError extends Error {
   }
 }
 
-/** Server image paths (/web/...) as served through the Next.js proxy. */
+/** Server /web/... paths as served through the Next.js proxy. */
 export function proxied(serverPath: string | null): string | null {
   return serverPath ? serverPath.replace(/^\/web\//, "/api/zd/") : null;
+}
+
+/** Ready .zdl bytes for a notebook (client canvas replay). */
+export function notebookInkUrl(notebookId: string): string {
+  return proxied(`/web/notebooks/${notebookId}/ink`)!;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

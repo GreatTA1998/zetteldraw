@@ -89,7 +89,7 @@ describe("web Ready page list", () => {
     const pages = await listPages(pool, notebookId, { kind: "user", userId: "u1" }, storage);
     expect(pages).toHaveLength(1);
     expect(pages[0].id).toBe(pageId);
-    expect(pages[0].thumb_url).toBeNull();
+    expect(pages[0].ink_hash).toBeNull();
     expect(queries.some((q) => q.includes("notebook_logs"))).toBe(true);
     expect(queries.some((q) => q.includes("FROM boards"))).toBe(false);
   });

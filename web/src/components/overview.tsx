@@ -258,8 +258,8 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
                   ? `; ${backupRes.data.missing.length} missing from storage.`
                   : "."}{" "}
                 Restore contract: cloud seeds the new Boox once, then that device is the live
-                source of truth (offline drawing wins). Seeing page titles or thumbnails alone is
-                not enough for a Play cutover.
+                source of truth (offline drawing wins). Seeing page titles alone is not enough
+                for a Play cutover.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -294,6 +294,7 @@ function Library({ onSignedOut, canSignOut = false }: { onSignedOut: () => void;
         pages={pages ?? []}
         index={viewerIndex}
         notebookTitle={selected?.title ?? ""}
+        inkUrl={selected ? `/api/zd/notebooks/${selected.id}/ink` : null}
         onIndexChange={(i) => setViewerTarget(i === null ? null : { kind: "index", index: i })}
         onFollowLink={followLink}
       />

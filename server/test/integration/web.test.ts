@@ -1,21 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
-import { encodeInk, type InkStroke } from "../../src/ink.js";
-import { S3InkStorage } from "../../src/storage.js";
-import { sha256Hex } from "../../src/sync.js";
-import { imageKey } from "../../src/thumbs.js";
 
 // Runs against a live stack: `npm run test:integration` brings it up with docker compose.
 const URL_BASE = process.env.SYNC_URL ?? "http://127.0.0.1:8787";
 const TOKEN = process.env.SYNC_TOKEN ?? "dev-device-token";
-
-const storage = S3InkStorage.fromConfig({
-  endpoint: process.env.S3_ENDPOINT ?? "http://127.0.0.1:59000",
-  region: "us-east-1",
-  bucket: process.env.S3_BUCKET ?? "zetteldraw-ink",
-  accessKeyId: process.env.S3_ACCESS_KEY ?? "zetteldraw",
-  secretAccessKey: process.env.S3_SECRET_KEY ?? "zetteldraw-secret",
-});
 
 let schema = 0;
 
@@ -37,21 +25,6 @@ async function call(method: string, path: string, body?: unknown, token = TOKEN)
     bytes: type.includes("json") ? null : Buffer.from(await res.arrayBuffer()),
     headers: res.headers,
   };
-}
-
-function ink(seed: number) {
-  const stroke: InkStroke = Array.from({ length: 30 }, (_, i) => ({
-    x: 100 + i * 20,
-    y: 200 + seed * 40 + Math.sin(i) * 30,
-    pressure: 0.5,
-    size: 1,
-    tiltX: 0,
-    tiltY: 0,
-    t: 1_700_000_000_000 + i * 8,
-  }));
-  // Alternate versions: both are still on devices.
-  const bytes = Math.round(seed) % 2 ? encodeInk([stroke], { version: 1 }) : encodeInk([stroke], { ids: [randomUUID()] });
-  return { bytes, hash: sha256Hex(bytes) };
 }
 
 /** Minimal Ready ZDL: header slices only (matches server readSliceIndex). */
@@ -104,7 +77,6 @@ const notebookKey = `zz${Date.now().toString(36)}`;
 const notebookA = randomUUID();
 const notebookB = randomUUID();
 const pages = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
-const inks = pages.map((_, i) => ink(i + Math.random()));
 const logA = randomUUID();
 const logB = randomUUID();
 const zdlA = zdlHeader(pages.slice(0, 3));
@@ -133,10 +105,6 @@ beforeAll(async () => {
     blobs: { [zdlA.hash]: zdlA.b64, [zdlB.hash]: zdlB.b64 },
   });
   expect(res.status).toBe(200);
-  // ZDI blobs still exercise /web/thumbs on-demand render (page list thumbs stay null).
-  for (const inkBlob of inks) {
-    await storage.put(inkBlob.hash, inkBlob.bytes);
-  }
 });
 
 describe("web auth", () => {
@@ -160,38 +128,24 @@ describe("web reads", () => {
     expect(list[a]).toMatchObject({ title: "Web test A", page_count: 3 });
   });
 
-  it("lists pages in Ready order (thumbs null until ZDL→PNG)", async () => {
+  it("lists pages in Ready order and exposes ink_url", async () => {
     const res = await call("GET", `/web/notebooks/${notebookA}/pages`);
     expect(res.json.pages.map((p: any) => p.id)).toEqual(pages.slice(0, 3));
-    expect(res.json.pages[0]).toMatchObject({
-      thumb_url: null,
-      render_url: null,
-    });
+    expect(res.json.ink_url).toBe(`/web/notebooks/${notebookA}/ink`);
+    expect(res.json.pages[0].thumb_url).toBeUndefined();
     expect((await call("GET", `/web/notebooks/${randomUUID()}/pages`)).status).toBe(404);
     expect((await call("GET", `/web/notebooks/not-a-uuid/pages`)).status).toBe(404);
     expect((await call("GET", `/web/notebooks/scratchpad/pages`)).status).toBe(200);
   });
 
-  it("renders ZDI thumbnails on demand and serves PNGs", async () => {
-    const thumb = await call("GET", `/web/thumbs/${inks[1].hash}.png`);
-    expect(thumb.status).toBe(200);
-    expect(thumb.type).toBe("image/png");
-    expect(thumb.headers.get("cache-control")).toContain("immutable");
-    expect(thumb.bytes!.readUInt32BE(16)).toBe(480);
-    expect(await storage.hasObject(imageKey("thumb", inks[1].hash))).toBe(true);
-
-    const full = await call("GET", `/web/renders/${inks[1].hash}.png`);
-    expect(full.status).toBe(200);
-    expect(full.bytes!.readUInt32BE(16)).toBe(1264);
-
+  it("serves Ready .zdl bytes for client stroke replay", async () => {
+    const ink = await call("GET", `/web/notebooks/${notebookA}/ink`);
+    expect(ink.status).toBe(200);
+    expect(ink.type).toContain("octet-stream");
+    expect(ink.bytes!.subarray(0, 3).toString("latin1")).toBe("ZDL");
+    expect(ink.bytes!.equals(zdlA.bytes)).toBe(true);
+    expect((await call("GET", `/web/notebooks/${randomUUID()}/ink`)).status).toBe(404);
     expect((await call("GET", `/web/thumbs/${"0".repeat(64)}.png`)).status).toBe(404);
-
-    const junk = Buffer.from(`ZDI\u0009not ink ${randomUUID()}`, "latin1");
-    await storage.put(sha256Hex(junk), junk);
-    const unreadable = await call("GET", `/web/thumbs/${sha256Hex(junk)}.png`);
-    expect(unreadable.status).toBe(422);
-    expect(unreadable.json.error).toBe("unreadable_ink");
-    expect((await call("GET", `/web/thumbs/../../etc.png`)).status).toBe(404);
   });
 });
 

@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { encodeInk, type InkPoint, type InkStroke } from "./ink.js";
 import type { BoardRow, Incoming, NotebookRow } from "./lww.js";
 import { positionBetween } from "./order.js";
-import { DEFAULT_PAGE } from "./render.js";
 import { sha256Hex } from "./sync.js";
+
+/** Go 7 portrait — demo ink layout only (no server PNG pipeline). */
+const DEFAULT_PAGE = { width: 1264, height: 1680 };
 
 /**
  * A fake library so the web overview runs without a Boox: notebooks of pages with

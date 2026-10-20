@@ -5,7 +5,6 @@ import { AuthService } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { createPool, migrate } from "./db.js";
 import { S3InkStorage } from "./storage.js";
-import { Thumbnailer } from "./thumbs.js";
 
 if (existsSync(".env")) {
   process.loadEnvFile(".env");
@@ -26,17 +25,12 @@ const auth = new AuthService({
   rejectDeviceTokensAfterClaim: config.rejectDeviceTokensAfterClaim,
 });
 
-let app: ReturnType<typeof buildApp> | undefined;
-const thumbs = new Thumbnailer(storage, config.page, (err, inkHash) =>
-  app?.log.error({ err, inkHash }, "thumbnail render failed"),
-);
-app = buildApp({
+const app = buildApp({
   pool,
   storage,
   schemaVersion,
   auth,
   sessionSecret: config.sessionSecret,
-  thumbs,
 });
 await app.listen({ host: config.host, port: config.port });
 app.log.info(
