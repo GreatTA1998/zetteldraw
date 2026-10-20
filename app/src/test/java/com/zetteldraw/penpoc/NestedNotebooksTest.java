@@ -130,8 +130,8 @@ public class NestedNotebooksTest {
         click(root, "dating");
         idleForPaint();
         relayout(root);
-        assertNotNull(find(root, "Create new page"));
-        assertTrue(find(root, "Create new page").performClick());
+        assertEquals(1, byDescription(root, "Create new page").size());
+        clickDesc(root, "Create new page");
         idleForPaint();
         relayout(root);
         assertNotNull(find(root, "1/" + repo.pages(dating.id()).size()));
@@ -141,8 +141,8 @@ public class NestedNotebooksTest {
         click(root, "stacey");
         idleForPaint();
         relayout(root);
-        assertNotNull(find(root, "Create new page"));
-        assertTrue(find(root, "Create new page").performClick());
+        assertEquals(1, byDescription(root, "Create new page").size());
+        clickDesc(root, "Create new page");
         idleForPaint();
         relayout(root);
         assertNotNull("Stacey pages are on screen after switch", find(root, "1/" + repo.pages(stacey.id()).size()));
@@ -341,8 +341,8 @@ public class NestedNotebooksTest {
         idle();
         relayout(root);
         if (repo.pages(notebookId).isEmpty()) {
-            assertNotNull(find(root, "Create new page"));
-            assertTrue(find(root, "Create new page").performClick());
+            assertEquals(1, byDescription(root, "Create new page").size());
+            clickDesc(root, "Create new page");
             idle();
             relayout(root);
         }

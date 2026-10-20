@@ -45,8 +45,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Tip v165: delete stroke-gated page actions (every Ready slice is real).
-        versionCode = 166
-        versionName = "4.45"
+        versionCode = 167
+        versionName = "4.46"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

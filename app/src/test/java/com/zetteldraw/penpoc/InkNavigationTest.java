@@ -202,8 +202,8 @@ public class InkNavigationTest {
         assertTrue("empty notebook stays empty until Create new page", comedyPages.isEmpty());
 
         // Seed an inkable comedy page (Create new page), then stroke there.
-        assertNotNull(findText(root, "Create new page"));
-        assertTrue(findText(root, "Create new page").performClick());
+        assertEquals(1, byDescription(root, "Create new page").size());
+        assertTrue(byDescription(root, "Create new page").get(0).performClick());
         idle();
         comedyPages = repo.notebookPages(Notebook.COMEDY.uuid);
         assertEquals(1, comedyPages.size());
