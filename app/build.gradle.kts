@@ -45,8 +45,8 @@ android {
         minSdk = 26
         targetSdk = 36
         // Tip v168: web Ready .zdl canvas preview; orphan ZDI thumbs deleted.
-        versionCode = 168
-        versionName = "4.47"
+        versionCode = 169
+        versionName = "4.48"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

@@ -3,10 +3,8 @@ package com.zetteldraw.penpoc;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
-import android.net.Uri;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
@@ -65,9 +63,7 @@ import com.zetteldraw.penpoc.sync.SyncConfig;
 import com.zetteldraw.penpoc.sync.SyncEngine;
 import com.zetteldraw.penpoc.sync.SyncScheduler;
 
-import java.text.DateFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -2458,10 +2454,15 @@ public final class CanvasActivity extends Activity {
         box.addView(actions, actionsLp);
     }
 
-    /** In-window Settings: Google Sign-In, sync toggle, privacy, version. */
+    /** In-window Settings: account, Sync now / Sign out, Prepare transfer, Close. */
     private void showSettings() {
         settingsGeneration++;
         SyncConfig config = SyncConfig.load(this);
+        // Sync stays on whenever signed in — no Sync-off control in the product UI.
+        if (config.hasGoogleAccount() && !config.syncOn()) {
+            SyncConfig.setSyncOn(this, true);
+            config = SyncConfig.load(this);
+        }
         LinearLayout box = panel();
         box.setMinimumWidth(dp(280));
         box.addView(panelText(getString(R.string.settings), 16));
@@ -2474,37 +2475,8 @@ public final class CanvasActivity extends Activity {
                 13);
         box.addView(account);
 
-        TextView syncStatus = panelText(
-                config.enabled()
-                        ? getString(R.string.settings_sync_on)
-                        : getString(R.string.settings_sync_off),
-                13);
-        box.addView(syncStatus);
-
-        RoomBoardRepository syncStore = ZettelData.repository(this);
-        int pending = syncStore.outboxSize();
-        long lastOk = syncStore.lastSyncedAt();
-        TextView progress = panelText(
-                pending > 0
-                        ? getString(R.string.settings_sync_pending, pending)
-                        : getString(R.string.settings_sync_caught_up),
-                13);
-        box.addView(progress);
-        TextView lastSync = panelText(
-                lastOk <= 0
-                        ? getString(R.string.settings_sync_never)
-                        : getString(R.string.settings_sync_last, formatSyncTime(lastOk)),
-                12);
-        box.addView(lastSync);
-
+        long lastOk = ZettelData.repository(this).lastSyncedAt();
         String writerBlock = SyncConfig.writerBlockMessage(this);
-        if (!writerBlock.isEmpty()) {
-            box.addView(panelText(getString(R.string.settings_not_live_writer), 12));
-        } else if (config.enabled() && lastOk <= 0) {
-            box.addView(panelText(getString(R.string.settings_restoring), 12));
-        } else if (config.hasGoogleAccount()) {
-            box.addView(panelText(getString(R.string.settings_restore_contract), 11));
-        }
 
         TextView statusLine = panelText("", 13);
         statusLine.setVisibility(View.GONE);
@@ -2549,39 +2521,19 @@ public final class CanvasActivity extends Activity {
             signLp.topMargin = dp(8);
             box.addView(signIn, signLp);
         } else {
-            Button toggle = tinyButton(
-                    config.syncOn()
-                            ? getString(R.string.settings_sync_off).replace(" — notes stay on this device", "")
-                            : getString(R.string.settings_enable_sync),
-                    15);
-            styleButton(toggle, true);
-            onTap(toggle, v -> {
-                SyncConfig.setSyncOn(this, !config.syncOn());
-                if (!config.syncOn()) {
-                    queueLocalInkForSync();
-                    SyncScheduler.syncNow(this);
-                }
+            Button syncNow = tinyButton(getString(R.string.settings_sync_now), 15);
+            styleButton(syncNow, true);
+            onTap(syncNow, v -> {
+                queueLocalInkForSync();
+                SyncScheduler.syncNow(this);
+                showHint(getString(R.string.settings_sync_started), true);
                 dismissOverlay();
                 showSettings();
             });
-            LinearLayout.LayoutParams toggleLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams syncLp = new LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            toggleLp.topMargin = dp(8);
-            box.addView(toggle, toggleLp);
-
-            if (config.enabled()) {
-                Button syncNow = tinyButton(getString(R.string.settings_sync_now), 15);
-                styleButton(syncNow, true);
-                onTap(syncNow, v -> {
-                    queueLocalInkForSync();
-                    SyncScheduler.syncNow(this);
-                    showHint(getString(R.string.settings_sync_started), true);
-                    dismissOverlay();
-                    showSettings();
-                });
-                box.addView(syncNow, new LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-            }
+            syncLp.topMargin = dp(8);
+            box.addView(syncNow, syncLp);
 
             Button signOut = tinyButton(getString(R.string.settings_sign_out), 15);
             onTap(signOut, v -> {
@@ -2593,10 +2545,8 @@ public final class CanvasActivity extends Activity {
                     LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         }
 
-        // Always show Prepare transfer. When blocked, keep it visible but disabled with a reason
-        // (never silently omit — Elton needs a path explanation before Sign-In / live writer).
-        // Prepare transfer must stay on-device (sync + POST /sync/prepare-transfer). It must never
-        // open a browser — that was the v66/v67 confusion with "Open web companion" below.
+        // Always show Prepare transfer. When blocked, keep it visible but disabled with a reason.
+        // Runs on-device only — never opens a browser.
         String prepareBlockReason = prepareTransferBlockReason(config, writerBlock, lastOk);
         boolean canPrepare = prepareBlockReason == null;
         Button prepare = tinyButton(getString(R.string.settings_prepare_transfer), 15);
@@ -2610,45 +2560,12 @@ public final class CanvasActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         prepareLp.topMargin = dp(8);
         box.addView(prepare, prepareLp);
-        box.addView(panelText(
-                canPrepare
-                        ? getString(R.string.settings_prepare_transfer_hint)
-                        : prepareBlockReason,
-                11));
-
-        String sha1 = com.zetteldraw.penpoc.sync.SigningCert.sha1(this);
-        if (sha1.isEmpty()) {
-            sha1 = "(unknown)";
+        if (!canPrepare) {
+            box.addView(panelText(prepareBlockReason, 11));
         }
-        box.addView(panelText(
-                getString(R.string.settings_oauth_diag, getPackageName(), sha1),
-                10));
-
-        box.addView(panelText(
-                getString(R.string.settings_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
-                12));
 
         addCloseActionsRow(box, dp(8));
 
-        // Browser links last and clearly labeled so they are not mistaken for Prepare transfer.
-        TextView linksHeader = panelText(getString(R.string.settings_links_section), 11);
-        LinearLayout.LayoutParams linksHeaderLp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        linksHeaderLp.topMargin = dp(16);
-        box.addView(linksHeader, linksHeaderLp);
-
-        Button privacy = tinyButton(getString(R.string.settings_privacy), 15);
-        onTap(privacy, v -> openUrl("https://zetteldraw.com/privacy"));
-        box.addView(privacy, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        // Dedicated static /transfer page (SSR, works without JS) — not the CSR homepage spinner.
-        Button web = tinyButton(getString(R.string.settings_web), 15);
-        onTap(web, v -> openUrl("https://zetteldraw.com/transfer"));
-        box.addView(web, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        // Scroll so Prepare / Links never sit off-screen or share a clipped hit target on Boox.
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
@@ -2762,19 +2679,6 @@ public final class CanvasActivity extends Activity {
                 }
             });
         });
-    }
-
-    private static String formatSyncTime(long epochMillis) {
-        return DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
-                .format(new Date(epochMillis));
-    }
-
-    private void openUrl(String url) {
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-        } catch (Exception ignored) {
-            showHint(url, true);
-        }
     }
 
     /** Long-press on the Scratchpad icon: this launch's timeline and the two before it, newest first. */
