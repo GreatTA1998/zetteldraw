@@ -2944,22 +2944,12 @@ public final class CanvasActivity extends Activity {
             linkButton = tinyButton(getString(R.string.link), 14);
             reorderButton = tinyButton(getString(R.string.reorder), 14);
             moveButton = tinyButton(getString(R.string.move), 14);
-            // Word-wide, same row height and vertical center as ⋮ (stylus-sized).
+            // Hit ≈ visible label (no 48dp min / pad slop) so lasso can reach near the word.
             chromeWord(linkButton);
             chromeWord(reorderButton);
             chromeWord(moveButton);
             moreButton = tinyButton(getString(R.string.notebook_options), 18);
-            moreButton.setMinimumHeight(dp(48));
-            moreButton.setMinimumWidth(dp(48));
-            moreButton.setMinHeight(dp(48));
-            moreButton.setMinWidth(dp(48));
-            // Optical: END-align for right gutter (rightMargin 8 + padRight 10 → 18dp
-            // edge→ink). Vertical: padTop must be 0 (v74's +2dp pushed ⋮ too low).
-            // Measured glyph centers (PageChromeOpticalTest): with pad 0/0, ⋮ sits
-            // 1dp below Link — padBottom 1dp raises the glyph in the 48dp target.
-            moreButton.setPadding(dp(10), 0, dp(10), dp(1));
-            moreButton.setIncludeFontPadding(false);
-            moreButton.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+            chromeWord(moreButton);
             moreButton.setContentDescription(getString(R.string.page_options));
             onTap(linkButton, v -> startMode(this, false));
             onTap(reorderButton, v -> startMode(this, true));
@@ -2967,8 +2957,7 @@ public final class CanvasActivity extends Activity {
             onTap(moreButton, v -> showPageMenu(this));
 
             int mark = page.paper != null ? dp(2) : pageGap;
-            // v79: shared bottom margin 8→6dp — another −2dp whole-row nudge
-            // toward the dashed edge (v78 was 10→8). ⋮ padBottom 1 stays.
+            // Shared bottom margin keeps the chrome row above the dashed edge.
             int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(6);
 
             // Left: references above Link · Reorder (both navigate-to-target).
@@ -3069,15 +3058,15 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Link, Reorder, and Move stay as wide as the word, but match the ⋮ row
-     * height so they share one vertical center above the dashed edge.
+     * Page chrome (Link / Reorder / Move / ⋮): padding 0 and no min size so the
+     * hit target is the visible label. Ink exclude holes follow view bounds.
      */
     private void chromeWord(Button button) {
         button.setMinimumWidth(0);
         button.setMinWidth(0);
-        button.setMinimumHeight(dp(48));
-        button.setMinHeight(dp(48));
-        button.setPadding(dp(4), 0, dp(4), 0);
+        button.setMinimumHeight(0);
+        button.setMinHeight(0);
+        button.setPadding(0, 0, 0, 0);
         button.setIncludeFontPadding(false);
         button.setGravity(Gravity.CENTER);
     }

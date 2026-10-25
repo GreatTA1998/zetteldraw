@@ -59,7 +59,7 @@ public class PageChromeOpticalTest {
     }
 
     @Test
-    public void moreGlyphCenterMatchesLinkWithinTwoDp() throws Exception {
+    public void pageChromeHitMatchesVisibleLabel() throws Exception {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo book = repo.createNotebook("chrome");
@@ -76,46 +76,40 @@ public class PageChromeOpticalTest {
         NavClicks.openNotebook(root, "chrome");
         idleForPaint();
         relayout(root);
-        // Drain moreButton.post(opticalAlign…).
-        idle();
-        relayout(root);
         idle();
 
         TextView link = find(root, "Link");
+        TextView reorder = find(root, "Reorder");
+        TextView move = find(root, "Move");
         TextView more = find(root, "⋮");
         assertNotNull(link);
+        assertNotNull(reorder);
+        assertNotNull(move);
         assertNotNull(more);
-        float linkCenter = glyphCenterOnScreen(link);
-        float moreCenter = glyphCenterOnScreen(more);
-        float density = root.getResources().getDisplayMetrics().density;
-        float deltaDp = (moreCenter - linkCenter) / density;
+        assertZeroHitSlop(link);
+        assertZeroHitSlop(reorder);
+        assertZeroHitSlop(move);
+        assertZeroHitSlop(more);
 
         View pageSlot = pageSlotOf(link);
         assertNotNull(pageSlot);
-        int[] slotLoc = new int[2];
-        int[] linkLoc = new int[2];
-        pageSlot.getLocationOnScreen(slotLoc);
-        link.getLocationOnScreen(linkLoc);
-        float gapToDashDp = (slotLoc[1] + pageSlot.getHeight()
-                - (linkLoc[1] + link.getHeight())) / density;
-        System.out.println("CHROME_OPTICAL linkCenter=" + linkCenter
-                + " moreCenter=" + moreCenter
-                + " deltaDp=" + deltaDp
-                + " gapToDashDp=" + gapToDashDp
-                + " morePadT/B=" + more.getPaddingTop() + "/" + more.getPaddingBottom()
-                + " moreTy=" + more.getTranslationY());
-
         Bitmap full = render(root);
         Bitmap crop = cropChromeBandFromSlot(full, pageSlot, link, more);
         annotateCentersFromSlot(crop, pageSlot, link, more);
         String outName = System.getProperty("zd.chromeShot", "page-chrome-optical.png");
         save(crop, outName);
 
-        // Positive delta ⇒ ⋮ sits lower than Link. Optical align zeros this.
-        assertTrue("⋮ glyph center vs Link deltaDp=" + deltaDp + " (want |δ|≤0.75)",
-                Math.abs(deltaDp) <= 0.75f);
-
         controller.pause().stop().destroy();
+    }
+
+    /** Prefs: page chrome padding 0; no 48dp min / secret hit expansion. */
+    private static void assertZeroHitSlop(TextView chrome) {
+        assertTrue(chrome.getPaddingLeft() == 0
+                && chrome.getPaddingTop() == 0
+                && chrome.getPaddingRight() == 0
+                && chrome.getPaddingBottom() == 0);
+        assertTrue(chrome.getMinWidth() == 0 && chrome.getMinimumWidth() == 0);
+        assertTrue(chrome.getMinHeight() == 0 && chrome.getMinimumHeight() == 0);
     }
 
     /** Glyph visual center Y on screen (text-bounds midline at baseline). */
