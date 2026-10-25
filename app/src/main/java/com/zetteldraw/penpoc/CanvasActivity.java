@@ -68,12 +68,13 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * One compact top bar: Scratchpad icon | active notebook (tap opens the same
- * multi-column hierarchy menu as Move / Place under) | + | undo/redo |
- * pen/eraser/lasso | settings. No persistent top-level notebook strip and no
- * child-notebook bars. Long-press the active notebook for Rename / Place /
- * Delete. Link / Reorder keep the bottom Confirm/Cancel snackbar. Each
- * collection is a continuous vertical scroll of its own pages.
+ * One compact top bar: Scratchpad icon | active notebook (tap toggles the same
+ * multi-column hierarchy menu as Move / Place under; create via + New notebook
+ * inside that menu) | Trash icon | undo/redo | pen/eraser/lasso | settings.
+ * No persistent top-level notebook strip, no child-notebook bars, and no bar +.
+ * Long-press the active notebook for Rename / Place / Delete. Link / Reorder
+ * keep the bottom Confirm/Cancel snackbar. Each collection is a continuous
+ * vertical scroll of its own pages.
  */
 public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
@@ -146,9 +147,9 @@ public final class CanvasActivity extends Activity {
     /** Full-width control under the last real page (or alone when empty). */
     private Button createPageButton;
     private ImageButton scratchpadTab;
-    /** Active notebook title, or "Notebooks" on Scratchpad — opens hierarchy switcher. */
+    /** Active notebook title, or "Notebooks" on Scratchpad/Trash — opens hierarchy switcher. */
     private Button activeNotebookButton;
-    private Button addButton;
+    private ImageButton trashTab;
     private ImageButton penButton;
     private ImageButton eraserButton;
     private ImageButton lassoButton;
@@ -441,8 +442,9 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Single chrome strip: Scratchpad | active notebook | + | hint | undo/redo |
-     * tools | settings. Active notebook opens the shared hierarchy switcher.
+     * Single chrome strip: Scratchpad | active notebook | Trash | hint |
+     * undo/redo | tools | settings. Active notebook toggles the shared
+     * hierarchy switcher (create lives inside that menu, not on the bar).
      */
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
@@ -464,7 +466,7 @@ public final class CanvasActivity extends Activity {
         onTap(activeNotebookButton, v -> showNotebookSwitcher());
         activeNotebookButton.setOnLongClickListener(v -> {
             String open = notebookKey(collectionId);
-            if (open != null) {
+            if (open != null && !Notebook.isTrash(open)) {
                 showNotebookMenu(open);
                 return true;
             }
@@ -472,16 +474,9 @@ public final class CanvasActivity extends Activity {
         });
         bar.addView(activeNotebookButton, wrap());
 
-        addButton = tinyButton(getString(R.string.add_notebook), 22);
-        addButton.setContentDescription(getString(R.string.new_notebook));
-        addButton.setPadding(dp(8), 0, dp(8), dp(2));
-        onTap(addButton, v -> {
-            String parent = notebookKey(collectionId);
-            showNameForm(null, addButton, parent, null);
-        });
-        LinearLayout.LayoutParams addLp = wrap();
-        addLp.leftMargin = dp(4);
-        bar.addView(addButton, addLp);
+        trashTab = iconButton(R.drawable.ic_trash, R.string.trash);
+        onTap(trashTab, v -> openNotebook(Notebook.TRASH.uuid, null));
+        bar.addView(trashTab, iconLp(4));
 
         toolHint = new TextView(this);
         toolHint.setTextColor(Color.DKGRAY);
@@ -661,8 +656,16 @@ public final class CanvasActivity extends Activity {
         return notebookByIdIn(shownNotebooks, id);
     }
 
-    /** Tap the active-notebook chip: shared Move/Place-under hierarchy to switch. */
+    /**
+     * Tap the active-notebook chip: shared Move/Place-under hierarchy to switch.
+     * Second tap on the same activator dismisses (toggle) — menu lives in the
+     * drawing band, so the chip stays reachable while open.
+     */
     private void showNotebookSwitcher() {
+        if (overlay != null) {
+            dismissOverlay();
+            return;
+        }
         if (shownNotebooks == null) {
             shownNotebooks = repository.notebooks();
         }
@@ -2090,8 +2093,15 @@ public final class CanvasActivity extends Activity {
             rows.add(new HierarchyRow(getString(R.string.no_place_target), 0, null));
         }
         if (includeNewNotebook) {
+            // Switcher: nest under the open notebook (top-level on Scratchpad /
+            // Trash). Move → + New stays top-level, then files the page there.
+            String parent = moveAfter == null ? notebookKey(collectionId) : null;
+            if (parent != null && Notebook.isTrash(parent)) {
+                parent = null;
+            }
+            String createParent = parent;
             rows.add(new HierarchyRow(getString(R.string.new_notebook_item), 0,
-                    () -> showNameForm(null, null, null, moveAfter)));
+                    () -> showNameForm(null, null, createParent, moveAfter)));
         }
 
         int colMin = dp(180);
@@ -2792,7 +2802,7 @@ public final class CanvasActivity extends Activity {
     /** Side effects after {@link ToolController} has synced chrome + ink tool. */
     private void afterToolChanged(PageInkView.Tool tool) {
         if (tool == PageInkView.Tool.LASSO) {
-            showHint(getString(R.string.lasso_hint), false);
+            // No instructional hint — just select the tool.
             if (inkView.hasSelection()) {
                 showLassoMenu();
             }
@@ -2804,9 +2814,12 @@ public final class CanvasActivity extends Activity {
 
     private void styleTabs() {
         boolean scratch = SCRATCHPAD.equals(collectionId);
+        boolean trash = Notebook.isTrash(collectionId);
         styleTool(scratchpadTab, scratch);
+        styleTool(trashTab, trash);
         String open = notebookKey(collectionId);
-        if (open != null) {
+        // Trash is its own icon (like Scratchpad) — never a titled chip.
+        if (open != null && !trash) {
             String title = titleOf(open);
             activeNotebookButton.setText(title.isEmpty() ? getString(R.string.notebooks) : title);
             styleTab(activeNotebookButton, true);
@@ -2973,15 +2986,17 @@ public final class CanvasActivity extends Activity {
             leftRow.setGravity(Gravity.CENTER_VERTICAL);
             leftRow.setBaselineAligned(false);
             leftRow.addView(linkButton, wrap());
+            // Pre-v173 optical gaps used pad+margin; pad is 0 now — put the
+            // same space in margin so interstitial hits stay drawable (lasso).
             LinearLayout.LayoutParams reorderLp = wrap();
-            reorderLp.leftMargin = dp(6);
+            reorderLp.leftMargin = dp(14); // was 4+6+4
             leftRow.addView(reorderButton, reorderLp);
             left.addView(leftRow, wrap());
             FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
             leftLp.gravity = Gravity.BOTTOM | Gravity.START;
-            leftLp.leftMargin = dp(10);
+            leftLp.leftMargin = dp(14); // was edge 10 + Link pad 4
             leftLp.bottomMargin = chromeBottom;
             addView(left, leftLp);
 
@@ -2992,13 +3007,13 @@ public final class CanvasActivity extends Activity {
             actions.setBaselineAligned(false);
             actions.addView(moveButton, wrap());
             LinearLayout.LayoutParams moreLp = wrap();
-            moreLp.leftMargin = dp(6);
+            moreLp.leftMargin = dp(20); // was Move pad 4 + 6 + ⋮ pad 10
             actions.addView(moreButton, moreLp);
             FrameLayout.LayoutParams actionsLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
             actionsLp.gravity = Gravity.BOTTOM | Gravity.END;
-            actionsLp.rightMargin = dp(8);
+            actionsLp.rightMargin = dp(18); // was edge 8 + ⋮ pad 10
             actionsLp.bottomMargin = chromeBottom;
             addView(actions, actionsLp);
 
@@ -3059,7 +3074,8 @@ public final class CanvasActivity extends Activity {
 
     /**
      * Page chrome (Link / Reorder / Move / ⋮): padding 0 and no min size so the
-     * hit target is the visible label. Ink exclude holes follow view bounds.
+     * hit target is the visible label. Visual gaps live on layout margins
+     * (outside the hit rect). Ink exclude holes follow view bounds.
      */
     private void chromeWord(Button button) {
         button.setMinimumWidth(0);

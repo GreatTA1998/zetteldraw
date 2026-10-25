@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v173: page chrome Link/Reorder/Move/⋮ padding 0 (hit ≈ label).
-        versionCode = 173
-        versionName = "4.52"
+        // Tip v174: chrome visual gaps via margin; notebook chip toggles menu.
+        versionCode = 174
+        versionName = "4.53"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

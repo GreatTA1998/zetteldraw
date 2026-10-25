@@ -76,12 +76,14 @@ public class NestedNotebooksTest {
         assertNull("seed titles are not listed on the strip", find(root, "comedy"));
         assertNull(find(root, "shelf"));
         assertNotNull(find(root, "Notebooks"));
+        assertEquals(1, byDescription(root, "Trash").size());
 
         NavClicks.openNotebook(root, "shelf");
         assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
         assertEquals("shelf", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertNull("nested titles stay off the bar", find(root, "chapter"));
         assertEquals(0, byDescription(root, "Child notebooks").size());
+        assertFalse(byDescription(root, "Trash").get(0).isSelected());
 
         NavClicks.openNotebook(root, "chapter");
         assertEquals("chapter", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
@@ -94,10 +96,26 @@ public class NestedNotebooksTest {
         NavClicks.openNotebook(root, "scene");
         assertEquals("scene", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
 
+        // Second tap on the activator dismisses the open hierarchy menu.
+        View switcher = byDescription(root, "Switch notebook").get(0);
+        assertTrue(switcher.performClick());
+        idle();
+        assertNotNull("menu opened", find(root, "shelf"));
+        assertTrue(switcher.performClick());
+        idle();
+        assertNull("second tap closes", find(root, "shelf"));
+
+        clickDesc(root, "Trash");
+        assertTrue(byDescription(root, "Trash").get(0).isSelected());
+        assertFalse(byDescription(root, "Switch notebook").get(0).isSelected());
+        assertEquals("Notebooks", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
+
         clickDesc(root, "Scratchpad");
         assertEquals("Notebooks", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertFalse(byDescription(root, "Switch notebook").get(0).isSelected());
         assertTrue(byDescription(root, "Scratchpad").get(0).isSelected());
+        assertFalse(byDescription(root, "Trash").get(0).isSelected());
         assertEquals(0, byDescription(root, "Child notebooks").size());
 
         controller.pause().stop().destroy();

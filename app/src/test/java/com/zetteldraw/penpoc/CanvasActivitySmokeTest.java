@@ -71,11 +71,14 @@ public class CanvasActivitySmokeTest {
         assertNull("other notebooks stay off the bar", find(root, "journal"));
         assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
         assertTrue("still no tab options glyph once a notebook is open", tabMenus(root).isEmpty());
-        View plus = find(root, "+");
-        assertNotNull(plus);
-        assertSame("+ sits on the compact top bar", comedyChip.getParent(), plus.getParent());
+        assertNotNull("Trash icon is persistent on the bar", byDescription(root, "Trash").get(0));
+        assertSame("Trash sits beside the active chip",
+                comedyChip.getParent(), byDescription(root, "Trash").get(0).getParent());
+        assertNull("bar + is gone — create lives in the switcher menu", barPlus(root, comedyChip));
 
-        click(root, "+");
+        assertTrue(comedyChip.performClick());
+        idle();
+        click(root, "+ New notebook");
         EditText name = findEdit(root);
         assertNotNull("name form shown in-window", name);
         name.setText("sketches");
@@ -360,7 +363,9 @@ public class CanvasActivitySmokeTest {
         assertEquals(movedFirst, repo.notebookPages(Notebook.JOURNAL.uuid).get(0).id);
         assertEquals("moving a page away updates the count", java.util.Arrays.asList("1/1"), pageLabels(root));
 
-        click(root, "+");
+        assertTrue(byDescription(root, "Switch notebook").get(0).performClick());
+        idle();
+        click(root, "+ New notebook");
         EditText name = findEdit(root);
         name.setText("fresh");
         click(root, "Create");
@@ -417,7 +422,7 @@ public class CanvasActivitySmokeTest {
         clickDesc(root, "Lasso");
         assertTrue("active tool is inverted", byDescription(root, "Lasso").get(0).isSelected());
         assertEquals(PageInkView.Tool.LASSO, ink.tool());
-        assertNotNull(find(root, "Circle ink to select it"));
+        assertNull("no instructional helper when selecting Lasso", find(root, "Circle ink to select it"));
 
         ArrayList<TouchPoint> outline = new ArrayList<>();
         outline.add(new TouchPoint(150f, 150f, 0.5f, 1f, 0, 0, 1L));
@@ -779,6 +784,18 @@ public class CanvasActivitySmokeTest {
 
     private static void idle() {
         ShadowLooper.idleMainLooper();
+    }
+
+    /** Bar + only — page Create-new-page also uses the glyph "+". */
+    private static View barPlus(View root, View activeChip) {
+        List<TextView> all = new ArrayList<>();
+        collect(root, "+", all);
+        for (TextView view : all) {
+            if (view.getParent() == activeChip.getParent()) {
+                return view;
+            }
+        }
+        return null;
     }
 
     private static void click(View root, String text) {

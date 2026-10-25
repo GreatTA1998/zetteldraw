@@ -1,5 +1,6 @@
 package com.zetteldraw.penpoc;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -93,6 +94,13 @@ public class PageChromeOpticalTest {
 
         View pageSlot = pageSlotOf(link);
         assertNotNull(pageSlot);
+        // Pre-v173 optical gutters restored as margin (outside hit rect).
+        assertEquals(dp(root, 14), ((ViewGroup.MarginLayoutParams) ((View) link.getParent().getParent())
+                .getLayoutParams()).leftMargin);
+        assertEquals(dp(root, 14), ((ViewGroup.MarginLayoutParams) reorder.getLayoutParams()).leftMargin);
+        assertEquals(dp(root, 20), ((ViewGroup.MarginLayoutParams) more.getLayoutParams()).leftMargin);
+        assertEquals(dp(root, 18), ((ViewGroup.MarginLayoutParams) ((View) move.getParent())
+                .getLayoutParams()).rightMargin);
         Bitmap full = render(root);
         Bitmap crop = cropChromeBandFromSlot(full, pageSlot, link, more);
         annotateCentersFromSlot(crop, pageSlot, link, more);
@@ -110,6 +118,10 @@ public class PageChromeOpticalTest {
                 && chrome.getPaddingBottom() == 0);
         assertTrue(chrome.getMinWidth() == 0 && chrome.getMinimumWidth() == 0);
         assertTrue(chrome.getMinHeight() == 0 && chrome.getMinimumHeight() == 0);
+    }
+
+    private static int dp(View any, int value) {
+        return Math.round(value * any.getResources().getDisplayMetrics().density);
     }
 
     /** Glyph visual center Y on screen (text-bounds midline at baseline). */

@@ -21,4 +21,3 @@ captures/
 *.iml
 local.properties
 !web/src/app/apk/zetteldraw.apk/
-local.properties
