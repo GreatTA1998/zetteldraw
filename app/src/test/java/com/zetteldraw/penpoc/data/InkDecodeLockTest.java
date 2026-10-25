@@ -61,7 +61,7 @@ public class InkDecodeLockTest {
         assertEquals(1, TestInk.strokesOf(after.get(0)).size());
         // notebooks() stays cheap (no ink decode) while Ready pages are projected.
         long started = System.nanoTime();
-        assertEquals(4, repo.notebooks().size());
+        assertEquals(5, repo.notebooks().size());
         assertTrue((System.nanoTime() - started) / 1_000_000L < 1_000);
     }
 }

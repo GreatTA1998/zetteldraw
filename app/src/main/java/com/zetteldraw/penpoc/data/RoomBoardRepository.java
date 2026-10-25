@@ -482,26 +482,30 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void wipePage(String boardId) {
-        mutateReadyPage(boardId, false);
-    }
-
-    @Override
-    public void deletePage(String boardId) {
-        mutateReadyPage(boardId, true);
+        synchronized (lock) {
+            if (paperWipeLocked(boardId)) {
+                return;
+            }
+            LaunchLog.mark("wipePage refused: not Ready " + boardId);
+        }
     }
 
     /**
-     * Ready wipe/delete only — paper slice tear (same spine as UI). Unmigrated /
-     * paper-null ids refuse; open via {@link #ensureSheet} first so delete never
-     * BoardEntity-tombstones beside Ready. Remote page deletes land via Ready
-     * {@code notebook_logs} pull (Hand-off requires Ready-cover).
+     * Delete = Move into built-in Trash (same spine as the Move menu). Not a
+     * paper tear / BoardEntity tombstone. Links stay; recover via Move out.
      */
-    private void mutateReadyPage(String boardId, boolean delete) {
-        synchronized (lock) {
-            if (paperSliceActionLocked(boardId, delete)) {
-                return;
-            }
-            LaunchLog.mark((delete ? "deletePage" : "wipePage") + " refused: not Ready " + boardId);
+    @Override
+    public void deletePage(String boardId) {
+        if (boardId == null) {
+            return;
+        }
+        PagePlace place = placeOf(boardId);
+        if (place != null && Notebook.isTrash(place.notebookId())) {
+            LaunchLog.mark("deletePage no-op: already in Trash " + boardId);
+            return;
+        }
+        if (!movePageToNotebook(boardId, Notebook.TRASH.uuid)) {
+            LaunchLog.mark("deletePage refused: move to Trash failed " + boardId);
         }
     }
 
@@ -609,6 +613,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void renameNotebook(String notebookId, String title) {
+        if (Notebook.isTrash(notebookId)) {
+            return;
+        }
         String clean = cleanTitle(title);
         if (clean == null) {
             return;
@@ -626,6 +633,10 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void deleteNotebook(String notebookId) {
+        if (Notebook.isTrash(notebookId)) {
+            LaunchLog.mark("deleteNotebook refused: Trash is built-in");
+            return;
+        }
         // One return spine with pull-delete: Ready migrate + Move only.
         // BoardEntity reseat is gone — Ready-only Scratchpad ignores it anyway.
         if (!returnReadyPagesToScratchpad(notebookId)) {
@@ -1206,6 +1217,9 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public boolean placeNotebook(String notebookId, String parentId) {
+        if (Notebook.isTrash(notebookId)) {
+            return false;
+        }
         synchronized (lock) {
             NotebookEntity row = dao.notebook(notebookId);
             if (row == null || row.deletedAt != null) {
@@ -1326,8 +1340,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
         return notebookId == null ? dao.scratchpadBoards() : dao.notebookBoards(notebookId);
     }
 
-    /** Paper wipe/delete by page id on a Ready sheet — never trusts cached sliceIndex. */
-    private boolean paperSliceActionLocked(String boardId, boolean delete) {
+    /** Paper wipe by page id on a Ready sheet — never trusts cached sliceIndex. */
+    private boolean paperWipeLocked(String boardId) {
         if (boardId == null) {
             return false;
         }
@@ -1340,34 +1354,12 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
             if (index < 0) {
                 continue;
             }
-            if (delete) {
-                sheet.paper.tearDelete(index);
-                tombstoneLinksTouchingLocked(boardId);
-            } else {
-                sheet.paper.tearWipe(index);
-            }
+            sheet.paper.tearWipe(index);
             String sheetId = entry.getKey();
             writer.execute(() -> sheetStore.flushSheetOrFalse(sheetId));
             return true;
         }
         return false;
-    }
-
-    /** A deleted page takes its links with it. The user never sees a missing-page row. */
-    private void tombstoneLinksTouchingLocked(String pageId) {
-        if (pageId == null) {
-            return;
-        }
-        long now = clock.getAsLong();
-        for (PageLinkEntity row : dao.liveLinksTouching(pageId)) {
-            row.deletedAt = now;
-            row.updatedAt = now;
-            PageLinkEntity stored = row;
-            db.runInTransaction(() -> {
-                dao.upsertPageLink(stored);
-                queueLocked(OutboxEntry.LINK, stored.id, OutboxEntry.DELETE);
-            });
-        }
     }
 
     private void queueLocked(String entity, String id, String op) {

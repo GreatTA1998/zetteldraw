@@ -141,16 +141,17 @@ public class SyncEndToEndTest {
             assertEquals(0, d.repo.outboxSize());
         }
 
-        // A deletes the page; B gets the tombstone and still ends its Scratchpad with a blank.
+        // A deletes the page into Trash; B sees it leave Scratchpad and land in Trash.
         a.tick();
+        a.ensureReady(com.zetteldraw.penpoc.Notebook.TRASH.uuid);
         a.repo.deletePage(page.id);
         drain(a);
         sync(a);
         sync(b);
         assertTrue(b.ensureReady());
+        assertTrue(b.ensureReady(com.zetteldraw.penpoc.Notebook.TRASH.uuid));
         assertNull(find(b.repo.scratchpadPages(), page.id));
-        List<Board> left = b.repo.scratchpadPages();
-        assertTrue(left.get(left.size() - 1).isBlank());
+        assertNotNull(find(b.repo.notebookPages(com.zetteldraw.penpoc.Notebook.TRASH.uuid), page.id));
     }
 
     private static void drain(Device d) throws Exception {

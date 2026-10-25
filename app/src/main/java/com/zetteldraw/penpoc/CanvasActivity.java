@@ -112,6 +112,19 @@ public final class CanvasActivity extends Activity {
     private TextView modeText;
     private Button modeConfirm;
     /**
+     * Post-delete undo chip (Material-style). Separate from Link/Reorder
+     * {@link #modeBar} Confirm/Cancel — Delete moves to Trash then offers Undo.
+     */
+    private LinearLayout deleteUndoBar;
+    private TextView deleteUndoText;
+    private final Runnable clearDeleteUndo = this::hideDeleteUndo;
+    /** Page id last moved to Trash; Undo reverses to {@link #deleteUndoPriorNotebookId}. */
+    private String deleteUndoPageId;
+    /** Prior notebook ({@code null} = Scratchpad) before Delete→Trash. */
+    private String deleteUndoPriorNotebookId;
+    /** Page that sat after the deleted one (null = was last → Undo appends). */
+    private String deleteUndoBeforeId;
+    /**
      * Notes-like floating pill above the lasso selection (Cut / Copy / Delete,
      * optional Paste). Parent is {@link #root} (same overlay layer as
      * {@link #modeBar}) so it paints above the Onyx SurfaceView.
@@ -237,6 +250,15 @@ public final class CanvasActivity extends Activity {
         modeLp.rightMargin = dp(10);
         modeLp.bottomMargin = dp(12);
         root.addView(modeBar, modeLp);
+        deleteUndoBar = buildDeleteUndoBar();
+        FrameLayout.LayoutParams undoLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT);
+        undoLp.gravity = Gravity.BOTTOM;
+        undoLp.leftMargin = dp(10);
+        undoLp.rightMargin = dp(10);
+        undoLp.bottomMargin = dp(12);
+        root.addView(deleteUndoBar, undoLp);
         lassoMenu = buildLassoMenu();
         FrameLayout.LayoutParams lassoLp = new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -1402,6 +1424,34 @@ public final class CanvasActivity extends Activity {
         return stack;
     }
 
+    /** Bottom chip after Delete→Trash: message + Undo (not Confirm/Cancel). */
+    private LinearLayout buildDeleteUndoBar() {
+        LinearLayout stack = new LinearLayout(this);
+        stack.setOrientation(LinearLayout.HORIZONTAL);
+        stack.setGravity(Gravity.CENTER_VERTICAL);
+        GradientDrawable background = new GradientDrawable();
+        background.setCornerRadius(dp(6));
+        background.setColor(Color.WHITE);
+        background.setStroke(dp(1), Color.BLACK);
+        stack.setBackground(background);
+        stack.setVisibility(View.GONE);
+        stack.setPadding(dp(8), dp(8), dp(8), dp(8));
+        stack.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
+        deleteUndoText = new TextView(this);
+        deleteUndoText.setTextColor(Color.BLACK);
+        deleteUndoText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        deleteUndoText.setText(R.string.page_moved_to_trash);
+        stack.addView(deleteUndoText, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        Button undo = tinyButton(getString(R.string.undo), 15);
+        styleButton(undo, true);
+        onTap(undo, v -> undoDeleteToTrash());
+        LinearLayout.LayoutParams undoLp = wrap();
+        undoLp.leftMargin = dp(8);
+        stack.addView(undo, undoLp);
+        return stack;
+    }
+
     private LinearLayout buildLassoMenu() {
         LinearLayout pill = new LinearLayout(this);
         pill.setOrientation(LinearLayout.HORIZONTAL);
@@ -1617,6 +1667,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private void beginModeChrome() {
+        hideDeleteUndo();
         hideLassoMenu();
         modeBar.setVisibility(View.VISIBLE);
         refreshModeBar();
@@ -2013,46 +2064,121 @@ public final class CanvasActivity extends Activity {
         return lp;
     }
 
-    /** Wipe and Delete for one page, anchored to its ⋮; each confirms in the same spot. */
+    /** Wipe (confirm) and Delete (immediate Move→Trash + undo chip) for one page. */
     private void showPageMenu(PageSlot slot) {
         LinearLayout menu = panel();
         menu.setMinimumWidth(dp(200));
-        addPanelButton(menu, getString(R.string.wipe), () -> confirmPageAction(slot, false));
-        addPanelButton(menu, getString(R.string.delete_page), () -> confirmPageAction(slot, true));
+        addPanelButton(menu, getString(R.string.wipe), () -> confirmWipe(slot));
+        addPanelButton(menu, getString(R.string.delete_page), () -> deletePage(slot));
         showOverlay(menu, pageAnchoredLp(slot.moreButton, menu), drawingArea);
     }
 
-    private void confirmPageAction(PageSlot slot, boolean delete) {
+    private void confirmWipe(PageSlot slot) {
         LinearLayout box = panel();
-        box.addView(panelText(getString(delete ? R.string.delete_page_title : R.string.wipe_page_title), 15));
-        box.addView(panelText(getString(delete ? R.string.delete_page_body : R.string.wipe_page_body), 13));
-        addCancelConfirmRow(box, getString(delete ? R.string.delete : R.string.wipe), () -> {
-            if (delete) {
-                deletePage(slot);
-            } else {
-                wipe(slot);
-            }
-        }, true);
+        box.addView(panelText(getString(R.string.wipe_page_title), 15));
+        box.addView(panelText(getString(R.string.wipe_page_body), 13));
+        addCancelConfirmRow(box, getString(R.string.wipe), () -> wipe(slot), true);
         showOverlay(box, pageAnchoredLp(slot.moreButton, box), drawingArea);
     }
 
-    /** The page after it slides into its place, and the view scrolls so that page starts at the top. */
+    /**
+     * Delete = Move into Trash (no confirm). Undo snackbar restores prior
+     * notebook/position via the same placePageBefore spine.
+     */
     private void deletePage(PageSlot slot) {
+        String pageId = slot.page.id;
+        BoardRepository.PagePlace prior = repository.placeOf(pageId);
+        if (prior != null && Notebook.isTrash(prior.notebookId())) {
+            dismissOverlay();
+            showHint(getString(R.string.page_moved_to_trash), true);
+            return;
+        }
+        String beforeId = null;
+        if (prior != null) {
+            String priorKey = prior.notebookId() == null ? SCRATCHPAD : prior.notebookId();
+            List<Board> priorPages = pagesIn(priorKey);
+            int next = prior.index() + 1;
+            if (next >= 0 && next < priorPages.size()) {
+                beforeId = priorPages.get(next).id;
+            }
+        }
+        Board live = livePageIn(notebookKey(collectionId), pageId);
+        if (live != null) {
+            repository.saveInk(live);
+        }
         int index = slots.indexOf(slot);
-        repository.deletePage(slot.page.id);
-        inkView.invalidatePage(slot.page.id);
+        dismissOverlay();
+        cancelMode();
+        repository.deletePage(pageId);
+        inkView.invalidatePage(pageId);
         List<Board> pages = pagesIn(collectionId);
         ++loadGeneration;
-        int target = index < 0
+        int target = index < 0 || pages.isEmpty()
                 ? effectiveScrollY()
                 : CollectionNav.scrollYBefore(pages, Math.min(index, pages.size() - 1), pageLayout());
         showReady(collectionId, pages, target);
+        BoardRepository.PagePlace after = repository.placeOf(pageId);
+        if (prior != null && after != null && Notebook.isTrash(after.notebookId())) {
+            showDeleteUndo(pageId, prior.notebookId(), beforeId);
+        } else if (prior != null) {
+            showHint(getString(R.string.move_failed), true);
+        }
+    }
+
+    private void showDeleteUndo(String pageId, String priorNotebookId, String beforeId) {
+        deleteUndoPageId = pageId;
+        deleteUndoPriorNotebookId = priorNotebookId;
+        deleteUndoBeforeId = beforeId;
+        deleteUndoBar.removeCallbacks(clearDeleteUndo);
+        deleteUndoBar.setVisibility(View.VISIBLE);
+        deleteUndoBar.postDelayed(clearDeleteUndo, 5000);
+        updateExcludeRects();
+    }
+
+    private void hideDeleteUndo() {
+        deleteUndoBar.removeCallbacks(clearDeleteUndo);
+        deleteUndoPageId = null;
+        deleteUndoPriorNotebookId = null;
+        deleteUndoBeforeId = null;
+        if (deleteUndoBar.getVisibility() != View.GONE) {
+            deleteUndoBar.setVisibility(View.GONE);
+            updateExcludeRects();
+        }
+    }
+
+    private void undoDeleteToTrash() {
+        String pageId = deleteUndoPageId;
+        String priorNotebookId = deleteUndoPriorNotebookId;
+        String beforeId = deleteUndoBeforeId;
+        hideDeleteUndo();
+        if (pageId == null) {
+            return;
+        }
+        Board live = livePageIn(Notebook.TRASH.uuid, pageId);
+        if (live == null) {
+            BoardRepository.PagePlace now = repository.placeOf(pageId);
+            if (now != null) {
+                String key = now.notebookId() == null ? SCRATCHPAD : now.notebookId();
+                live = livePageIn(key, pageId);
+            }
+        }
+        if (live != null) {
+            repository.saveInk(live);
+        }
+        if (!repository.placePageBefore(pageId, beforeId, priorNotebookId)) {
+            showHint(getString(R.string.move_failed), true);
+        }
+        reloadPages(effectiveScrollY());
     }
 
     /** Rename / Delete, dropped down from the notebook's own tab. */
     private void showNotebookMenu(String id) {
         NotebookTab tab = tabFor(id);
         if (tab == null) {
+            return;
+        }
+        if (Notebook.isTrash(id)) {
+            showHint(getString(R.string.trash_builtin), true);
             return;
         }
         if (tab.getParent() instanceof View && tab.getParent().getParent() instanceof HorizontalScrollView) {
@@ -2086,6 +2212,7 @@ public final class CanvasActivity extends Activity {
             return;
         }
         cancelMode();
+        hideDeleteUndo();
         hideLassoMenu();
         showNotebookHierarchyMenu(slot.moveButton, drawingArea, null, true, slot,
                 notebookId -> movePageToNotebook(live.id, notebookId));
@@ -3074,6 +3201,7 @@ public final class CanvasActivity extends Activity {
             addExclude(rects, bar, dp(6), origin, loc);
         }
         addExclude(rects, modeBar, MOVE_EXCLUDE_PAD_PX, origin, loc);
+        addExclude(rects, deleteUndoBar, MOVE_EXCLUDE_PAD_PX, origin, loc);
         addExclude(rects, lassoMenu, MOVE_EXCLUDE_PAD_PX, origin, loc);
         addExclude(rects, toolbar, dp(6), origin, loc);
         int top = scroller.getScrollY();

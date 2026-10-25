@@ -105,9 +105,11 @@ public interface BoardRepository {
     void wipePage(String boardId);
 
     /**
-     * Delete one Ready page (paper slice tear + log flush). Sync is the notebook
-     * log outbox, not a BoardEntity tombstone. Links naming this page are
-     * tombstoned with it. Paper-null / unmigrated ids refuse — ensure first.
+     * Delete one Ready page by <strong>moving</strong> it into the built-in
+     * Trash notebook (same {@link #movePageToNotebook} / {@link #placePageBefore}
+     * spine as the Move menu). No BoardEntity tombstone; links stay. Already in
+     * Trash is a no-op. Paper-null / unmigrated ids refuse — ensure first.
+     * Recover later by Move out of Trash; Undo in the UI reverses the move.
      */
     void deletePage(String boardId);
 

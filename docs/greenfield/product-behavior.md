@@ -17,7 +17,7 @@ Zetteldraw is a **handwriting-first notebook** for Boox. Live ink uses the Onyx 
 | **Stroke** | Points on the paper — has an id and **no page** |
 | **Ink SoT** | One append-only ink log per notebook (on disk), projected to pages when **Ready** |
 
-Seed top-level notebooks: comedy, journal, actions.life, miscellaneous. **Scratchpad** is the pinned endless blank sheet outside the tree.
+Seed top-level notebooks: comedy, journal, actions.life, miscellaneous, **Trash**. **Scratchpad** is the pinned endless blank sheet outside the tree. Trash is a built-in recover bin (Move in/out), not a tombstone system.
 
 The **web companion** (https://zetteldraw.com) is **read-only** for ink and library edits. Intentional web writes: Hand off / Cancel / lost-device lease ceremony only.
 
@@ -58,7 +58,7 @@ Screenshots: [media/](./media/) — especially `boox-pen-surface-page-chrome.png
 | **Reorder** | Snackbar; target = page under viewport midline; Confirm places source **before** target (cross-notebook allowed). Trailing blank → append. Dest = **open collection**. |
 | **Move** | Hierarchy menu; pick notebook or **+ New notebook**; page appends as newest (page id + move safety kept). |
 | **Place under…** | Same hierarchy menu; pick parent (self/descendants omitted). Sets parent only — does **not** merge sheets. |
-| **⋮** | Wipe / Delete page. |
+| **⋮** | Wipe (confirm) / Delete = Move→Trash + Undo snackbar; recover via Move. |
 
 Move / reorder resolve by **page id**; cross-notebook dest rewrite before source tear; Confirm disabled while lists load or on invalid source.
 

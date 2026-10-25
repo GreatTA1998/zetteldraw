@@ -371,7 +371,7 @@ public class PageLinksTest {
     }
 
     @Test
-    public void deletingEitherPageRemovesTheLink() {
+    public void deletingEitherPageMovesToTrashAndKeepsTheLink() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
@@ -391,12 +391,12 @@ public class PageLinksTest {
         openNotebook(root, "frombook");
         assertNotNull(find(root, "→ tobook 1/1"));
 
+        // Delete moves the page to Trash; links stay (page still exists).
         repo.deletePage(sourceId);
-        assertTrue(repo.linksTouching(targetId).isEmpty());
-        openNotebook(root, "frombook");
-        assertNull(find(root, "→ tobook 1/1"));
+        assertFalse(repo.linksTouching(targetId).isEmpty());
+        assertTrue(Notebook.isTrash(repo.placeOf(sourceId).notebookId()));
         openNotebook(root, "tobook");
-        assertNull(find(root, "← frombook 1/1"));
+        assertNotNull(find(root, "← Trash 1/1"));
 
         ensureNotebookPage(repo, from.id());
         ink(repo, from.id(), 10f);
@@ -405,11 +405,11 @@ public class PageLinksTest {
         openNotebook(root, "tobook");
         assertNotNull(find(root, "← frombook 1/1"));
         repo.deletePage(targetId);
-        assertTrue(repo.linksTouching(sourceId).isEmpty());
-        openNotebook(root, "tobook");
-        assertNull(find(root, "← frombook 1/1"));
+        assertFalse(repo.linksTouching(sourceId).isEmpty());
+        assertTrue(Notebook.isTrash(repo.placeOf(targetId).notebookId()));
+        // Trash already holds the earlier deleted source, then this target.
         openNotebook(root, "frombook");
-        assertNull(find(root, "→ tobook 1/1"));
+        assertNotNull(find(root, "→ Trash 2/2"));
 
         controller.pause().stop().destroy();
     }

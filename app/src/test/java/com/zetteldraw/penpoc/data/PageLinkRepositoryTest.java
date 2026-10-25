@@ -63,9 +63,10 @@ public class PageLinkRepositoryTest {
         assertEquals(1, repo.linksTouching(source.id).size());
         assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.LINK, link.id()).op);
 
+        // Delete = Move to Trash; the page still exists, so its links stay.
         repo.deletePage(source.id);
-        assertTrue(repo.linksTouching(target.id).isEmpty());
-        assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.LINK, link.id()).op);
+        assertEquals(1, repo.linksTouching(target.id).size());
+        assertTrue(com.zetteldraw.penpoc.Notebook.isTrash(repo.placeOf(source.id).notebookId()));
 
         // Empty Ready after delete — Create new page for the next link source.
         Board sourceAgain = repo.createPage(from.id());
@@ -73,8 +74,9 @@ public class PageLinkRepositoryTest {
         repo.saveInk(sourceAgain);
         BoardRepository.PageLink second = repo.createLink(sourceAgain.id, target.id);
         repo.deletePage(target.id);
-        assertTrue(repo.linksTouching(sourceAgain.id).isEmpty());
-        assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.LINK, second.id()).op);
+        assertEquals(1, repo.linksTouching(sourceAgain.id).size());
+        assertTrue(com.zetteldraw.penpoc.Notebook.isTrash(repo.placeOf(target.id).notebookId()));
+        assertEquals(OutboxEntry.UPSERT, device.db.dao().outbox(OutboxEntry.LINK, second.id()).op);
     }
 
     @Test

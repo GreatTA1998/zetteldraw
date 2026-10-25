@@ -53,11 +53,12 @@ public class NotebookManagementTest {
         assertEquals("ideas for later", ideas.title());
         BoardRepository.NotebookInfo last = repo.createNotebook("zzz");
         List<BoardRepository.NotebookInfo> all = repo.notebooks();
-        assertEquals(6, all.size());
-        assertEquals(ideas.id(), all.get(4).id());
-        assertEquals(last.id(), all.get(5).id());
+        // 5 seeds (incl. Trash) + ideas + zzz
+        assertEquals(7, all.size());
+        assertEquals(ideas.id(), all.get(5).id());
+        assertEquals(last.id(), all.get(6).id());
         NotebookEntity row = device.db.dao().notebook(ideas.id());
-        assertTrue(row.position.compareTo(device.db.dao().notebook(Notebook.MISCELLANEOUS.uuid).position) > 0);
+        assertTrue(row.position.compareTo(device.db.dao().notebook(Notebook.TRASH.uuid).position) > 0);
         assertEquals(0, row.rev);
         assertNotNull(device.db.dao().outbox(OutboxEntry.NOTEBOOK, ideas.id()));
         assertNull("blank titles are rejected", repo.createNotebook("   "));
@@ -98,7 +99,8 @@ public class NotebookManagementTest {
         NotebookEntity row = device.db.dao().notebook(Notebook.JOURNAL.uuid);
         assertNotNull(row.deletedAt);
         assertEquals(OutboxEntry.DELETE, device.db.dao().outbox(OutboxEntry.NOTEBOOK, row.id).op);
-        assertEquals(3, repo.notebooks().size());
+        // comedy + actions.life + miscellaneous + Trash
+        assertEquals(4, repo.notebooks().size());
         assertTrue(repo.notebookPages(Notebook.JOURNAL.uuid).isEmpty());
 
         List<Board> scratch = repo.scratchpadPages();
@@ -107,7 +109,7 @@ public class NotebookManagementTest {
         assertEquals(1, TestInk.strokesOf(scratch.get(1)).size());
 
         device.reopen();
-        assertEquals("seed is not re-created after delete", 3, device.repo.notebooks().size());
+        assertEquals("seed is not re-created after delete", 4, device.repo.notebooks().size());
     }
 
     @Test
@@ -158,7 +160,8 @@ public class NotebookManagementTest {
         page.notebooks.add(remote);
         page.cursor = 8;
         repo.applyPull(page);
-        assertEquals(3, repo.notebooks().size());
+        // comedy + journal + miscellaneous + Trash
+        assertEquals(4, repo.notebooks().size());
         assertTrue(repo.notebookPages(Notebook.ACTIONS_LIFE.uuid).isEmpty());
         assertFalse(repo.isSheetReady(Notebook.ACTIONS_LIFE.uuid));
         List<Board> scratch = repo.scratchpadPages();

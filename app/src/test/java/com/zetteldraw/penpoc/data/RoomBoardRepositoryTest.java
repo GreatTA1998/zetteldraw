@@ -60,7 +60,7 @@ public class RoomBoardRepositoryTest {
         }
         assertEquals("install seeds are not queued until restore push", 0, device.db.dao().outboxCount());
         device.reopen();
-        assertEquals(4, device.repo.notebooks().size());
+        assertEquals(Notebook.values().length, device.repo.notebooks().size());
     }
 
     @Test

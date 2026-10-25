@@ -18,7 +18,7 @@ Zetteldraw is a **handwriting-first notebook** for Boox. Live ink uses the Onyx 
 
 A **notebook** is one continuous sheet of paper. A **page** is a slice of that sheet (cut, moved, or deleted). A **stroke** is points on the paper — it has an id and **no page**. Sync is one append-only ink log per notebook. **Only one live-writer Boox** may edit; others are read-only until Hand off. The web companion is **read-only** for ink and library edits (Hand off / lease ceremony only).
 
-Seed top-level notebooks: comedy, journal, actions.life, miscellaneous. Scratchpad is the pinned endless blank sheet outside the tree.
+Seed top-level notebooks: comedy, journal, actions.life, miscellaneous, **Trash**. Scratchpad is the pinned endless blank sheet outside the tree. Trash is a built-in recover bin (real notebook id, same as other seeds) — not a tombstone system.
 
 ---
 
@@ -55,7 +55,7 @@ Seed top-level notebooks: comedy, journal, actions.life, miscellaneous. Scratchp
 | **Reorder** | Snackbar; target = page under viewport midline; Confirm places source **before** target (cross-notebook allowed). Midline past last page (over Create new page) → append. Dest = **open collection**. |
 | **Move** | Hierarchy menu; pick notebook or **+ New notebook**; page appends as newest (page id + move safety kept). |
 | **Place under…** | Same hierarchy menu; pick parent (self/descendants omitted). Sets `parent_id` only — does not merge sheets. |
-| **⋮** | Wipe / Delete page. |
+| **⋮** | Wipe (confirm) / **Delete page** — Delete moves the page into built-in **Trash** (same Move spine; no confirm). Undo snackbar restores prior notebook/position. Recover later: open Trash → Move to any notebook. |
 
 Move / reorder resolve by **page id**; cross-notebook dest rewrite before source tear; Confirm disabled while lists load or on invalid source.
 

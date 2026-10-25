@@ -81,7 +81,8 @@ public class CanvasActivitySmokeTest {
         name.setText("sketches");
         click(root, "Create");
         assertNull("form closed", findEdit(root));
-        assertEquals(5, repo.notebooks().size());
+        // 5 seeds (incl. Trash) + sketches
+        assertEquals(6, repo.notebooks().size());
         assertNotNull("new tab shown", find(root, "sketches"));
         assertTrue("new notebook opens", ((View) find(root, "sketches").getParent()).isSelected());
         assertSame("+ moves after the new tab", plus, strip.getChildAt(strip.getChildCount() - 1));
@@ -93,19 +94,19 @@ public class CanvasActivitySmokeTest {
         assertEquals("sketches", name.getText().toString());
         name.setText("drawings");
         click(root, "Save");
-        assertEquals("drawings", repo.notebooks().get(4).title());
+        assertEquals("drawings", repo.notebooks().get(5).title());
         assertNotNull(find(root, "drawings"));
 
         longPress(root, "drawings");
         click(root, "Delete");
         assertNotNull("confirmation shown", find(root, "Delete “drawings”?"));
         click(root, "Cancel");
-        assertEquals(5, repo.notebooks().size());
+        assertEquals(6, repo.notebooks().size());
 
         longPress(root, "drawings");
         click(root, "Delete");
         clickLast(root, "Delete");
-        assertEquals(4, repo.notebooks().size());
+        assertEquals(5, repo.notebooks().size());
         assertNull(find(root, "drawings"));
 
         controller.pause().stop().destroy();
@@ -184,12 +185,15 @@ public class CanvasActivitySmokeTest {
         idle();
         // Blank Ready pages keep full ⋮ (Wipe is a no-op on empty ink).
         assertNotNull("Wipe stays on blank Ready pages", find(root, "Wipe"));
+        // Delete moves to Trash immediately (no confirm) + Undo snackbar.
         click(root, "Delete page");
-        assertNotNull(find(root, "Delete this page?"));
-        clickLast(root, "Delete");
+        assertNull("no delete confirm dialog", find(root, "Delete this page?"));
+        assertNotNull(find(root, "Moved to Trash"));
+        assertNotNull(find(root, "Undo"));
         List<Board> pages = repo.scratchpadPages();
         assertEquals(1, pages.size());
         assertEquals(second.id, pages.get(0).id);
+        assertTrue(Notebook.isTrash(repo.placeOf(first.id).notebookId()));
         menus = byDescription(root, "Page options");
         assertEquals(1, menus.size());
         assertTrue("stored blank keeps enabled ⋮", menus.get(0).isEnabled());
@@ -197,7 +201,6 @@ public class CanvasActivitySmokeTest {
         byDescription(root, "Page options").get(0).performClick();
         idle();
         click(root, "Delete page");
-        clickLast(root, "Delete");
         pages = repo.scratchpadPages();
         assertTrue("empty Ready sheet is valid", pages.isEmpty());
         assertTrue(pageLabels(root).isEmpty());
@@ -242,7 +245,6 @@ public class CanvasActivitySmokeTest {
         byDescription(root, "Page options").get(0).performClick();
         idle();
         click(root, "Delete page");
-        clickLast(root, "Delete");
         pages = repo.notebookPages(Notebook.COMEDY.uuid);
         assertTrue("empty Ready notebook is valid", pages.isEmpty());
         assertTrue(pageLabels(root).isEmpty());
