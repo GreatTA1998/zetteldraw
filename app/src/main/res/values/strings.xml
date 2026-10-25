@@ -74,6 +74,7 @@
     <string name="launch_log_title">Launch log (ms since the app started; newest launch first)</string>
     <string name="close">Close</string>
     <string name="settings">Settings</string>
+    <string name="settings_launch_log">Launch log</string>
     <string name="settings_sign_in_google">Sign in with Google</string>
     <string name="settings_sign_out">Sign out</string>
     <string name="settings_signed_in_as">Signed in as %1$s</string>

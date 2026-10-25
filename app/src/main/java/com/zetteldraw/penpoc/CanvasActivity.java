@@ -447,10 +447,8 @@ public final class CanvasActivity extends Activity {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
         scratchpadTab = iconButton(R.drawable.ic_scratchpad, R.string.scratchpad);
         onTap(scratchpadTab, v -> openScratchpad(null));
-        onLongTap(scratchpadTab, v -> {
-            showLaunchLog();
-            return true;
-        });
+        // Scratchpad is pinned (no rename / Place / Delete). Do not open Launch log
+        // on hold — that lives in Settings so hold matches other notebook tabs.
         bar.addView(scratchpadTab, iconLp(0));
         bar.addView(rule(), barDividerLp());
 
@@ -2454,7 +2452,7 @@ public final class CanvasActivity extends Activity {
         box.addView(actions, actionsLp);
     }
 
-    /** In-window Settings: account, Sync now / Sign out, Prepare transfer, Close. */
+    /** In-window Settings: account, Sync now / Sign out, Prepare transfer, Launch log, Close. */
     private void showSettings() {
         settingsGeneration++;
         SyncConfig config = SyncConfig.load(this);
@@ -2563,6 +2561,14 @@ public final class CanvasActivity extends Activity {
         if (!canPrepare) {
             box.addView(panelText(prepareBlockReason, 11));
         }
+
+        Button launchLog = tinyButton(getString(R.string.settings_launch_log), 15);
+        styleButton(launchLog, true);
+        onTap(launchLog, v -> showLaunchLog());
+        LinearLayout.LayoutParams launchLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        launchLp.topMargin = dp(8);
+        box.addView(launchLog, launchLp);
 
         addCloseActionsRow(box, dp(8));
 
@@ -2681,7 +2687,7 @@ public final class CanvasActivity extends Activity {
         });
     }
 
-    /** Long-press on the Scratchpad icon: this launch's timeline and the two before it, newest first. */
+    /** Settings → Launch log: this launch's timeline and the two before it, newest first. */
     private void showLaunchLog() {
         LinearLayout box = panel();
         box.addView(panelText(getString(R.string.launch_log_title), 15));

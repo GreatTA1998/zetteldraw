@@ -25,8 +25,8 @@ import java.util.concurrent.Executors;
  * Always-on launch timeline: what happened, in ms since the process started,
  * kept in a small ring-buffer file ({@code files/launch-log.txt}, the last
  * {@link #MAX_LINES} lines across launches). Callers never wait for disk:
- * lines are appended on one background thread. Long-press the Scratchpad
- * icon to read it; sync uploads it.
+ * lines are appended on one background thread. Open it from Settings →
+ * Launch log; sync uploads it.
  */
 public final class LaunchLog {
     private static final String TAG = "zd-launch";
