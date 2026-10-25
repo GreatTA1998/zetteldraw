@@ -511,9 +511,7 @@ public class ToolSwitchTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         settle();
-        TextView tab = findText(root, "stay-lasso");
-        assertNotNull(tab);
-        assertTrue(tab.performClick());
+        NavClicks.openNotebook(root, "stay-lasso");
         settle();
 
         View penButton = byDescription(root, "Pen").get(0);

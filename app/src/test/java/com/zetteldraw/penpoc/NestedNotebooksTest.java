@@ -60,7 +60,7 @@ public class NestedNotebooksTest {
     }
 
     @Test
-    public void childrenStayOffTheTopBarAndSiblingSwitchesCloseTheDeeperBar() {
+    public void compactBarShowsOnlyActiveNotebookAndSwitcherReachesNested() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo shelf = repo.createNotebook("shelf");
@@ -72,43 +72,33 @@ public class NestedNotebooksTest {
         View root = controller.get().getWindow().getDecorView();
         idle();
 
-        ViewGroup topStrip = (ViewGroup) find(root, "comedy").getParent().getParent();
-        assertNotNull(textIn(topStrip, "shelf"));
-        assertTrue("children are not on the top bar", textIn(topStrip, "chapter") == null);
-        assertTrue(textIn(topStrip, "notes") == null);
-        assertTrue(textIn(topStrip, "scene") == null);
+        assertEquals("no child-notebook bars", 0, byDescription(root, "Child notebooks").size());
+        assertNull("seed titles are not listed on the strip", find(root, "comedy"));
+        assertNull(find(root, "shelf"));
+        assertNotNull(find(root, "Notebooks"));
 
-        click(root, "shelf");
-        assertEquals(1, byDescription(root, "Child notebooks").size());
-        assertTrue(((View) find(root, "shelf").getParent()).isSelected());
-        assertNotNull(find(root, "chapter"));
-        assertTrue("a grandchild stays off until its parent is open", find(root, "scene") == null);
+        NavClicks.openNotebook(root, "shelf");
+        assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
+        assertEquals("shelf", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertNull("nested titles stay off the bar", find(root, "chapter"));
+        assertEquals(0, byDescription(root, "Child notebooks").size());
 
-        click(root, "chapter");
-        assertEquals("two levels of bars", 2, byDescription(root, "Child notebooks").size());
-        assertNotNull(find(root, "scene"));
-        // Leaf-only underline: ancestors open child bars but are not selected.
-        assertFalse("parent is not underlined while a child is open",
-                ((View) find(root, "shelf").getParent()).isSelected());
-        assertTrue(((View) find(root, "chapter").getParent()).isSelected());
+        NavClicks.openNotebook(root, "chapter");
+        assertEquals("chapter", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
+        assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
 
-        click(root, "notes");
-        assertEquals("switching siblings closes the deeper bar", 1, byDescription(root, "Child notebooks").size());
-        assertTrue(find(root, "scene") == null);
-        assertTrue(((View) find(root, "notes").getParent()).isSelected());
-        assertFalse(((View) find(root, "chapter").getParent()).isSelected());
-        assertFalse("ancestor shelf is not underlined while notes is open",
-                ((View) find(root, "shelf").getParent()).isSelected());
+        NavClicks.openNotebook(root, "notes");
+        assertEquals("notes", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
 
-        click(root, "shelf");
-        assertEquals("the child bar stays when its parent is tapped again", 1,
-                byDescription(root, "Child notebooks").size());
-        assertFalse(((View) find(root, "notes").getParent()).isSelected());
-        assertTrue(((View) find(root, "shelf").getParent()).isSelected());
-        assertTrue(find(root, "chapter") != null);
+        NavClicks.openNotebook(root, "scene");
+        assertEquals("scene", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
 
         clickDesc(root, "Scratchpad");
-        assertEquals("Scratchpad closes every lower bar", 0, byDescription(root, "Child notebooks").size());
+        assertEquals("Notebooks", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertFalse(byDescription(root, "Switch notebook").get(0).isSelected());
+        assertTrue(byDescription(root, "Scratchpad").get(0).isSelected());
+        assertEquals(0, byDescription(root, "Child notebooks").size());
 
         controller.pause().stop().destroy();
     }
@@ -127,7 +117,7 @@ public class NestedNotebooksTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
-        click(root, "dating");
+        NavClicks.openNotebook(root, "dating");
         idleForPaint();
         relayout(root);
         assertEquals(1, byDescription(root, "Create new page").size());
@@ -138,7 +128,7 @@ public class NestedNotebooksTest {
         TestInk.appendCovering(repo.pages(dating.id()).get(0).paper, TestStrokes.stroke(11f, 20f));
         repo.saveInk(repo.pages(dating.id()).get(0));
 
-        click(root, "stacey");
+        NavClicks.openNotebook(root, "stacey");
         idleForPaint();
         relayout(root);
         assertEquals(1, byDescription(root, "Create new page").size());
@@ -146,26 +136,26 @@ public class NestedNotebooksTest {
         idleForPaint();
         relayout(root);
         assertNotNull("Stacey pages are on screen after switch", find(root, "1/" + repo.pages(stacey.id()).size()));
-        assertTrue(((View) find(root, "stacey").getParent()).isSelected());
-        assertFalse("Dating must not stay underlined while Stacey is open",
-                ((View) find(root, "dating").getParent()).isSelected());
+        assertEquals("stacey", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
+        assertNull("Dating is not on the compact bar while Stacey is open", find(root, "dating"));
         TestInk.appendCovering(repo.pages(stacey.id()).get(0).paper, TestStrokes.stroke(99f, 20f));
         repo.saveInk(repo.pages(stacey.id()).get(0));
         assertNotEquals(NotebookPaper.sheetId(dating.id()), NotebookPaper.sheetId(stacey.id()));
 
-        click(root, "dating");
+        NavClicks.openNotebook(root, "dating");
         idleForPaint();
         relayout(root);
-        assertTrue(((View) find(root, "dating").getParent()).isSelected());
-        assertFalse("Stacey must not stay underlined while Dating is open",
-                ((View) find(root, "stacey").getParent()).isSelected());
+        assertEquals("dating", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
+        assertNull(find(root, "stacey"));
         assertNotNull(find(root, "1/" + repo.pages(dating.id()).size()));
 
-        click(root, "stacey");
+        NavClicks.openNotebook(root, "stacey");
         idleForPaint();
         relayout(root);
-        assertTrue(((View) find(root, "stacey").getParent()).isSelected());
-        assertFalse(((View) find(root, "dating").getParent()).isSelected());
+        assertEquals("stacey", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertNull(find(root, "dating"));
         assertEquals(99f, repo.pages(stacey.id()).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
         assertEquals(11f, repo.pages(dating.id()).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
 
@@ -189,7 +179,7 @@ public class NestedNotebooksTest {
         String sourceId = repo.scratchpadPages().get(0).id;
         clickDesc(root, "Scratchpad");
         idle();
-        click(root, "shelf");
+        NavClicks.openNotebook(root, "shelf");
         idle();
         relayout(root);
 
@@ -197,9 +187,7 @@ public class NestedNotebooksTest {
         List<Rect> holes = ink.penExcludes();
         View topBar = (View) byDescription(root, "Scratchpad").get(0).getParent();
         assertNotNull(cover(ink, topBar, holes));
-        List<View> childBars = byDescription(root, "Child notebooks");
-        assertEquals(1, childBars.size());
-        assertNotNull("the child bar is a hole in the pen reader", cover(ink, childBars.get(0), holes));
+        assertEquals("no child bars", 0, byDescription(root, "Child notebooks").size());
 
         clickDesc(root, "Scratchpad");
         idle();
@@ -236,7 +224,7 @@ public class NestedNotebooksTest {
         idle();
         PageInkView ink = findInk(root);
         ink.onSurface(true);
-        click(root, "resume");
+        NavClicks.openNotebook(root, "resume");
         idleForPaint();
         relayout(root);
         ink.onWindowVisibilityChanged(View.VISIBLE);
@@ -277,7 +265,7 @@ public class NestedNotebooksTest {
         idle();
         PageInkView ink = findInk(root);
         ink.onSurface(true);
-        click(root, "resume");
+        NavClicks.openNotebook(root, "resume");
         idleForPaint();
         relayout(root);
 
@@ -289,7 +277,7 @@ public class NestedNotebooksTest {
 
         clickDesc(root, "Scratchpad");
         idle();
-        click(root, "resume");
+        NavClicks.openNotebook(root, "resume");
         idleForPaint();
         relayout(root);
         scroller = pageScroller(root);
@@ -310,7 +298,7 @@ public class NestedNotebooksTest {
         ActivityController<CanvasActivity> first = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = first.get().getWindow().getDecorView();
         idle();
-        click(root, "resume");
+        NavClicks.openNotebook(root, "resume");
         idleForPaint();
         relayout(root);
         View scroller = pageScroller(root);
@@ -321,7 +309,7 @@ public class NestedNotebooksTest {
         ActivityController<CanvasActivity> second = Robolectric.buildActivity(CanvasActivity.class).setup();
         root = second.get().getWindow().getDecorView();
         idle();
-        click(root, "resume");
+        NavClicks.openNotebook(root, "resume");
         idleForPaint();
         relayout(root);
         assertEquals("prefs restore the left-behind page after a new activity",
@@ -337,7 +325,7 @@ public class NestedNotebooksTest {
         ActivityController<CanvasActivity> probe = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = probe.get().getWindow().getDecorView();
         idle();
-        click(root, "resume");
+        NavClicks.openNotebook(root, "resume");
         idle();
         relayout(root);
         if (repo.pages(notebookId).isEmpty()) {
@@ -371,12 +359,11 @@ public class NestedNotebooksTest {
         View root = controller.get().getWindow().getDecorView();
         idle();
 
-        assertTrue(find(root, "notes").performLongClick());
-        idle();
+        NavClicks.longPressOpenNotebook(root, "notes");
         click(root, "Place under…");
         assertNull("Place under is hierarchy menu, not snackbar", find(root, "Placing notes under…"));
         assertNull(find(root, "Confirm"));
-        // Self omitted from picker: only the standing tab named "notes" remains.
+        // Self omitted from picker: only the active chip named "notes" remains.
         ArrayList<TextView> notesHits = new ArrayList<>();
         collectText(root, "notes", notesHits);
         assertEquals("cannot place under itself", 1, notesHits.size());
@@ -386,15 +373,12 @@ public class NestedNotebooksTest {
         assertEquals(chapter.id(), repo.notebooks().stream()
                 .filter(n -> n.id().equals(notes.id())).findFirst().get().parentId());
 
-        // shelf → chapter → notes; descendants omitted from the picker (child-bar
-        // "chapter" may still show; nested "notes" is not a menu row).
-        assertTrue(find(root, "shelf").performLongClick());
-        idle();
+        // shelf → chapter → notes; descendants omitted from the picker.
+        NavClicks.longPressOpenNotebook(root, "shelf");
         click(root, "Place under…");
         ArrayList<TextView> chapterHits = new ArrayList<>();
         collectText(root, "chapter", chapterHits);
-        assertEquals("chapter only as standing child tab, not a second menu row",
-                1, chapterHits.size());
+        assertEquals("chapter not offered under shelf (descendant)", 0, chapterHits.size());
         ArrayList<TextView> notesHitsAfter = new ArrayList<>();
         collectText(root, "notes", notesHitsAfter);
         assertEquals("nested notes omitted from place-under picker", 0, notesHitsAfter.size());

@@ -1,7 +1,6 @@
 package com.zetteldraw.penpoc;
 
 import android.app.Activity;
-import android.content.ClipData;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
@@ -31,11 +30,9 @@ import android.text.TextUtils;
 import android.text.style.AbsoluteSizeSpan;
 import android.text.style.StyleSpan;
 import android.util.TypedValue;
-import android.view.DragEvent;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.WindowInsets;
@@ -71,12 +68,12 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Top bar: Scratchpad | top-level notebooks | +. A selected notebook with
- * children opens another bar of only those children. Long-press a notebook
- * name then drag to reorder siblings on that strip (one fractional position
- * write); long-press without a drag still opens Rename / Place / Delete.
- * Scratchpad stays pinned. Tab underline is the open notebook only (not
- * ancestors). Each collection is a continuous vertical scroll of its own pages.
+ * One compact top bar: Scratchpad icon | active notebook (tap opens the same
+ * multi-column hierarchy menu as Move / Place under) | + | undo/redo |
+ * pen/eraser/lasso | settings. No persistent top-level notebook strip and no
+ * child-notebook bars. Long-press the active notebook for Rename / Place /
+ * Delete. Link / Reorder keep the bottom Confirm/Cancel snackbar. Each
+ * collection is a continuous vertical scroll of its own pages.
  */
 public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
@@ -104,9 +101,9 @@ public final class CanvasActivity extends Activity {
     private int settingsGeneration;
     private LinearLayout topBar;
     /**
-     * Bottom strip for Link / Reorder. Floated on {@link #root},
-     * not parented into the notebook bars, so it stays separate from the top nav.
-     * Move and Place under use the shared notebook hierarchy menu instead.
+     * Bottom strip for Link / Reorder Confirm/Cancel. Floated on {@link #root},
+     * not folded into the compact top nav. Move and Place under use the shared
+     * notebook hierarchy menu instead.
      */
     private LinearLayout modeBar;
     private TextView modeText;
@@ -143,21 +140,14 @@ public final class CanvasActivity extends Activity {
     private String reorderSourceRef;
     /** Notebook id of the reorder source ({@code null} = Scratchpad). */
     private String reorderSourceNotebookId;
-    /**
-     * Top-strip notebook drag: after long-press starts a drag, show the
-     * Rename/Place/Delete menu on cancel only when the drag never reordered.
-     */
-    private String pendingNotebookMenuId;
-    private boolean notebookDragReordered;
-    private View toolbar;
     private PageInkView inkView;
     private PageScroller scroller;
     private LinearLayout pageColumn;
     /** Full-width control under the last real page (or alone when empty). */
     private Button createPageButton;
-    private HorizontalScrollView notebookScroll;
-    private LinearLayout notebookStrip;
     private ImageButton scratchpadTab;
+    /** Active notebook title, or "Notebooks" on Scratchpad — opens hierarchy switcher. */
+    private Button activeNotebookButton;
     private Button addButton;
     private ImageButton penButton;
     private ImageButton eraserButton;
@@ -168,7 +158,6 @@ public final class CanvasActivity extends Activity {
     private ImageButton redoButton;
     private TextView toolHint;
     private final Runnable clearHint = () -> toolHint.setText("");
-    private final ArrayList<NotebookTab> notebookTabs = new ArrayList<>();
     private final ArrayList<PageSlot> slots = new ArrayList<>();
     /** Top of each slot, plus the column bottom. Zero stride means the heights differ. */
     private int[] slotTops = new int[0];
@@ -196,9 +185,6 @@ public final class CanvasActivity extends Activity {
     private List<BoardRepository.NotebookInfo> shownNotebooks;
     /** Selected notebook and its ancestors, root first. Empty on the Scratchpad. */
     private final ArrayList<String> trail = new ArrayList<>();
-    /** One bar per selected notebook that has children, under the top bar. */
-    private LinearLayout lowerBars;
-    private final ArrayList<View> childBars = new ArrayList<>();
     /** Bumped by every page-list load; a background load whose number is stale is dropped. */
     private int loadGeneration;
     private int shownGeneration;
@@ -225,15 +211,9 @@ public final class CanvasActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
-        lowerBars = new LinearLayout(this);
-        lowerBars.setOrientation(LinearLayout.VERTICAL);
-        lowerBars.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
         topBar = buildTopBar();
+        topBar.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> updateExcludeRects());
         column.addView(topBar, matchWrap());
-        column.addView(rule(), ruleLp());
-        column.addView(lowerBars, matchWrap());
-        toolbar = buildToolbar();
-        column.addView(toolbar, matchWrap());
         column.addView(rule(), ruleLp());
 
         drawingArea = new FrameLayout(this);
@@ -390,7 +370,7 @@ public final class CanvasActivity extends Activity {
 
         setContentView(root);
         repository.addRemoteChangeListener(remoteChanged);
-        tools.bind(penButton, eraserButton, lassoButton, toolbar);
+        tools.bind(penButton, eraserButton, lassoButton, topBar);
         tools.setTool(PageInkView.Tool.PEN);
         syncHistory();
         // (1) App shell only. Default selection = Scratchpad chrome; no open yet.
@@ -461,53 +441,58 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Scratchpad pinned left; the notebook tabs scroll, with + after the last
-     * one. Long-press a tab for Rename / Place / Delete; long-press then drag
-     * reorders siblings on the strip (not a page Reorder mode / snackbar).
+     * Single chrome strip: Scratchpad | active notebook | + | hint | undo/redo |
+     * tools | settings. Active notebook opens the shared hierarchy switcher.
      */
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
         scratchpadTab = iconButton(R.drawable.ic_scratchpad, R.string.scratchpad);
         onTap(scratchpadTab, v -> openScratchpad(null));
-        // Scratchpad is pinned (no rename / Place / Delete). Do not open Launch log
-        // on hold — that lives in Settings so hold matches other notebook tabs.
         bar.addView(scratchpadTab, iconLp(0));
         bar.addView(rule(), barDividerLp());
 
-        notebookScroll = new HorizontalScrollView(this);
-        notebookScroll.setHorizontalScrollBarEnabled(false);
-        notebookStrip = new LinearLayout(this);
-        notebookStrip.setOrientation(LinearLayout.HORIZONTAL);
-        notebookStrip.setGravity(Gravity.CENTER_VERTICAL);
-        notebookScroll.addView(notebookStrip, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
-        bar.addView(notebookScroll, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        activeNotebookButton = tinyButton(getString(R.string.notebooks), 16);
+        activeNotebookButton.setContentDescription(getString(R.string.switch_notebook));
+        activeNotebookButton.setAllCaps(false);
+        activeNotebookButton.setSingleLine(true);
+        activeNotebookButton.setEllipsize(TextUtils.TruncateAt.END);
+        activeNotebookButton.setMaxWidth(dp(220));
+        activeNotebookButton.setMinHeight(dp(48));
+        activeNotebookButton.setMinimumHeight(dp(48));
+        activeNotebookButton.setPadding(dp(10), 0, dp(10), 0);
+        activeNotebookButton.setStateListAnimator(null);
+        onTap(activeNotebookButton, v -> showNotebookSwitcher());
+        activeNotebookButton.setOnLongClickListener(v -> {
+            String open = notebookKey(collectionId);
+            if (open != null) {
+                showNotebookMenu(open);
+                return true;
+            }
+            return false;
+        });
+        bar.addView(activeNotebookButton, wrap());
 
         addButton = tinyButton(getString(R.string.add_notebook), 22);
         addButton.setContentDescription(getString(R.string.new_notebook));
         addButton.setPadding(dp(8), 0, dp(8), dp(2));
-        onTap(addButton, v -> showNameForm(null, addButton, null, null));
-        rebuildNotebookTabs(null);
-        return bar;
-    }
+        onTap(addButton, v -> {
+            String parent = notebookKey(collectionId);
+            showNameForm(null, addButton, parent, null);
+        });
+        LinearLayout.LayoutParams addLp = wrap();
+        addLp.leftMargin = dp(4);
+        bar.addView(addButton, addLp);
 
-    private LinearLayout.LayoutParams barDividerLp() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(1), dp(32));
-        lp.leftMargin = dp(8);
-        lp.rightMargin = dp(8);
-        return lp;
-    }
-
-    private View buildToolbar() {
-        LinearLayout toolbar = row(Gravity.CENTER_VERTICAL | Gravity.END);
         toolHint = new TextView(this);
         toolHint.setTextColor(Color.DKGRAY);
         toolHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
         toolHint.setSingleLine(true);
         toolHint.setEllipsize(TextUtils.TruncateAt.END);
-        toolbar.addView(toolHint, new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams hintLp = new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        hintLp.leftMargin = dp(8);
+        bar.addView(toolHint, hintLp);
+
         undoButton = iconButton(R.drawable.ic_undo, R.string.undo);
         redoButton = iconButton(R.drawable.ic_redo, R.string.redo);
         penButton = iconButton(R.drawable.ic_tool_pen, R.string.pen);
@@ -526,7 +511,6 @@ public final class CanvasActivity extends Activity {
         onTap(penButton, v -> {
             dismissOverlay();
             if (tools.tool() == PageInkView.Tool.PEN) {
-                // Re-push fountain so a stuck lasso dash cannot outlive the Pen chrome.
                 tools.reassert();
             } else {
                 tools.setTool(PageInkView.Tool.PEN);
@@ -542,15 +526,23 @@ public final class CanvasActivity extends Activity {
         });
         settingsButton = iconButton(R.drawable.ic_settings, R.string.settings);
         onTap(settingsButton, v -> showSettings());
-        toolbar.addView(undoButton, iconLp(6));
-        toolbar.addView(redoButton, iconLp(4));
-        toolbar.addView(rule(), barDividerLp());
-        toolbar.addView(penButton, iconLp(0));
-        toolbar.addView(eraserButton, iconLp(6));
-        toolbar.addView(lassoButton, iconLp(6));
-        toolbar.addView(rule(), barDividerLp());
-        toolbar.addView(settingsButton, iconLp(0));
-        return toolbar;
+        bar.addView(undoButton, iconLp(0));
+        bar.addView(redoButton, iconLp(4));
+        bar.addView(rule(), barDividerLp());
+        bar.addView(penButton, iconLp(0));
+        bar.addView(eraserButton, iconLp(6));
+        bar.addView(lassoButton, iconLp(6));
+        bar.addView(rule(), barDividerLp());
+        bar.addView(settingsButton, iconLp(0));
+        rebuildNotebookTabs(null);
+        return bar;
+    }
+
+    private LinearLayout.LayoutParams barDividerLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(1), dp(32));
+        lp.leftMargin = dp(8);
+        lp.rightMargin = dp(8);
+        return lp;
     }
 
     private ImageButton iconButton(int icon, int label) {
@@ -600,20 +592,22 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    /** {@code notebooks} null: not loaded yet, so only + shows. */
+    /** {@code notebooks} null: not loaded yet — chip stays at the Notebooks label. */
     private void rebuildNotebookTabs(List<BoardRepository.NotebookInfo> notebooks) {
         if (notebooks != null && sameNotebooks(notebooks)) {
+            styleTabs();
             return;
         }
         shownNotebooks = notebooks == null ? null : new ArrayList<>(notebooks);
         pruneTrail();
-        rebuildBars();
         if (shownNotebooks != null && !SCRATCHPAD.equals(collectionId)) {
             BoardRepository.NotebookInfo open = notebookById(collectionId);
             if (open != null && (trail.isEmpty() || !trail.get(trail.size() - 1).equals(collectionId))) {
                 openNotebook(collectionId, null);
+                return;
             }
         }
+        styleTabs();
     }
 
     private boolean sameNotebooks(List<BoardRepository.NotebookInfo> notebooks) {
@@ -650,132 +644,6 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    private void rebuildBars() {
-        notebookStrip.removeAllViews();
-        notebookTabs.clear();
-        lowerBars.removeAllViews();
-        childBars.clear();
-        List<BoardRepository.NotebookInfo> top = childrenOf(null);
-        if (shownNotebooks != null && top.isEmpty()) {
-            TextView hint = new TextView(this);
-            hint.setText(R.string.no_notebooks_bar);
-            hint.setTextColor(Color.BLACK);
-            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-            hint.setPadding(dp(4), 0, dp(4), 0);
-            notebookStrip.addView(hint, wrap());
-        }
-        fillStrip(notebookStrip, top, addButton, 0);
-        if (shownNotebooks != null) {
-            for (int depth = 0; depth < trail.size(); depth++) {
-                String parentId = trail.get(depth);
-                List<BoardRepository.NotebookInfo> kids = childrenOf(parentId);
-                if (kids.isEmpty()) {
-                    continue;
-                }
-                if (lowerBars.getChildCount() > 0) {
-                    lowerBars.addView(rule(), ruleLp());
-                }
-                LinearLayout bar = row(Gravity.CENTER_VERTICAL);
-                bar.setContentDescription(getString(R.string.child_notebooks));
-                HorizontalScrollView scroll = new HorizontalScrollView(this);
-                scroll.setHorizontalScrollBarEnabled(false);
-                LinearLayout strip = new LinearLayout(this);
-                strip.setOrientation(LinearLayout.HORIZONTAL);
-                strip.setGravity(Gravity.CENTER_VERTICAL);
-                Button plus = tinyButton(getString(R.string.add_notebook), 22);
-                plus.setContentDescription(getString(R.string.new_notebook));
-                plus.setPadding(dp(8), 0, dp(8), dp(2));
-                String createUnder = parentId;
-                onTap(plus, v -> showNameForm(null, plus, createUnder, null));
-                fillStrip(strip, kids, plus, depth + 1);
-                scroll.addView(strip, new FrameLayout.LayoutParams(
-                        FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT));
-                bar.addView(scroll, new LinearLayout.LayoutParams(0,
-                        LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-                lowerBars.addView(bar, matchWrap());
-                childBars.add(bar);
-            }
-        }
-        styleTabs();
-    }
-
-    private void fillStrip(LinearLayout strip, List<BoardRepository.NotebookInfo> notebooks, Button plus, int depth) {
-        for (BoardRepository.NotebookInfo each : notebooks) {
-            NotebookTab tab = new NotebookTab(this, each, depth);
-            LinearLayout.LayoutParams lp = wrap();
-            if (strip.getChildCount() > 0) {
-                lp.leftMargin = dp(4);
-            }
-            strip.addView(tab, lp);
-            notebookTabs.add(tab);
-        }
-        LinearLayout.LayoutParams addLp = wrap();
-        addLp.leftMargin = dp(4);
-        strip.addView(plus, addLp);
-        // Drop on the trailing + = move to end among this strip's siblings.
-        plus.setOnDragListener((v, event) -> onStripEndDrag(strip, event));
-    }
-
-    /** Drop on a strip's + button places the dragged notebook last among siblings. */
-    private boolean onStripEndDrag(LinearLayout strip, DragEvent event) {
-        NotebookTab dragged = dragTabOf(event);
-        if (dragged == null || dragged.getParent() != strip) {
-            return false;
-        }
-        switch (event.getAction()) {
-            case DragEvent.ACTION_DRAG_STARTED:
-                return true;
-            case DragEvent.ACTION_DROP:
-                return commitNotebookReorder(dragged, null);
-            case DragEvent.ACTION_DRAG_ENDED:
-                onNotebookDragEnded(event);
-                return true;
-            default:
-                return true;
-        }
-    }
-
-    private static NotebookTab dragTabOf(DragEvent event) {
-        Object local = event.getLocalState();
-        return local instanceof NotebookTab ? (NotebookTab) local : null;
-    }
-
-    /**
-     * Insert {@code dragged} immediately before {@code before}, or at the end
-     * of its sibling strip when {@code before} is null. Same-parent only.
-     */
-    private boolean commitNotebookReorder(NotebookTab dragged, NotebookTab before) {
-        if (dragged == null) {
-            return false;
-        }
-        String beforeId = before == null ? null : before.id;
-        if (!repository.reorderNotebook(dragged.id, beforeId)) {
-            return false;
-        }
-        notebookDragReordered = true;
-        pendingNotebookMenuId = null;
-        rebuildNotebookTabs(repository.notebooks());
-        if (trail.contains(dragged.id) || Objects.equals(notebookId, dragged.id)) {
-            openNotebook(dragged.id, null);
-        } else {
-            styleTabs();
-        }
-        return true;
-    }
-
-    private void onNotebookDragEnded(DragEvent event) {
-        if (event.getAction() != DragEvent.ACTION_DRAG_ENDED) {
-            return;
-        }
-        String menuId = pendingNotebookMenuId;
-        pendingNotebookMenuId = null;
-        boolean reordered = notebookDragReordered;
-        notebookDragReordered = false;
-        if (menuId != null && !reordered && !event.getResult()) {
-            showNotebookMenu(menuId);
-        }
-    }
-
     private List<BoardRepository.NotebookInfo> childrenOf(String parentId) {
         ArrayList<BoardRepository.NotebookInfo> kids = new ArrayList<>();
         if (shownNotebooks == null) {
@@ -793,15 +661,13 @@ public final class CanvasActivity extends Activity {
         return notebookByIdIn(shownNotebooks, id);
     }
 
-    /** Parents that currently show a child bar, in trail order. */
-    private ArrayList<String> barParents(List<String> chain) {
-        ArrayList<String> out = new ArrayList<>();
-        for (String id : chain) {
-            if (!childrenOf(id).isEmpty()) {
-                out.add(id);
-            }
+    /** Tap the active-notebook chip: shared Move/Place-under hierarchy to switch. */
+    private void showNotebookSwitcher() {
+        if (shownNotebooks == null) {
+            shownNotebooks = repository.notebooks();
         }
-        return out;
+        showNotebookHierarchyMenu(activeNotebookButton, drawingArea, null, true, null,
+                id -> openNotebook(id, null));
     }
 
     /**
@@ -851,13 +717,8 @@ public final class CanvasActivity extends Activity {
      * both call this — one function, no parallel cold-start open helper.
      */
     private void openScratchpad(Integer keepScroll) {
-        boolean hadBars = !childBars.isEmpty();
         trail.clear();
-        if (hadBars) {
-            rebuildBars();
-        } else {
-            styleTabs();
-        }
+        styleTabs();
         openCollection(SCRATCHPAD, keepScroll);
     }
 
@@ -883,54 +744,11 @@ public final class CanvasActivity extends Activity {
             openNotebooks(repository.notebooks());
             return;
         }
-        boolean sameBars = !refreshed && barParents(trail).equals(barParents(next));
         trail.clear();
         trail.addAll(next);
         notebookId = id;
-        if (sameBars) {
-            styleTabs();
-        } else {
-            rebuildBars();
-        }
+        styleTabs();
         openCollection(id, keepScroll);
-        NotebookTab selected = tabFor(id);
-        if (selected != null && selected.getParent() instanceof View
-                && selected.getParent().getParent() instanceof HorizontalScrollView) {
-            HorizontalScrollView strip = (HorizontalScrollView) selected.getParent().getParent();
-            strip.post(() -> revealTab(strip, selected, true));
-        }
-    }
-
-    /** Scrolls the strip only as far as needed to show the whole tab. */
-    private void revealTab(HorizontalScrollView strip, NotebookTab tab, boolean smooth) {
-        int viewport = strip.getWidth();
-        if (viewport <= 0) {
-            return;
-        }
-        int x = strip.getScrollX();
-        int target = x;
-        if (tab.getLeft() < x) {
-            target = Math.max(0, tab.getLeft() - dp(24));
-        } else if (tab.getRight() > x + viewport) {
-            target = tab.getRight() - viewport + dp(24);
-        }
-        if (target == x) {
-            return;
-        }
-        if (smooth) {
-            strip.smoothScrollTo(target, 0);
-        } else {
-            strip.scrollTo(target, 0);
-        }
-    }
-
-    private NotebookTab tabFor(String id) {
-        for (NotebookTab tab : notebookTabs) {
-            if (tab.id.equals(id)) {
-                return tab;
-            }
-        }
-        return null;
     }
 
     private String titleOf(String id) {
@@ -2171,23 +1989,20 @@ public final class CanvasActivity extends Activity {
         reloadPages(effectiveScrollY());
     }
 
-    /** Rename / Delete, dropped down from the notebook's own tab. */
+    /** Rename / Place / Delete — anchored on the active-notebook chip. */
     private void showNotebookMenu(String id) {
-        NotebookTab tab = tabFor(id);
-        if (tab == null) {
+        if (id == null || notebookById(id) == null) {
             return;
         }
         if (Notebook.isTrash(id)) {
             showHint(getString(R.string.trash_builtin), true);
             return;
         }
-        if (tab.getParent() instanceof View && tab.getParent().getParent() instanceof HorizontalScrollView) {
-            revealTab((HorizontalScrollView) tab.getParent().getParent(), tab, false);
-        }
+        View anchor = activeNotebookButton;
         LinearLayout menu = panel();
-        menu.setMinimumWidth(Math.max(dp(200), tab.getWidth()));
-        addPanelButton(menu, getString(R.string.rename), 0, () -> showNameForm(id, tab, null, null));
-        addPanelButton(menu, getString(R.string.place_under), 0, () -> showPlaceUnderMenu(id, tab));
+        menu.setMinimumWidth(Math.max(dp(200), anchor.getWidth()));
+        addPanelButton(menu, getString(R.string.rename), 0, () -> showNameForm(id, anchor, null, null));
+        addPanelButton(menu, getString(R.string.place_under), 0, () -> showPlaceUnderMenu(id, anchor));
         addPanelButton(menu, getString(R.string.make_top_level), 0, () -> {
             if (repository.placeNotebook(id, null) && trail.contains(id)) {
                 openNotebook(id, null);
@@ -2195,8 +2010,8 @@ public final class CanvasActivity extends Activity {
                 rebuildNotebookTabs(repository.notebooks());
             }
         });
-        addPanelButton(menu, getString(R.string.delete), 0, () -> confirmDelete(id, tab));
-        showOverlay(menu, anchoredLp(tab, menu), root);
+        addPanelButton(menu, getString(R.string.delete), 0, () -> confirmDelete(id, anchor));
+        showOverlay(menu, anchoredLp(anchor, menu), root);
     }
 
     /**
@@ -2988,14 +2803,18 @@ public final class CanvasActivity extends Activity {
     }
 
     private void styleTabs() {
-        boolean scratch = trail.isEmpty() && SCRATCHPAD.equals(collectionId);
+        boolean scratch = SCRATCHPAD.equals(collectionId);
         styleTool(scratchpadTab, scratch);
-        // Underline only the open notebook (leaf), not its ancestors. Trail still
-        // opens child bars; ancestry chrome made parent+child look like one sheet
-        // (Dating selected ⇒ Stacey also underlined while pages had not switched).
         String open = notebookKey(collectionId);
-        for (NotebookTab tab : notebookTabs) {
-            tab.setCurrent(open != null && tab.id.equals(open));
+        if (open != null) {
+            String title = titleOf(open);
+            activeNotebookButton.setText(title.isEmpty() ? getString(R.string.notebooks) : title);
+            styleTab(activeNotebookButton, true);
+            inkLabel(activeNotebookButton, true);
+        } else {
+            activeNotebookButton.setText(R.string.notebooks);
+            styleTab(activeNotebookButton, false);
+            inkLabel(activeNotebookButton, false);
         }
     }
 
@@ -3005,183 +2824,9 @@ public final class CanvasActivity extends Activity {
         tab.setSelected(selected);
     }
 
-    private void styleTabLabel(Button label, String text) {
-        label.setText(text);
-        label.setAllCaps(false);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        label.setSingleLine(true);
-        label.setEllipsize(TextUtils.TruncateAt.END);
-        label.setMinWidth(0);
-        label.setMinimumWidth(0);
-        label.setMinHeight(0);
-        label.setMinimumHeight(dp(48));
-        label.setPadding(dp(14), 0, dp(14), 0);
-        label.setStateListAnimator(null);
-        label.setBackground(null);
-    }
-
     private static void inkLabel(TextView label, boolean selected) {
         label.setTextColor(Color.BLACK);
         label.setTypeface(Typeface.DEFAULT, selected ? Typeface.BOLD : Typeface.NORMAL);
-    }
-
-    /**
-     * One notebook in a nav strip. Tap opens it. Long-press then drag reorders
-     * among siblings; long-press without a drag (or a canceled drag) opens
-     * Rename / Place / Delete — not the page Reorder snackbar mode.
-     */
-    private final class NotebookTab extends LinearLayout {
-        final String id;
-        final String parentId;
-        final int depth;
-        final Button label;
-
-        NotebookTab(Context context, BoardRepository.NotebookInfo info, int depth) {
-            super(context);
-            id = info.id();
-            parentId = info.parentId();
-            this.depth = depth;
-            setOrientation(HORIZONTAL);
-            setGravity(Gravity.CENTER_VERTICAL);
-            label = new Button(context, null, android.R.attr.borderlessButtonStyle);
-            styleTabLabel(label, info.title());
-            label.setMaxWidth(dp(220));
-            label.setSoundEffectsEnabled(false);
-            label.setOnClickListener(v -> openNotebook(id, null));
-            attachNotebookTabTouch(label, this);
-            setOnDragListener((v, event) -> onNotebookTabDrag(this, event));
-            addView(label, wrap());
-            setCurrent(false);
-        }
-
-        void setCurrent(boolean current) {
-            styleTab(this, current);
-            inkLabel(label, current);
-        }
-    }
-
-    /**
-     * Long-press arms reorder; move past touch slop starts a drag. Long-press
-     * then release without a drag opens the notebook menu (same as before).
-     */
-    private void attachNotebookTabTouch(Button label, NotebookTab tab) {
-        final int slop = ViewConfiguration.get(label.getContext()).getScaledTouchSlop();
-        final int longMs = ViewConfiguration.getLongPressTimeout();
-        final float[] down = new float[2];
-        final boolean[] armed = {false};
-        final boolean[] dragging = {false};
-        final Runnable arm = () -> {
-            armed[0] = true;
-            ViewParent parent = label.getParent();
-            if (parent != null) {
-                parent.requestDisallowInterceptTouchEvent(true);
-            }
-        };
-        label.setOnTouchListener((v, event) -> {
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    UiClick.play(v.getContext());
-                    down[0] = event.getX();
-                    down[1] = event.getY();
-                    armed[0] = false;
-                    dragging[0] = false;
-                    v.removeCallbacks(arm);
-                    v.postDelayed(arm, longMs);
-                    return false;
-                case MotionEvent.ACTION_MOVE: {
-                    float dx = event.getX() - down[0];
-                    float dy = event.getY() - down[1];
-                    if (dx * dx + dy * dy <= slop * (float) slop) {
-                        return false;
-                    }
-                    v.removeCallbacks(arm);
-                    if (armed[0] && !dragging[0]) {
-                        dragging[0] = true;
-                        openNotebook(tab.id, null);
-                        dismissOverlay();
-                        pendingNotebookMenuId = tab.id;
-                        notebookDragReordered = false;
-                        ClipData data = ClipData.newPlainText("notebook", tab.id);
-                        v.startDragAndDrop(data, new View.DragShadowBuilder(v), tab, 0);
-                        return true;
-                    }
-                    return dragging[0];
-                }
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    v.removeCallbacks(arm);
-                    if (armed[0] && !dragging[0]
-                            && event.getActionMasked() == MotionEvent.ACTION_UP) {
-                        openNotebook(tab.id, null);
-                        showNotebookMenu(tab.id);
-                        return true;
-                    }
-                    return dragging[0];
-                default:
-                    return false;
-            }
-        });
-        // performLongClick / a11y: same menu. Touch long-press is handled above
-        // (arm → drag or menu on release); framework long-click must stay off so
-        // it does not open the menu before a drag can start.
-        label.setOnLongClickListener(v -> {
-            openNotebook(tab.id, null);
-            showNotebookMenu(tab.id);
-            return true;
-        });
-        label.setLongClickable(false);
-    }
-
-    private boolean onNotebookTabDrag(NotebookTab target, DragEvent event) {
-        NotebookTab dragged = dragTabOf(event);
-        if (dragged == null || dragged == target) {
-            if (event.getAction() == DragEvent.ACTION_DRAG_ENDED) {
-                onNotebookDragEnded(event);
-            }
-            return dragged != null;
-        }
-        if (!Objects.equals(dragged.parentId, target.parentId)
-                || dragged.depth != target.depth
-                || dragged.getParent() != target.getParent()) {
-            return false;
-        }
-        switch (event.getAction()) {
-            case DragEvent.ACTION_DRAG_STARTED:
-                return true;
-            case DragEvent.ACTION_DRAG_ENTERED:
-            case DragEvent.ACTION_DRAG_LOCATION:
-            case DragEvent.ACTION_DRAG_EXITED:
-                return true;
-            case DragEvent.ACTION_DROP: {
-                // Left half → insert before target; right half → before the next sibling.
-                NotebookTab before = event.getX() < target.getWidth() / 2f
-                        ? target
-                        : nextSiblingTab(target);
-                return commitNotebookReorder(dragged, before);
-            }
-            case DragEvent.ACTION_DRAG_ENDED:
-                onNotebookDragEnded(event);
-                return true;
-            default:
-                return false;
-        }
-    }
-
-    /** Next notebook tab in the same strip, or null when {@code tab} is last. */
-    private NotebookTab nextSiblingTab(NotebookTab tab) {
-        ViewParent parent = tab.getParent();
-        if (!(parent instanceof LinearLayout)) {
-            return null;
-        }
-        LinearLayout strip = (LinearLayout) parent;
-        int at = strip.indexOfChild(tab);
-        for (int i = at + 1; i < strip.getChildCount(); i++) {
-            View child = strip.getChildAt(i);
-            if (child instanceof NotebookTab) {
-                return (NotebookTab) child;
-            }
-        }
-        return null;
     }
 
     private void updateExcludeRects() {
@@ -3197,13 +2842,9 @@ public final class CanvasActivity extends Activity {
         // The reader owns the stylus wherever it can draw. Every control is a hole,
         // in the surface view's coordinates, including the bars above the page.
         addExclude(rects, topBar, dp(6), origin, loc);
-        for (View bar : childBars) {
-            addExclude(rects, bar, dp(6), origin, loc);
-        }
         addExclude(rects, modeBar, MOVE_EXCLUDE_PAD_PX, origin, loc);
         addExclude(rects, deleteUndoBar, MOVE_EXCLUDE_PAD_PX, origin, loc);
         addExclude(rects, lassoMenu, MOVE_EXCLUDE_PAD_PX, origin, loc);
-        addExclude(rects, toolbar, dp(6), origin, loc);
         int top = scroller.getScrollY();
         int bottom = top + scroller.getHeight();
         int first = indexAt(top);

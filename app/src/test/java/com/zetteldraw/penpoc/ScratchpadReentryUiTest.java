@@ -75,7 +75,7 @@ public class ScratchpadReentryUiTest {
         assertTrue("open Scratchpad must be multi-page, was " + openLabels, openLabels.size() > 1);
         assertFalse(repo.scratchpadPages().get(0).isBlank());
 
-        assertTrue(findText(root, "comedy").performClick());
+        NavClicks.openNotebook(root, "comedy");
         idle();
         assertTrue(byDescription(root, "Scratchpad").get(0).performClick());
         idle();

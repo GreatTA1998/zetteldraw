@@ -59,21 +59,21 @@ public class CanvasActivitySmokeTest {
         BoardRepository repo = ZettelData.repository(activity);
         idle();
 
-        assertNotNull("seed tabs share the top bar with Scratchpad", find(root, "comedy"));
+        assertNull("seed titles are not listed on the compact bar", find(root, "comedy"));
+        assertNotNull(find(root, "Notebooks"));
         assertTrue("no options glyph in the top bar", tabMenus(root).isEmpty());
-        assertNull("no separate Notebooks row", find(root, "Notebooks"));
-        click(root, "comedy");
-        View comedyTab = (View) find(root, "comedy").getParent();
-        assertTrue("open tab is marked", comedyTab.isSelected());
-        assertTrue("open tab is underlined, not filled", comedyTab.getBackground() != null
-                && !(comedyTab.getBackground() instanceof android.graphics.drawable.GradientDrawable));
-        assertNull("other tabs have no background", ((View) find(root, "journal").getParent()).getBackground());
+        NavClicks.openNotebook(root, "comedy");
+        View comedyChip = byDescription(root, "Switch notebook").get(0);
+        assertTrue("open notebook chip is marked", comedyChip.isSelected());
+        assertEquals("comedy", ((android.widget.TextView) comedyChip).getText().toString());
+        assertTrue("open chip is underlined, not filled", comedyChip.getBackground() != null
+                && !(comedyChip.getBackground() instanceof android.graphics.drawable.GradientDrawable));
+        assertNull("other notebooks stay off the bar", find(root, "journal"));
         assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
         assertTrue("still no tab options glyph once a notebook is open", tabMenus(root).isEmpty());
         View plus = find(root, "+");
-        assertSame("+ scrolls with the tabs", find(root, "comedy").getParent().getParent(), plus.getParent());
-        ViewGroup strip = (ViewGroup) plus.getParent();
-        assertSame("+ comes after the last notebook", plus, strip.getChildAt(strip.getChildCount() - 1));
+        assertNotNull(plus);
+        assertSame("+ sits on the compact top bar", comedyChip.getParent(), plus.getParent());
 
         click(root, "+");
         EditText name = findEdit(root);
@@ -83,27 +83,28 @@ public class CanvasActivitySmokeTest {
         assertNull("form closed", findEdit(root));
         // 5 seeds (incl. Trash) + sketches
         assertEquals(6, repo.notebooks().size());
-        assertNotNull("new tab shown", find(root, "sketches"));
-        assertTrue("new notebook opens", ((View) find(root, "sketches").getParent()).isSelected());
-        assertSame("+ moves after the new tab", plus, strip.getChildAt(strip.getChildCount() - 1));
-        assertSame(find(root, "sketches").getParent(), strip.getChildAt(strip.getChildCount() - 2));
+        assertEquals("sketches", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
 
-        longPress(root, "sketches");
+        assertTrue(byDescription(root, "Switch notebook").get(0).performLongClick());
+        idle();
         click(root, "Rename");
         name = findEdit(root);
         assertEquals("sketches", name.getText().toString());
         name.setText("drawings");
         click(root, "Save");
         assertEquals("drawings", repo.notebooks().get(5).title());
-        assertNotNull(find(root, "drawings"));
+        assertEquals("drawings", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
 
-        longPress(root, "drawings");
+        assertTrue(byDescription(root, "Switch notebook").get(0).performLongClick());
+        idle();
         click(root, "Delete");
         assertNotNull("confirmation shown", find(root, "Delete “drawings”?"));
         click(root, "Cancel");
         assertEquals(6, repo.notebooks().size());
 
-        longPress(root, "drawings");
+        assertTrue(byDescription(root, "Switch notebook").get(0).performLongClick());
+        idle();
         click(root, "Delete");
         clickLast(root, "Delete");
         assertEquals(5, repo.notebooks().size());
@@ -113,29 +114,28 @@ public class CanvasActivitySmokeTest {
     }
 
     @Test
-    public void longPressAnyTabOpensItsMenuUnderThatTab() {
+    public void longPressActiveNotebookOpensItsMenu() {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
 
-        TextView journal = find(root, "journal");
-        assertTrue(journal.performLongClick());
-        idle();
-        assertTrue("long-press selects the tab", ((View) journal.getParent()).isSelected());
+        NavClicks.longPressOpenNotebook(root, "journal");
+        View chip = byDescription(root, "Switch notebook").get(0);
+        assertTrue("long-press keeps the notebook selected", chip.isSelected());
         TextView rename = find(root, "Rename");
         assertNotNull("menu shown in-window", rename);
         int[] tab = new int[2];
         int[] item = new int[2];
-        ((View) journal.getParent()).getLocationInWindow(tab);
+        chip.getLocationInWindow(tab);
         ((View) rename.getParent()).getLocationInWindow(item);
-        assertTrue("menu hangs below the tab", item[1] > tab[1]);
+        assertTrue("menu hangs below the chip", item[1] > tab[1]);
 
         click(root, "Rename");
         EditText name = findEdit(root);
         assertEquals("journal", name.getText().toString());
         name.setText("diary");
         click(root, "Save");
-        assertNotNull(find(root, "diary"));
+        assertEquals("diary", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertNull(find(root, "journal"));
 
         clickDesc(root, "Scratchpad");
@@ -216,7 +216,7 @@ public class CanvasActivitySmokeTest {
         View root = controller.get().getWindow().getDecorView();
         idle();
 
-        click(root, "comedy");
+        NavClicks.openNotebook(root, "comedy");
         assertEquals("empty notebook shows Create new page", 1, byDescription(root, "Create new page").size());
         assertTrue(pageLabels(root).isEmpty());
         assertNull("no empty-notebook hint any more", find(root, "No notebooks yet. Tap + to add one."));
@@ -305,7 +305,7 @@ public class CanvasActivitySmokeTest {
         idle();
         assertFalse("a new edit clears redo", byDescription(root, "Redo").get(0).isEnabled());
 
-        click(root, "comedy");
+        NavClicks.openNotebook(root, "comedy");
         assertFalse("history is per page list", byDescription(root, "Undo").get(0).isEnabled());
         controller.pause().stop().destroy();
     }
@@ -406,7 +406,7 @@ public class CanvasActivitySmokeTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
-        click(root, "lasso");
+        NavClicks.openNotebook(root, "lasso");
         PageInkView ink = findInk(root);
         assertNotNull(ink);
 
@@ -517,7 +517,7 @@ public class CanvasActivitySmokeTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
-        click(root, "longpress-paste");
+        NavClicks.openNotebook(root, "longpress-paste");
         idle();
         clickDesc(root, "Lasso");
         PageInkView ink = findInk(root);
@@ -559,10 +559,10 @@ public class CanvasActivitySmokeTest {
         PageInkView ink = findInk(root);
         List<Rect> holes = ink.penExcludes();
 
-        View toolbar = (View) byDescription(root, "Lasso").get(0).getParent();
         View topBar = (View) byDescription(root, "Scratchpad").get(0).getParent();
-        assertNotNull("toolbar is a hole in the pen reader", cover(ink, toolbar, holes));
-        assertNotNull("tab bar is a hole in the pen reader", cover(ink, topBar, holes));
+        assertSame("tools share the compact top bar with Scratchpad",
+                topBar, byDescription(root, "Lasso").get(0).getParent());
+        assertNotNull("compact top bar is a hole in the pen reader", cover(ink, topBar, holes));
 
         TextView move = null;
         Rect hole = null;

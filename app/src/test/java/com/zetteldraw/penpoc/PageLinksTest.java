@@ -428,7 +428,7 @@ public class PageLinksTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         openNotebook(root, "frombook");
-        click(root, "shelf");
+        openNotebook(root, "shelf");
         openNotebook(root, "chapter");
         int height = repo.pages(chapter.id()).get(0).slicePx;
         ink(repo, from.id(), 10f);
@@ -439,7 +439,7 @@ public class PageLinksTest {
 
         openNotebook(root, "frombook");
         clickOnPage(root, "1/1", "Link");
-        click(root, "shelf");
+        openNotebook(root, "shelf");
         openNotebook(root, "chapter");
         View scroller = pageScroller(root);
         // Park on page 1 so the link target banner names chapter 1 (first open after
@@ -461,9 +461,9 @@ public class PageLinksTest {
 
         openNotebook(root, "frombook");
         click(root, "→ chapter 1/4");
-        assertFalse("ancestor shelf is not underlined",
-                ((View) find(root, "shelf").getParent()).isSelected());
-        assertTrue(((View) find(root, "chapter").getParent()).isSelected());
+        assertEquals("chapter", ((android.widget.TextView) NavClicks.byDescription(root, "Switch notebook")).getText().toString());
+        assertTrue(NavClicks.byDescription(root, "Switch notebook").isSelected());
+        assertNull(find(root, "shelf"));
         scroller = pageScroller(root);
         assertEquals("the link opens page 1, not the last inked page", 0, scroller.getScrollY());
         TextView first = find(root, "1/4");
@@ -490,7 +490,7 @@ public class PageLinksTest {
     }
 
     private static void openNotebook(View root, String title) {
-        click(root, title);
+        NavClicks.openNotebook(root, title);
         idleForPaint();
         relayout(root);
     }

@@ -142,7 +142,7 @@ public class LaunchTest {
         ShadowLooper.idleMainLooper(1_100, TimeUnit.MILLISECONDS);
         // Retry re-ensures the seeded createPage slice.
         assertEquals("[1/1]", CanvasActivitySmokeTest.pageLabels(root).toString());
-        assertNotNull("tabs came with it", findText(root, "comedy"));
+        assertNotNull("compact switcher chip came with it", NavClicks.byDescription(root, "Switch notebook"));
         controller.pause().stop().destroy();
     }
 
@@ -224,6 +224,9 @@ public class LaunchTest {
         repo.applyPull(page);
         ShadowLooper.idleMainLooper();
 
+        // Compact nav does not list notebooks on the strip — open the shared switcher.
+        assertTrue(NavClicks.byDescription(root, "Switch notebook").performClick());
+        ShadowLooper.idleMainLooper();
         assertNotNull("the open screen still hears about the pull", findText(root, "from the web"));
         second.pause().stop().destroy();
     }

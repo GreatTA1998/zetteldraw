@@ -109,7 +109,7 @@ public class ScratchpadNavigationTest {
         idle();
         assertEquals(leftBehind, scroller.getScrollY());
 
-        assertTrue(find(root, "comedy").performClick());
+        NavClicks.openNotebook(root, "comedy");
         idle();
         idleForPaint();
         relayout(root);
@@ -142,7 +142,7 @@ public class ScratchpadNavigationTest {
         idle();
         // Do not relayout: pendingScrollY holds first-open last-page target while
         // ScrollView may still read 0. Switching away must not persist Y=0.
-        assertTrue(find(root, "comedy").performClick());
+        NavClicks.openNotebook(root, "comedy");
         idle();
 
         int saved = app.getSharedPreferences("canvas", Context.MODE_PRIVATE)
@@ -181,7 +181,7 @@ public class ScratchpadNavigationTest {
         idle();
         assertEquals(midY, scroller.getScrollY());
 
-        assertTrue(find(root, "comedy").performClick());
+        NavClicks.openNotebook(root, "comedy");
         idle();
         idleForPaint();
         relayout(root);
@@ -228,9 +228,8 @@ public class ScratchpadNavigationTest {
         View root = controller.get().getWindow().getDecorView();
         ShadowLooper.idleMainLooper();
         // Tabs may appear before pages; switch away while Scratchpad load is gated.
-        TextView comedy = find(root, "comedy");
-        if (comedy != null) {
-            assertTrue(comedy.performClick());
+        if (NavClicks.byDescription(root, "Switch notebook") != null) {
+            NavClicks.openNotebook(root, "comedy");
             ShadowLooper.idleMainLooper();
         }
         gate.countDown();

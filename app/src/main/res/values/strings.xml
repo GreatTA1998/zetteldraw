@@ -2,6 +2,8 @@
 <resources>
     <string name="app_name">Zetteldraw</string>
     <string name="scratchpad">Scratchpad</string>
+    <string name="notebooks">Notebooks</string>
+    <string name="switch_notebook">Switch notebook</string>
     <string name="open_loading">Loading pages…</string>
     <string name="pen">Pen</string>
     <string name="eraser">Eraser</string>

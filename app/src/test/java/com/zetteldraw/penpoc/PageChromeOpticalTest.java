@@ -70,10 +70,10 @@ public class PageChromeOpticalTest {
         ActivityController<CanvasActivity> controller = Robolectric.buildActivity(CanvasActivity.class).setup();
         View root = controller.get().getWindow().getDecorView();
         idle();
-        click(root, "chrome");
+        NavClicks.openNotebook(root, "chrome");
         idleForPaint();
         ink(repo, book.id(), 40f);
-        click(root, "chrome");
+        NavClicks.openNotebook(root, "chrome");
         idleForPaint();
         relayout(root);
         // Drain moreButton.post(opticalAlign…).

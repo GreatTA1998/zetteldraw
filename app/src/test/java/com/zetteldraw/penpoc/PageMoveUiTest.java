@@ -266,7 +266,7 @@ public class PageMoveUiTest {
     }
 
     private static void openNotebook(View root, String title) {
-        click(root, title);
+        NavClicks.openNotebook(root, title);
         idleForPaint();
         relayout(root);
     }
