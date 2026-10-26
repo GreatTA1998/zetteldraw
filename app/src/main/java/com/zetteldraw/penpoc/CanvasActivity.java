@@ -2873,7 +2873,8 @@ public final class CanvasActivity extends Activity {
             addExclude(rects, slot.linkButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
             addExclude(rects, slot.reorderButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
             addExclude(rects, slot.moveButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
-            addExclude(rects, slot.moreButton, dp(6), origin, loc);
+            // moreButton already has a finger-sized min box; small pad only.
+            addExclude(rects, slot.moreButton, MOVE_EXCLUDE_PAD_PX, origin, loc);
             addExclude(rects, slot.number, dp(6), origin, loc);
             for (View line : slot.linkLines) {
                 addExclude(rects, line, MOVE_EXCLUDE_PAD_PX, origin, loc);
@@ -2966,10 +2967,9 @@ public final class CanvasActivity extends Activity {
             chromeWord(linkButton);
             chromeWord(reorderButton);
             chromeWord(moveButton);
-            // Slightly larger than Move/Link (14sp) for e-ink tap; baselineAligned
-            // keeps feet on the same line — no extra pad into the page.
-            moreButton = tinyButton(getString(R.string.notebook_options), 16);
-            chromeWord(moreButton);
+            // 20sp glyph + finger min box (pad still 0). See chromeMore().
+            moreButton = tinyButton(getString(R.string.notebook_options), 20);
+            chromeMore(moreButton);
             moreButton.setContentDescription(getString(R.string.page_options));
             onTap(linkButton, v -> startMode(this, false));
             onTap(reorderButton, v -> startMode(this, true));
@@ -3082,15 +3082,35 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Page chrome (Link / Reorder / Move / ⋮): padding 0 and no min size so the
-     * hit target is the visible label. Visual gaps live on layout margins
-     * (outside the hit rect). Ink exclude holes follow view bounds.
+     * Page chrome Link / Reorder / Move: padding 0 and no min size so the hit
+     * target is the visible label. Visual gaps live on layout margins (outside
+     * the hit rect). Ink exclude holes follow view bounds.
      */
     private void chromeWord(Button button) {
         button.setMinimumWidth(0);
         button.setMinWidth(0);
         button.setMinimumHeight(0);
         button.setMinHeight(0);
+        button.setPadding(0, 0, 0, 0);
+        button.setIncludeFontPadding(false);
+        button.setGravity(Gravity.CENTER);
+    }
+
+    /**
+     * Page ⋮: same pad-0 rule as {@link #chromeWord}, but a finger-usable min
+     * box. Why finger missed before: hit bounds ≈ glyph only (~narrow ⋮ at
+     * 14–16sp); TouchHelper owns the surface except exclude rects that track
+     * those tiny view bounds — so a fat finger rarely lands inside the View,
+     * and the stylus (precise) sometimes did. Fix: min 40×40 dp hit box with
+     * Gravity.CENTER (glyph stays small); no padding into Move/edge gaps
+     * (those stay layout <b>margin</b>). Baseline still aligns with Move.
+     */
+    private void chromeMore(Button button) {
+        int finger = dp(40);
+        button.setMinimumWidth(finger);
+        button.setMinWidth(finger);
+        button.setMinimumHeight(finger);
+        button.setMinHeight(finger);
         button.setPadding(0, 0, 0, 0);
         button.setIncludeFontPadding(false);
         button.setGravity(Gravity.CENTER);

@@ -44,9 +44,9 @@ android {
         applicationId = "com.zetteldraw.penpoc"
         minSdk = 26
         targetSdk = 36
-        // Tip v177: chip select-then-menu; slightly larger ⋮ (baseline kept).
-        versionCode = 177
-        versionName = "4.56"
+        // Tip v178: page ⋮ 20sp + finger min hit box (pad 0).
+        versionCode = 178
+        versionName = "4.57"
         ndk {
             // -Pzetteldraw.emulator: an x86_64 build without the arm64-only Onyx libraries, for launch and data tests.
             // Play bundles must stay arm64-v8a. Do not pass zetteldraw.emulator for a store build.

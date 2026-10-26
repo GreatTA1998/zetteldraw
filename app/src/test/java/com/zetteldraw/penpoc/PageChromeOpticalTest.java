@@ -90,7 +90,14 @@ public class PageChromeOpticalTest {
         assertZeroHitSlop(link);
         assertZeroHitSlop(reorder);
         assertZeroHitSlop(move);
-        assertZeroHitSlop(more);
+        // ⋮: pad 0 but finger-sized min box (not glyph-only).
+        assertEquals(0, more.getPaddingLeft());
+        assertEquals(0, more.getPaddingTop());
+        assertEquals(0, more.getPaddingRight());
+        assertEquals(0, more.getPaddingBottom());
+        assertTrue("⋮ finger min width", more.getMinimumWidth() >= dp(root, 40));
+        assertTrue("⋮ finger min height", more.getMinimumHeight() >= dp(root, 40));
+        assertEquals(20f, more.getTextSize() / root.getResources().getDisplayMetrics().scaledDensity, 0.01f);
 
         View pageSlot = pageSlotOf(link);
         assertNotNull(pageSlot);
