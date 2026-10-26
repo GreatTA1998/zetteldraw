@@ -9,7 +9,6 @@ import static org.junit.Assert.assertTrue;
 import android.app.Application;
 
 import com.zetteldraw.penpoc.Board;
-import com.zetteldraw.penpoc.Notebook;
 import com.zetteldraw.penpoc.data.db.NotebookEntity;
 import com.zetteldraw.penpoc.data.db.NotebookLogEntity;
 import com.zetteldraw.penpoc.data.db.OutboxEntry;
@@ -27,8 +26,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Delete = Move into built-in Trash (same placePageBefore spine). Sync is both
- * notebook logs — not a BoardEntity / slice tombstone.
+ * Ready-path delete removes a paper slice. Sync of the delete is deferred until
+ * {@link BoardRepository#commitPendingDelete} (Undo window); then the notebook
+ * log outbox carries it — not a BoardEntity tombstone.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 33, application = Application.class)
@@ -46,8 +46,6 @@ public class PageDeleteTest {
         b = new Device("b", tmp.newFolder("b"), 1_800_000_500_000L);
         a.ensureReady();
         b.ensureReady();
-        a.ensureReady(Notebook.TRASH.uuid);
-        b.ensureReady(Notebook.TRASH.uuid);
     }
 
     @After
@@ -57,12 +55,11 @@ public class PageDeleteTest {
     }
 
     @Test
-    public void deleteMovesSliceToTrashAndLogSyncs() {
+    public void deleteRemovesSliceAndCommitSyncs() {
         Board first = drawnScratchpadPage(a, 10f);
         Board second = drawnScratchpadPage(a, 20f);
         relay(a, b);
         b.ensureReady();
-        b.ensureReady(Notebook.TRASH.uuid);
         assertEquals(2, b.repo.scratchpadPages().size());
 
         a.tick();
@@ -70,23 +67,39 @@ public class PageDeleteTest {
         a.repo.deletePage(firstId);
         assertTrue(a.repo.scratchpadPages().get(0).paper.indexOfSliceId(firstId) < 0);
         assertEquals(List.of(second.id), inkedIds(a.repo.scratchpadPages()));
-        BoardRepository.PagePlace trashPlace = a.repo.placeOf(firstId);
-        assertNotNull(trashPlace);
-        assertTrue(Notebook.isTrash(trashPlace.notebookId()));
-        assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(null)));
-        assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, Notebook.TRASH.uuid));
+        String sheetId = NotebookPaper.sheetId(null);
+        // Deferred: tear is in memory only until commit.
+        assertNull(a.db.dao().outbox(OutboxEntry.LOG, sheetId));
+
+        a.repo.commitPendingDelete();
+        assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, sheetId));
 
         relay(a, b);
         b.ensureReady();
-        b.ensureReady(Notebook.TRASH.uuid);
         assertEquals(0, a.repo.outboxSize());
         assertEquals(List.of(second.id), inkedIds(b.repo.scratchpadPages()));
-        assertNotNull(b.repo.placeOf(firstId));
-        assertTrue(Notebook.isTrash(b.repo.placeOf(firstId).notebookId()));
+        assertNull(b.repo.placeOf(firstId));
     }
 
     @Test
-    public void blankPagesCanBeDeletedIntoTrash() {
+    public void undoRestoresSliceWithoutSyncing() {
+        Board first = drawnScratchpadPage(a, 10f);
+        Board second = drawnScratchpadPage(a, 20f);
+        String firstId = first.id;
+        // Drawing already queued a LOG outbox; capture size so Undo must not add more.
+        // Do not call placeOf here — it ensureSheet()s every notebook and queues logs.
+        int outboxBefore = a.repo.outboxSize();
+        a.repo.deletePage(firstId);
+        assertTrue(a.repo.scratchpadPages().get(0).paper.indexOfSliceId(firstId) < 0);
+        assertEquals("deferred delete must not sync yet", outboxBefore, a.repo.outboxSize());
+        assertTrue(a.repo.undoPendingDelete());
+        assertEquals(List.of(firstId, second.id), inkedIds(a.repo.scratchpadPages()));
+        assertEquals("Undo must not queue a new LOG (reload from pre-tear disk)",
+                outboxBefore, a.repo.outboxSize());
+    }
+
+    @Test
+    public void blankPagesCanBeDeleted() {
         Board page = drawnScratchpadPage(a, 10f);
         drawnScratchpadPage(a, 20f);
         a.repo.wipePage(page.id);
@@ -95,23 +108,25 @@ public class PageDeleteTest {
         assertEquals(page.id, pages.get(0).id);
 
         a.repo.deletePage(page.id);
+        a.repo.commitPendingDelete();
         pages = a.repo.scratchpadPages();
         assertEquals(1, pages.size());
         assertFalse(pages.get(0).isBlank());
-        assertTrue(Notebook.isTrash(a.repo.placeOf(page.id).notebookId()));
+        assertNull(a.repo.placeOf(page.id));
     }
 
     @Test
-    public void deletingTheOnlyInkedPageLeavesScratchpadEmptyAndLandsInTrash() {
+    public void deletingTheOnlyInkedPageLeavesSheetEmpty() {
         Board only = drawnScratchpadPage(a, 10f);
         assertEquals(1, a.repo.scratchpadPages().size());
         a.repo.deletePage(only.id);
+        a.repo.commitPendingDelete();
         assertTrue(a.repo.scratchpadPages().isEmpty());
-        assertTrue(Notebook.isTrash(a.repo.placeOf(only.id).notebookId()));
+        assertNull(a.repo.placeOf(only.id));
     }
 
     @Test
-    public void notebookPagesDeleteIntoTrashWithoutTouchingTheScratchpad() {
+    public void notebookPagesDeleteWithoutTouchingTheScratchpad() {
         Board page = drawnScratchpadPage(a, 10f);
         BoardRepository.NotebookInfo notebook = a.repo.createNotebook("gone");
         a.ensureReady(notebook.id());
@@ -123,37 +138,28 @@ public class PageDeleteTest {
         assertEquals(2, a.repo.notebookPages(notebook.id()).size());
 
         a.repo.deletePage(page.id);
+        a.repo.commitPendingDelete();
         List<Board> pages = a.repo.notebookPages(notebook.id());
         assertEquals(RoomBoardRepositoryTest.ids(next), RoomBoardRepositoryTest.ids(pages));
         assertTrue(a.repo.scratchpadPages().isEmpty());
-        assertTrue(Notebook.isTrash(a.repo.placeOf(page.id).notebookId()));
         assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(notebook.id())));
-        assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, Notebook.TRASH.uuid));
+        assertNull(a.repo.placeOf(page.id));
     }
 
     @Test
-    public void undoPlaceBeforeRestoresPriorNotebookAndNeighbor() {
+    public void nextDeleteCommitsPriorPending() {
         Board first = drawnScratchpadPage(a, 10f);
         Board second = drawnScratchpadPage(a, 20f);
-        String firstId = first.id;
-        String beforeId = second.id;
-        a.repo.deletePage(firstId);
-        assertTrue(Notebook.isTrash(a.repo.placeOf(firstId).notebookId()));
-        assertTrue(a.repo.placePageBefore(firstId, beforeId, null));
-        List<Board> pages = a.repo.scratchpadPages();
-        assertEquals(List.of(firstId, second.id), inkedIds(pages));
-        assertNull(a.repo.placeOf(firstId).notebookId());
-    }
-
-    @Test
-    public void deleteAlreadyInTrashIsNoOp() {
-        Board page = drawnScratchpadPage(a, 10f);
-        a.repo.deletePage(page.id);
-        assertTrue(Notebook.isTrash(a.repo.placeOf(page.id).notebookId()));
-        int trashCount = a.repo.notebookPages(Notebook.TRASH.uuid).size();
-        a.repo.deletePage(page.id);
-        assertEquals(trashCount, a.repo.notebookPages(Notebook.TRASH.uuid).size());
-        assertTrue(Notebook.isTrash(a.repo.placeOf(page.id).notebookId()));
+        a.repo.deletePage(first.id);
+        assertNull(a.repo.placeOf(first.id));
+        a.repo.deletePage(second.id);
+        // First delete committed when second started — outbox has scratchpad log.
+        assertNotNull(a.db.dao().outbox(OutboxEntry.LOG, NotebookPaper.sheetId(null)));
+        assertNull(a.repo.placeOf(second.id));
+        // Undo only restores the most recent (second); first stays gone.
+        assertTrue(a.repo.undoPendingDelete());
+        assertNull(a.repo.placeOf(first.id));
+        assertNotNull(a.repo.placeOf(second.id));
     }
 
     private static Board drawnScratchpadPage(Device d, float y) {

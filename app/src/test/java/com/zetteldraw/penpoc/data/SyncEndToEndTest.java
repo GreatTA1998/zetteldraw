@@ -141,17 +141,16 @@ public class SyncEndToEndTest {
             assertEquals(0, d.repo.outboxSize());
         }
 
-        // A deletes the page into Trash; B sees it leave Scratchpad and land in Trash.
+        // A deletes the page for real; after commit, B sees it leave Scratchpad.
         a.tick();
-        a.ensureReady(com.zetteldraw.penpoc.Notebook.TRASH.uuid);
         a.repo.deletePage(page.id);
+        a.repo.commitPendingDelete();
         drain(a);
         sync(a);
         sync(b);
         assertTrue(b.ensureReady());
-        assertTrue(b.ensureReady(com.zetteldraw.penpoc.Notebook.TRASH.uuid));
         assertNull(find(b.repo.scratchpadPages(), page.id));
-        assertNotNull(find(b.repo.notebookPages(com.zetteldraw.penpoc.Notebook.TRASH.uuid), page.id));
+        assertNull(b.repo.placeOf(page.id));
     }
 
     private static void drain(Device d) throws Exception {

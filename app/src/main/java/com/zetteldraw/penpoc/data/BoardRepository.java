@@ -105,13 +105,24 @@ public interface BoardRepository {
     void wipePage(String boardId);
 
     /**
-     * Delete one Ready page by <strong>moving</strong> it into the built-in
-     * Trash notebook (same {@link #movePageToNotebook} / {@link #placePageBefore}
-     * spine as the Move menu). No BoardEntity tombstone; links stay. Already in
-     * Trash is a no-op. Paper-null / unmigrated ids refuse — ensure first.
-     * Recover later by Move out of Trash; Undo in the UI reverses the move.
+     * Tear-delete one Ready page (real remove, not Move). Defers disk/outbox
+     * flush and link tombstones until {@link #commitPendingDelete} so the UI
+     * can offer one in-memory Undo. A new delete commits any prior pending
+     * delete first. Paper-null / unmigrated ids refuse — ensure first.
      */
     void deletePage(String boardId);
+
+    /**
+     * Restore the one pending deleted page (most recent {@link #deletePage}
+     * that has not been committed). False when nothing to undo.
+     */
+    boolean undoPendingDelete();
+
+    /**
+     * Flush the deferred tear to disk/outbox and tombstone links. No-op when
+     * nothing is pending. Call on undo-window timeout, dismiss, or next delete.
+     */
+    void commitPendingDelete();
 
     /**
      * Stores one link from {@code sourceId} to {@code targetId}. Null when the

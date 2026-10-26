@@ -45,11 +45,11 @@
     <string name="delete_page">Delete page</string>
     <string name="wipe_page_title">Wipe this page?</string>
     <string name="wipe_page_body">Its ink is cleared. The page stays.</string>
-    <string name="page_moved_to_trash">Moved to Trash</string>
-    <string name="trash_builtin">Trash is built-in</string>
-    <string name="no_notebooks_bar">No notebooks yet. Open Notebooks and tap + New notebook.</string>
+    <string name="page_deleted">Page deleted</string>
+    <string name="delete_failed">Couldn’t delete that page.</string>
+    <string name="notebook_fallback">notebook</string>
+    <string name="no_notebooks_bar">No notebooks yet. Open the menu and tap + New notebook.</string>
     <string name="add_notebook">+</string>
-    <string name="trash">Trash</string>
     <string name="notebook_options">⋮</string>
     <string name="new_notebook">New notebook</string>
     <string name="new_notebook_item">+ New notebook</string>

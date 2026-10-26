@@ -70,7 +70,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * One compact top bar: Scratchpad icon | active notebook (tap toggles the same
  * multi-column hierarchy menu as Move / Place under; create via + New notebook
- * inside that menu) | Trash icon | undo/redo | pen/eraser/lasso | settings.
+ * inside that menu) | undo/redo | pen/eraser/lasso | settings.
  * No persistent top-level notebook strip, no child-notebook bars, and no bar +.
  * Long-press the active notebook for Rename / Place / Delete. Link / Reorder
  * keep the bottom Confirm/Cancel snackbar. Each collection is a continuous
@@ -80,6 +80,8 @@ public final class CanvasActivity extends Activity {
     private static final long SCROLL_SETTLE_MS = 160;
     private static final String SCRATCHPAD = "scratchpad";
     private static final String PREFS = "canvas";
+    /** Most recently opened normal notebook — chip label while on Scratchpad. */
+    private static final String PREF_LAST_NOTEBOOK = "lastNotebookId";
     /**
      * Scroll intent lives in {@link CollectionNav} (Y only — not page count).
      * Length SoT is Ready ink-log via the repository. Remember via
@@ -111,17 +113,12 @@ public final class CanvasActivity extends Activity {
     private Button modeConfirm;
     /**
      * Post-delete undo chip (Material-style). Separate from Link/Reorder
-     * {@link #modeBar} Confirm/Cancel — Delete moves to Trash then offers Undo.
+     * {@link #modeBar} Confirm/Cancel — real delete holds one Undo payload.
      */
     private LinearLayout deleteUndoBar;
     private TextView deleteUndoText;
-    private final Runnable clearDeleteUndo = this::hideDeleteUndo;
-    /** Page id last moved to Trash; Undo reverses to {@link #deleteUndoPriorNotebookId}. */
-    private String deleteUndoPageId;
-    /** Prior notebook ({@code null} = Scratchpad) before Delete→Trash. */
-    private String deleteUndoPriorNotebookId;
-    /** Page that sat after the deleted one (null = was last → Undo appends). */
-    private String deleteUndoBeforeId;
+    /** Timeout / dismiss commits the deferred tear (does not undo). */
+    private final Runnable clearDeleteUndo = this::commitDeleteUndo;
     /**
      * Notes-like floating pill above the lasso selection (Cut / Copy / Delete,
      * optional Paste). Parent is {@link #root} (same overlay layer as
@@ -147,9 +144,8 @@ public final class CanvasActivity extends Activity {
     /** Full-width control under the last real page (or alone when empty). */
     private Button createPageButton;
     private ImageButton scratchpadTab;
-    /** Active notebook title, or "Notebooks" on Scratchpad/Trash — opens hierarchy switcher. */
+    /** Real notebook name (+ ▾); MRU name on Scratchpad — opens hierarchy switcher. */
     private Button activeNotebookButton;
-    private ImageButton trashTab;
     private ImageButton penButton;
     private ImageButton eraserButton;
     private ImageButton lassoButton;
@@ -428,12 +424,14 @@ public final class CanvasActivity extends Activity {
     @Override
     protected void onPause() {
         rememberOpenScroll();
+        commitDeleteUndo();
         inkView.pauseLive();
         super.onPause();
     }
 
     @Override
     protected void onDestroy() {
+        commitDeleteUndo();
         repository.removeRemoteChangeListener(remoteChanged);
         scroller.removeCallbacks(scrollSettled);
         toolHint.removeCallbacks(clearHint);
@@ -442,9 +440,9 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Single chrome strip: Scratchpad | active notebook | Trash | hint |
-     * undo/redo | tools | settings. Active notebook toggles the shared
-     * hierarchy switcher (create lives inside that menu, not on the bar).
+     * Single chrome strip: Scratchpad | notebook chip (name ▾) | hint |
+     * undo/redo | tools | settings. Chip toggles the shared hierarchy
+     * switcher (create lives inside that menu, not on the bar).
      */
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
@@ -453,7 +451,7 @@ public final class CanvasActivity extends Activity {
         bar.addView(scratchpadTab, iconLp(0));
         bar.addView(rule(), barDividerLp());
 
-        activeNotebookButton = tinyButton(getString(R.string.notebooks), 16);
+        activeNotebookButton = tinyButton("", 16);
         activeNotebookButton.setContentDescription(getString(R.string.switch_notebook));
         activeNotebookButton.setAllCaps(false);
         activeNotebookButton.setSingleLine(true);
@@ -466,17 +464,13 @@ public final class CanvasActivity extends Activity {
         onTap(activeNotebookButton, v -> showNotebookSwitcher());
         activeNotebookButton.setOnLongClickListener(v -> {
             String open = notebookKey(collectionId);
-            if (open != null && !Notebook.isTrash(open)) {
+            if (open != null) {
                 showNotebookMenu(open);
                 return true;
             }
             return false;
         });
         bar.addView(activeNotebookButton, wrap());
-
-        trashTab = iconButton(R.drawable.ic_trash, R.string.trash);
-        onTap(trashTab, v -> openNotebook(Notebook.TRASH.uuid, null));
-        bar.addView(trashTab, iconLp(4));
 
         toolHint = new TextView(this);
         toolHint.setTextColor(Color.DKGRAY);
@@ -587,7 +581,7 @@ public final class CanvasActivity extends Activity {
         }
     }
 
-    /** {@code notebooks} null: not loaded yet — chip stays at the Notebooks label. */
+    /** {@code notebooks} null: not loaded yet — chip uses MRU / first seed when styled. */
     private void rebuildNotebookTabs(List<BoardRepository.NotebookInfo> notebooks) {
         if (notebooks != null && sameNotebooks(notebooks)) {
             styleTabs();
@@ -750,8 +744,40 @@ public final class CanvasActivity extends Activity {
         trail.clear();
         trail.addAll(next);
         notebookId = id;
+        rememberLastNotebook(id);
         styleTabs();
         openCollection(id, keepScroll);
+    }
+
+    private void rememberLastNotebook(String id) {
+        if (id == null) {
+            return;
+        }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(PREF_LAST_NOTEBOOK, id)
+                .apply();
+    }
+
+    /** Chip title target: open notebook, else MRU, else first live notebook. */
+    private String chipNotebookId() {
+        String open = notebookKey(collectionId);
+        if (open != null && notebookById(open) != null) {
+            return open;
+        }
+        String last = getSharedPreferences(PREFS, MODE_PRIVATE)
+                .getString(PREF_LAST_NOTEBOOK, null);
+        if (last != null && notebookById(last) != null) {
+            return last;
+        }
+        if (shownNotebooks != null) {
+            for (BoardRepository.NotebookInfo each : shownNotebooks) {
+                if (each != null && each.id() != null) {
+                    return each.id();
+                }
+            }
+        }
+        List<BoardRepository.NotebookInfo> all = repository.notebooks();
+        return all.isEmpty() ? null : all.get(0).id();
     }
 
     private String titleOf(String id) {
@@ -1245,7 +1271,7 @@ public final class CanvasActivity extends Activity {
         return stack;
     }
 
-    /** Bottom chip after Delete→Trash: message + Undo (not Confirm/Cancel). */
+    /** Bottom chip after real Delete: message + Undo (not Confirm/Cancel). */
     private LinearLayout buildDeleteUndoBar() {
         LinearLayout stack = new LinearLayout(this);
         stack.setOrientation(LinearLayout.HORIZONTAL);
@@ -1261,12 +1287,14 @@ public final class CanvasActivity extends Activity {
         deleteUndoText = new TextView(this);
         deleteUndoText.setTextColor(Color.BLACK);
         deleteUndoText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        deleteUndoText.setText(R.string.page_moved_to_trash);
+        deleteUndoText.setText(R.string.page_deleted);
+        // Tap the message to dismiss (commit) without Undo.
+        onTap(deleteUndoText, v -> commitDeleteUndo());
         stack.addView(deleteUndoText, new LinearLayout.LayoutParams(0,
                 LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         Button undo = tinyButton(getString(R.string.undo), 15);
         styleButton(undo, true);
-        onTap(undo, v -> undoDeleteToTrash());
+        onTap(undo, v -> undoPendingDelete());
         LinearLayout.LayoutParams undoLp = wrap();
         undoLp.leftMargin = dp(8);
         stack.addView(undo, undoLp);
@@ -1488,7 +1516,7 @@ public final class CanvasActivity extends Activity {
     }
 
     private void beginModeChrome() {
-        hideDeleteUndo();
+        commitDeleteUndo();
         hideLassoMenu();
         modeBar.setVisibility(View.VISIBLE);
         refreshModeBar();
@@ -1885,7 +1913,7 @@ public final class CanvasActivity extends Activity {
         return lp;
     }
 
-    /** Wipe (confirm) and Delete (immediate Move→Trash + undo chip) for one page. */
+    /** Wipe (confirm) and Delete (real tear + undo chip, no confirm). */
     private void showPageMenu(PageSlot slot) {
         LinearLayout menu = panel();
         menu.setMinimumWidth(dp(200));
@@ -1903,26 +1931,11 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Delete = Move into Trash (no confirm). Undo snackbar restores prior
-     * notebook/position via the same placePageBefore spine.
+     * Real delete (no confirm). Defers sync for ~5s so Undo can restore;
+     * timeout / dismiss / next delete commits.
      */
     private void deletePage(PageSlot slot) {
         String pageId = slot.page.id;
-        BoardRepository.PagePlace prior = repository.placeOf(pageId);
-        if (prior != null && Notebook.isTrash(prior.notebookId())) {
-            dismissOverlay();
-            showHint(getString(R.string.page_moved_to_trash), true);
-            return;
-        }
-        String beforeId = null;
-        if (prior != null) {
-            String priorKey = prior.notebookId() == null ? SCRATCHPAD : prior.notebookId();
-            List<Board> priorPages = pagesIn(priorKey);
-            int next = prior.index() + 1;
-            if (next >= 0 && next < priorPages.size()) {
-                beforeId = priorPages.get(next).id;
-            }
-        }
         Board live = livePageIn(notebookKey(collectionId), pageId);
         if (live != null) {
             repository.saveInk(live);
@@ -1930,6 +1943,7 @@ public final class CanvasActivity extends Activity {
         int index = slots.indexOf(slot);
         dismissOverlay();
         cancelMode();
+        // Commits any prior pending delete, then tears this page (held flush).
         repository.deletePage(pageId);
         inkView.invalidatePage(pageId);
         List<Board> pages = pagesIn(collectionId);
@@ -1938,56 +1952,39 @@ public final class CanvasActivity extends Activity {
                 ? effectiveScrollY()
                 : CollectionNav.scrollYBefore(pages, Math.min(index, pages.size() - 1), pageLayout());
         showReady(collectionId, pages, target);
-        BoardRepository.PagePlace after = repository.placeOf(pageId);
-        if (prior != null && after != null && Notebook.isTrash(after.notebookId())) {
-            showDeleteUndo(pageId, prior.notebookId(), beforeId);
-        } else if (prior != null) {
-            showHint(getString(R.string.move_failed), true);
+        if (repository.placeOf(pageId) == null) {
+            showDeleteUndo();
+        } else {
+            showHint(getString(R.string.delete_failed), true);
         }
     }
 
-    private void showDeleteUndo(String pageId, String priorNotebookId, String beforeId) {
-        deleteUndoPageId = pageId;
-        deleteUndoPriorNotebookId = priorNotebookId;
-        deleteUndoBeforeId = beforeId;
+    private void showDeleteUndo() {
         deleteUndoBar.removeCallbacks(clearDeleteUndo);
         deleteUndoBar.setVisibility(View.VISIBLE);
         deleteUndoBar.postDelayed(clearDeleteUndo, 5000);
         updateExcludeRects();
     }
 
-    private void hideDeleteUndo() {
+    /** Hide the chip without committing — only after a successful Undo. */
+    private void hideDeleteUndoBar() {
         deleteUndoBar.removeCallbacks(clearDeleteUndo);
-        deleteUndoPageId = null;
-        deleteUndoPriorNotebookId = null;
-        deleteUndoBeforeId = null;
         if (deleteUndoBar.getVisibility() != View.GONE) {
             deleteUndoBar.setVisibility(View.GONE);
             updateExcludeRects();
         }
     }
 
-    private void undoDeleteToTrash() {
-        String pageId = deleteUndoPageId;
-        String priorNotebookId = deleteUndoPriorNotebookId;
-        String beforeId = deleteUndoBeforeId;
-        hideDeleteUndo();
-        if (pageId == null) {
+    private void commitDeleteUndo() {
+        hideDeleteUndoBar();
+        repository.commitPendingDelete();
+    }
+
+    private void undoPendingDelete() {
+        hideDeleteUndoBar();
+        if (!repository.undoPendingDelete()) {
+            showHint(getString(R.string.delete_failed), true);
             return;
-        }
-        Board live = livePageIn(Notebook.TRASH.uuid, pageId);
-        if (live == null) {
-            BoardRepository.PagePlace now = repository.placeOf(pageId);
-            if (now != null) {
-                String key = now.notebookId() == null ? SCRATCHPAD : now.notebookId();
-                live = livePageIn(key, pageId);
-            }
-        }
-        if (live != null) {
-            repository.saveInk(live);
-        }
-        if (!repository.placePageBefore(pageId, beforeId, priorNotebookId)) {
-            showHint(getString(R.string.move_failed), true);
         }
         reloadPages(effectiveScrollY());
     }
@@ -1995,10 +1992,6 @@ public final class CanvasActivity extends Activity {
     /** Rename / Place / Delete — anchored on the active-notebook chip. */
     private void showNotebookMenu(String id) {
         if (id == null || notebookById(id) == null) {
-            return;
-        }
-        if (Notebook.isTrash(id)) {
-            showHint(getString(R.string.trash_builtin), true);
             return;
         }
         View anchor = activeNotebookButton;
@@ -2030,7 +2023,7 @@ public final class CanvasActivity extends Activity {
             return;
         }
         cancelMode();
-        hideDeleteUndo();
+        commitDeleteUndo();
         hideLassoMenu();
         showNotebookHierarchyMenu(slot.moveButton, drawingArea, null, true, slot,
                 notebookId -> movePageToNotebook(live.id, notebookId));
@@ -2093,12 +2086,9 @@ public final class CanvasActivity extends Activity {
             rows.add(new HierarchyRow(getString(R.string.no_place_target), 0, null));
         }
         if (includeNewNotebook) {
-            // Switcher: nest under the open notebook (top-level on Scratchpad /
-            // Trash). Move → + New stays top-level, then files the page there.
+            // Switcher: nest under the open notebook (top-level on Scratchpad).
+            // Move → + New stays top-level, then files the page there.
             String parent = moveAfter == null ? notebookKey(collectionId) : null;
-            if (parent != null && Notebook.isTrash(parent)) {
-                parent = null;
-            }
             String createParent = parent;
             rows.add(new HierarchyRow(getString(R.string.new_notebook_item), 0,
                     () -> showNameForm(null, null, createParent, moveAfter)));
@@ -2814,21 +2804,19 @@ public final class CanvasActivity extends Activity {
 
     private void styleTabs() {
         boolean scratch = SCRATCHPAD.equals(collectionId);
-        boolean trash = Notebook.isTrash(collectionId);
         styleTool(scratchpadTab, scratch);
-        styleTool(trashTab, trash);
-        String open = notebookKey(collectionId);
-        // Trash is its own icon (like Scratchpad) — never a titled chip.
-        if (open != null && !trash) {
-            String title = titleOf(open);
-            activeNotebookButton.setText(title.isEmpty() ? getString(R.string.notebooks) : title);
-            styleTab(activeNotebookButton, true);
-            inkLabel(activeNotebookButton, true);
-        } else {
-            activeNotebookButton.setText(R.string.notebooks);
-            styleTab(activeNotebookButton, false);
-            inkLabel(activeNotebookButton, false);
+        String chipId = chipNotebookId();
+        String title = chipId == null ? "" : titleOf(chipId);
+        if (title.isEmpty()) {
+            title = getString(R.string.notebook_fallback);
         }
+        // Always a real notebook name + ▾; never the label "Notebooks".
+        activeNotebookButton.setText(title + " ▾");
+        boolean inNotebook = !scratch && notebookKey(collectionId) != null;
+        // Underline is the dropdown affordance (always on); bold when that notebook is open.
+        styleTab(activeNotebookButton, true);
+        inkLabel(activeNotebookButton, inNotebook);
+        activeNotebookButton.setSelected(inNotebook);
     }
 
     /** E-ink selection without fills: a 2 dp black underline (and bold label). */

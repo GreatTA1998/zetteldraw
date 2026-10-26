@@ -60,20 +60,21 @@ public class CanvasActivitySmokeTest {
         idle();
 
         assertNull("seed titles are not listed on the compact bar", find(root, "comedy"));
-        assertNotNull(find(root, "Notebooks"));
+        assertNull("never show the label Notebooks as chip text", find(root, "Notebooks"));
+        View chip = byDescription(root, "Switch notebook").get(0);
+        assertTrue("chip shows a real notebook name + ▾ on Scratchpad",
+                ((android.widget.TextView) chip).getText().toString().endsWith(" ▾"));
         assertTrue("no options glyph in the top bar", tabMenus(root).isEmpty());
+        assertTrue("no Trash icon on the bar", byDescription(root, "Trash").isEmpty());
         NavClicks.openNotebook(root, "comedy");
         View comedyChip = byDescription(root, "Switch notebook").get(0);
         assertTrue("open notebook chip is marked", comedyChip.isSelected());
-        assertEquals("comedy", ((android.widget.TextView) comedyChip).getText().toString());
+        assertEquals("comedy ▾", ((android.widget.TextView) comedyChip).getText().toString());
         assertTrue("open chip is underlined, not filled", comedyChip.getBackground() != null
                 && !(comedyChip.getBackground() instanceof android.graphics.drawable.GradientDrawable));
         assertNull("other notebooks stay off the bar", find(root, "journal"));
         assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
         assertTrue("still no tab options glyph once a notebook is open", tabMenus(root).isEmpty());
-        assertNotNull("Trash icon is persistent on the bar", byDescription(root, "Trash").get(0));
-        assertSame("Trash sits beside the active chip",
-                comedyChip.getParent(), byDescription(root, "Trash").get(0).getParent());
         assertNull("bar + is gone — create lives in the switcher menu", barPlus(root, comedyChip));
 
         assertTrue(comedyChip.performClick());
@@ -84,9 +85,9 @@ public class CanvasActivitySmokeTest {
         name.setText("sketches");
         click(root, "Create");
         assertNull("form closed", findEdit(root));
-        // 5 seeds (incl. Trash) + sketches
-        assertEquals(6, repo.notebooks().size());
-        assertEquals("sketches", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        // 4 seeds + sketches
+        assertEquals(5, repo.notebooks().size());
+        assertEquals("sketches ▾", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
 
         assertTrue(byDescription(root, "Switch notebook").get(0).performLongClick());
@@ -96,21 +97,21 @@ public class CanvasActivitySmokeTest {
         assertEquals("sketches", name.getText().toString());
         name.setText("drawings");
         click(root, "Save");
-        assertEquals("drawings", repo.notebooks().get(5).title());
-        assertEquals("drawings", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("drawings", repo.notebooks().get(4).title());
+        assertEquals("drawings ▾", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
 
         assertTrue(byDescription(root, "Switch notebook").get(0).performLongClick());
         idle();
         click(root, "Delete");
         assertNotNull("confirmation shown", find(root, "Delete “drawings”?"));
         click(root, "Cancel");
-        assertEquals(6, repo.notebooks().size());
+        assertEquals(5, repo.notebooks().size());
 
         assertTrue(byDescription(root, "Switch notebook").get(0).performLongClick());
         idle();
         click(root, "Delete");
         clickLast(root, "Delete");
-        assertEquals(5, repo.notebooks().size());
+        assertEquals(4, repo.notebooks().size());
         assertNull(find(root, "drawings"));
 
         controller.pause().stop().destroy();
@@ -138,11 +139,15 @@ public class CanvasActivitySmokeTest {
         assertEquals("journal", name.getText().toString());
         name.setText("diary");
         click(root, "Save");
-        assertEquals("diary", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("diary ▾", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertNull(find(root, "journal"));
 
         clickDesc(root, "Scratchpad");
         assertTrue(byDescription(root, "Scratchpad").get(0).isSelected());
+        assertEquals("MRU notebook name on Scratchpad",
+                "diary ▾",
+                ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertFalse(byDescription(root, "Switch notebook").get(0).isSelected());
         controller.pause().stop().destroy();
     }
 
@@ -188,15 +193,15 @@ public class CanvasActivitySmokeTest {
         idle();
         // Blank Ready pages keep full ⋮ (Wipe is a no-op on empty ink).
         assertNotNull("Wipe stays on blank Ready pages", find(root, "Wipe"));
-        // Delete moves to Trash immediately (no confirm) + Undo snackbar.
+        // Real delete immediately (no confirm) + Undo snackbar; page is gone.
         click(root, "Delete page");
         assertNull("no delete confirm dialog", find(root, "Delete this page?"));
-        assertNotNull(find(root, "Moved to Trash"));
+        assertNotNull(find(root, "Page deleted"));
         assertNotNull(find(root, "Undo"));
         List<Board> pages = repo.scratchpadPages();
         assertEquals(1, pages.size());
         assertEquals(second.id, pages.get(0).id);
-        assertTrue(Notebook.isTrash(repo.placeOf(first.id).notebookId()));
+        assertNull(repo.placeOf(first.id));
         menus = byDescription(root, "Page options");
         assertEquals(1, menus.size());
         assertTrue("stored blank keeps enabled ⋮", menus.get(0).isEnabled());

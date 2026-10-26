@@ -5,14 +5,15 @@ import java.util.UUID;
 
 /**
  * Seed notebooks. A notebook is an ordered sequence of boards.
+ *
+ * <p>Trash is not a seed. Devices that ran v171–v174 may still have a normal
+ * notebook row titled Trash (legacy seed id); treat it like any user notebook.
  */
 public enum Notebook {
     COMEDY("comedy", "comedy"),
     JOURNAL("journal", "journal"),
     ACTIONS_LIFE("actions.life", "actions.life"),
-    MISCELLANEOUS("miscellaneous", "miscellaneous"),
-    /** Built-in recover bin — pages land here via Delete (Move); not a tombstone. */
-    TRASH("trash", "Trash");
+    MISCELLANEOUS("miscellaneous", "miscellaneous");
 
     public final String id;
     public final String label;
@@ -27,10 +28,5 @@ public enum Notebook {
         this.label = label;
         this.uuid = UUID.nameUUIDFromBytes(("zetteldraw:notebook:" + id)
                 .getBytes(StandardCharsets.UTF_8)).toString();
-    }
-
-    /** True for the built-in Trash notebook (seeded like other enum rows). */
-    public static boolean isTrash(String notebookId) {
-        return TRASH.uuid.equals(notebookId);
     }
 }

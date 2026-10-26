@@ -97,6 +97,8 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private int knownPageHeight;
     /** Sync-pass ink policy; default catch-up so unit tests can adopt. */
     private volatile SyncStore.InkPullPolicy inkPullPolicy = SyncStore.InkPullPolicy.CATCH_UP;
+    /** At most one deferred page delete (Undo snackbar). Null when idle. */
+    private PendingDelete pendingDelete;
 
     public RoomBoardRepository(ZettelDatabase db, InkFileStore ink, InkMirror mirror,
                                Executor background, Executor ui, LongSupplier clock) {
@@ -491,21 +493,99 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     }
 
     /**
-     * Delete = Move into built-in Trash (same spine as the Move menu). Not a
-     * paper tear / BoardEntity tombstone. Links stay; recover via Move out.
+     * Tear-delete with a one-slot undo window: hold flush so disk/outbox stay
+     * pre-delete until {@link #commitPendingDelete}. A new delete commits any
+     * prior pending first.
      */
     @Override
     public void deletePage(String boardId) {
         if (boardId == null) {
             return;
         }
-        PagePlace place = placeOf(boardId);
-        if (place != null && Notebook.isTrash(place.notebookId())) {
-            LaunchLog.mark("deletePage no-op: already in Trash " + boardId);
+        synchronized (lock) {
+            commitPendingDeleteLocked();
+            if (!paperDeleteDeferredLocked(boardId)) {
+                LaunchLog.mark("deletePage refused: not Ready " + boardId);
+            }
+        }
+    }
+
+    @Override
+    public boolean undoPendingDelete() {
+        PendingDelete pending;
+        synchronized (lock) {
+            pending = pendingDelete;
+            if (pending == null) {
+                return false;
+            }
+            pendingDelete = null;
+            // Disk never received the tear (holdFlush). Drop the in-memory tear
+            // by reloading — no outbox write, so Undo cannot fight cloud sync.
+            sheetStore.setSheetFlushHeld(pending.sheetId, false);
+        }
+        sheetStore.reloadSheetFromDisk(pending.sheetId, knownPageHeight);
+        synchronized (lock) {
+            InkSheetStore.OpenSheet sheet = sheetStore.get(pending.sheetId);
+            return sheet != null && sheet.ready && sheet.paper != null
+                    && sheet.paper.indexOfSliceId(pending.pageId) >= 0;
+        }
+    }
+
+    @Override
+    public void commitPendingDelete() {
+        synchronized (lock) {
+            commitPendingDeleteLocked();
+        }
+    }
+
+    private void commitPendingDeleteLocked() {
+        PendingDelete pending = pendingDelete;
+        if (pending == null) {
             return;
         }
-        if (!movePageToNotebook(boardId, Notebook.TRASH.uuid)) {
-            LaunchLog.mark("deletePage refused: move to Trash failed " + boardId);
+        pendingDelete = null;
+        sheetStore.setSheetFlushHeld(pending.sheetId, false);
+        tombstoneLinksTouchingLocked(pending.pageId);
+        writer.execute(() -> sheetStore.flushSheetOrFalse(pending.sheetId));
+    }
+
+    /**
+     * Tear the Ready slice in memory and hold flush. Caller holds {@link #lock}.
+     */
+    private boolean paperDeleteDeferredLocked(String boardId) {
+        for (Map.Entry<String, InkSheetStore.OpenSheet> entry : sheetStore.entrySet()) {
+            InkSheetStore.OpenSheet sheet = entry.getValue();
+            if (!sheet.ready || sheet.paper == null) {
+                continue;
+            }
+            int index = sheet.paper.indexOfSliceId(boardId);
+            if (index < 0) {
+                continue;
+            }
+            sheet.paper.tearDelete(index);
+            String sheetId = entry.getKey();
+            sheetStore.setSheetFlushHeld(sheetId, true);
+            syncAllSliceIndices(sheet.paper);
+            pendingDelete = new PendingDelete(boardId, sheetId);
+            return true;
+        }
+        return false;
+    }
+
+    /** A committed delete takes its links with it. */
+    private void tombstoneLinksTouchingLocked(String pageId) {
+        if (pageId == null) {
+            return;
+        }
+        long now = clock.getAsLong();
+        for (PageLinkEntity row : dao.liveLinksTouching(pageId)) {
+            row.deletedAt = now;
+            row.updatedAt = now;
+            PageLinkEntity stored = row;
+            db.runInTransaction(() -> {
+                dao.upsertPageLink(stored);
+                queueLocked(OutboxEntry.LINK, stored.id, OutboxEntry.DELETE);
+            });
         }
     }
 
@@ -613,9 +693,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void renameNotebook(String notebookId, String title) {
-        if (Notebook.isTrash(notebookId)) {
-            return;
-        }
         String clean = cleanTitle(title);
         if (clean == null) {
             return;
@@ -633,10 +710,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public void deleteNotebook(String notebookId) {
-        if (Notebook.isTrash(notebookId)) {
-            LaunchLog.mark("deleteNotebook refused: Trash is built-in");
-            return;
-        }
         // One return spine with pull-delete: Ready migrate + Move only.
         // BoardEntity reseat is gone — Ready-only Scratchpad ignores it anyway.
         if (!returnReadyPagesToScratchpad(notebookId)) {
@@ -1217,9 +1290,6 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
 
     @Override
     public boolean placeNotebook(String notebookId, String parentId) {
-        if (Notebook.isTrash(notebookId)) {
-            return false;
-        }
         synchronized (lock) {
             NotebookEntity row = dao.notebook(notebookId);
             if (row == null || row.deletedAt != null) {
@@ -1559,6 +1629,20 @@ public final class RoomBoardRepository implements BoardRepository, SyncStore {
     private static final class PullFailed extends RuntimeException {
         PullFailed(IOException cause) {
             super(cause);
+        }
+    }
+
+    /**
+     * Deferred delete slot. Disk stays pre-tear (holdFlush) until commit; Undo
+     * reloads the sheet. Only {@link #pageId} identity is needed to verify restore.
+     */
+    private static final class PendingDelete {
+        final String pageId;
+        final String sheetId;
+
+        PendingDelete(String pageId, String sheetId) {
+            this.pageId = pageId;
+            this.sheetId = sheetId;
         }
     }
 

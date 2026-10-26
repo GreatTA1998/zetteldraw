@@ -371,7 +371,7 @@ public class PageLinksTest {
     }
 
     @Test
-    public void deletingEitherPageMovesToTrashAndKeepsTheLink() {
+    public void deletingEitherPageRemovesItAndDropsTheLinkOnCommit() {
         Application app = ApplicationProvider.getApplicationContext();
         BoardRepository repo = ZettelData.repository(app);
         BoardRepository.NotebookInfo from = repo.createNotebook("frombook");
@@ -391,12 +391,14 @@ public class PageLinksTest {
         openNotebook(root, "frombook");
         assertNotNull(find(root, "→ tobook 1/1"));
 
-        // Delete moves the page to Trash; links stay (page still exists).
+        // Real delete; links stay until commit, then tombstone.
         repo.deletePage(sourceId);
         assertFalse(repo.linksTouching(targetId).isEmpty());
-        assertTrue(Notebook.isTrash(repo.placeOf(sourceId).notebookId()));
+        assertNull(repo.placeOf(sourceId));
+        repo.commitPendingDelete();
+        assertTrue(repo.linksTouching(targetId).isEmpty());
         openNotebook(root, "tobook");
-        assertNotNull(find(root, "← Trash 1/1"));
+        assertNull(find(root, "← frombook 1/1"));
 
         ensureNotebookPage(repo, from.id());
         ink(repo, from.id(), 10f);
@@ -405,11 +407,11 @@ public class PageLinksTest {
         openNotebook(root, "tobook");
         assertNotNull(find(root, "← frombook 1/1"));
         repo.deletePage(targetId);
-        assertFalse(repo.linksTouching(sourceId).isEmpty());
-        assertTrue(Notebook.isTrash(repo.placeOf(targetId).notebookId()));
-        // Trash already holds the earlier deleted source, then this target.
+        repo.commitPendingDelete();
+        assertTrue(repo.linksTouching(sourceId).isEmpty());
+        assertNull(repo.placeOf(targetId));
         openNotebook(root, "frombook");
-        assertNotNull(find(root, "→ Trash 2/2"));
+        assertNull(find(root, "→ tobook 1/1"));
 
         controller.pause().stop().destroy();
     }
@@ -461,7 +463,7 @@ public class PageLinksTest {
 
         openNotebook(root, "frombook");
         click(root, "→ chapter 1/4");
-        assertEquals("chapter", ((android.widget.TextView) NavClicks.byDescription(root, "Switch notebook")).getText().toString());
+        assertEquals("chapter ▾", ((android.widget.TextView) NavClicks.byDescription(root, "Switch notebook")).getText().toString());
         assertTrue(NavClicks.byDescription(root, "Switch notebook").isSelected());
         assertNull(find(root, "shelf"));
         scroller = pageScroller(root);

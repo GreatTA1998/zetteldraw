@@ -380,6 +380,23 @@ public final class NotebookPaper {
     }
 
     /**
+     * Put a {@link #tearDelete} slice back (same id / height / taken ink).
+     * Used by the one-shot page-delete undo window before the tear is flushed.
+     */
+    public void restoreDeleted(int insertAt, String id, int height, float oldOrigin, Tear cut) {
+        if (cut == null || id == null || height <= 0) {
+            throw new IllegalArgumentException("restoreDeleted");
+        }
+        if (insertAt < 0 || insertAt > heights.size()) {
+            throw new IllegalArgumentException("insertAt");
+        }
+        if (indexOfSliceId(id) >= 0) {
+            return;
+        }
+        installTaken(insertAt, height, id, oldOrigin, cut);
+    }
+
+    /**
      * Same-notebook reorder must not drop a page or a stroke id. Empty
      * trailing slices are real pages (Create new page) and must stay.
      *
