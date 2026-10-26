@@ -94,12 +94,12 @@ public class PageChromeOpticalTest {
 
         View pageSlot = pageSlotOf(link);
         assertNotNull(pageSlot);
-        // Pre-v173 optical gutters restored as margin (outside hit rect).
-        assertEquals(dp(root, 14), ((ViewGroup.MarginLayoutParams) ((View) link.getParent().getParent())
+        // v176: larger edge insets; Link↔Reorder / Move↔⋮ gutters unchanged.
+        assertEquals(dp(root, 22), ((ViewGroup.MarginLayoutParams) ((View) link.getParent().getParent())
                 .getLayoutParams()).leftMargin);
         assertEquals(dp(root, 14), ((ViewGroup.MarginLayoutParams) reorder.getLayoutParams()).leftMargin);
         assertEquals(dp(root, 20), ((ViewGroup.MarginLayoutParams) more.getLayoutParams()).leftMargin);
-        assertEquals(dp(root, 18), ((ViewGroup.MarginLayoutParams) ((View) move.getParent())
+        assertEquals(dp(root, 24), ((ViewGroup.MarginLayoutParams) ((View) move.getParent())
                 .getLayoutParams()).rightMargin);
         Bitmap full = render(root);
         Bitmap crop = cropChromeBandFromSlot(full, pageSlot, link, more);

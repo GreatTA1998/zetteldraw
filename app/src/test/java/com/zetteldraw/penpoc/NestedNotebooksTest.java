@@ -73,27 +73,27 @@ public class NestedNotebooksTest {
         idle();
 
         assertEquals("no child-notebook bars", 0, byDescription(root, "Child notebooks").size());
-        assertNull("seed titles are not listed on the strip", find(root, "comedy"));
-        assertNull(find(root, "shelf"));
+        // Chip may show a seed name (MRU) — that is not a strip tab.
+        assertNull("custom notebooks stay off the strip until opened", find(root, "shelf"));
         assertNull("never show the label Notebooks as chip text", find(root, "Notebooks"));
         assertTrue("no Trash icon on the bar", byDescription(root, "Trash").isEmpty());
 
         NavClicks.openNotebook(root, "shelf");
         assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
-        assertEquals("shelf ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("shelf", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertNull("nested titles stay off the bar", find(root, "chapter"));
         assertEquals(0, byDescription(root, "Child notebooks").size());
 
         NavClicks.openNotebook(root, "chapter");
-        assertEquals("chapter ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("chapter", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
         assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
 
         NavClicks.openNotebook(root, "notes");
-        assertEquals("notes ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("notes", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
 
         NavClicks.openNotebook(root, "scene");
-        assertEquals("scene ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("scene", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
 
         // Second tap on the activator dismisses the open hierarchy menu.
         View switcher = byDescription(root, "Switch notebook").get(0);
@@ -105,7 +105,7 @@ public class NestedNotebooksTest {
         assertNull("second tap closes", find(root, "shelf"));
 
         clickDesc(root, "Scratchpad");
-        assertEquals("scene ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("scene", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertFalse(byDescription(root, "Switch notebook").get(0).isSelected());
         assertTrue(byDescription(root, "Scratchpad").get(0).isSelected());
         assertEquals(0, byDescription(root, "Child notebooks").size());
@@ -146,7 +146,7 @@ public class NestedNotebooksTest {
         idleForPaint();
         relayout(root);
         assertNotNull("Stacey pages are on screen after switch", find(root, "1/" + repo.pages(stacey.id()).size()));
-        assertEquals("stacey ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("stacey", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
         assertNull("Dating is not on the compact bar while Stacey is open", find(root, "dating"));
         TestInk.appendCovering(repo.pages(stacey.id()).get(0).paper, TestStrokes.stroke(99f, 20f));
@@ -156,7 +156,7 @@ public class NestedNotebooksTest {
         NavClicks.openNotebook(root, "dating");
         idleForPaint();
         relayout(root);
-        assertEquals("dating ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("dating", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
         assertNull(find(root, "stacey"));
         assertNotNull(find(root, "1/" + repo.pages(dating.id()).size()));
@@ -164,7 +164,7 @@ public class NestedNotebooksTest {
         NavClicks.openNotebook(root, "stacey");
         idleForPaint();
         relayout(root);
-        assertEquals("stacey ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("stacey", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertNull(find(root, "dating"));
         assertEquals(99f, repo.pages(stacey.id()).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
         assertEquals(11f, repo.pages(dating.id()).get(0).paper.strokes().get(0).points.get(0).x, 0.01f);
@@ -373,11 +373,13 @@ public class NestedNotebooksTest {
         click(root, "Place under…");
         assertNull("Place under is hierarchy menu, not snackbar", find(root, "Placing notes under…"));
         assertNull(find(root, "Confirm"));
-        // Self omitted from picker; chip reads "notes ▾" (not a plain "notes" row).
+        // Self omitted from picker; chip still reads "notes" (exclude chip from hits).
         ArrayList<TextView> notesHits = new ArrayList<>();
         collectText(root, "notes", notesHits);
+        notesHits.removeIf(v -> "Switch notebook"
+                .contentEquals(String.valueOf(v.getContentDescription())));
         assertEquals("cannot place under itself", 0, notesHits.size());
-        assertEquals("notes ▾", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("notes", ((TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertTrue(last(root, "chapter").performClick());
         idle();
 

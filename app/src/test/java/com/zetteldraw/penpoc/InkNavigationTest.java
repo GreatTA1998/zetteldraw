@@ -290,7 +290,7 @@ public class InkNavigationTest {
             slowest = Math.max(slowest, (System.nanoTime() - before) / 1_000_000);
             View chip = NavClicks.byDescription(root, "Switch notebook");
             assertTrue(tab + " is marked at once", chip.isSelected());
-            assertEquals(tab + " ▾", ((android.widget.TextView) chip).getText().toString());
+            assertEquals(tab, ((android.widget.TextView) chip).getText().toString());
         }
         assertTrue("a tap never waits for storage (slowest " + slowest + " ms)", slowest < 500);
 

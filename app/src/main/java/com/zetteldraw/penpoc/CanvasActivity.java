@@ -144,7 +144,7 @@ public final class CanvasActivity extends Activity {
     /** Full-width control under the last real page (or alone when empty). */
     private Button createPageButton;
     private ImageButton scratchpadTab;
-    /** Real notebook name (+ ▾); MRU name on Scratchpad — opens hierarchy switcher. */
+    /** Real notebook name (MRU on Scratchpad); tap toggles hierarchy switcher. */
     private Button activeNotebookButton;
     private ImageButton penButton;
     private ImageButton eraserButton;
@@ -440,9 +440,9 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Single chrome strip: Scratchpad | notebook chip (name ▾) | hint |
-     * undo/redo | tools | settings. Chip toggles the shared hierarchy
-     * switcher (create lives inside that menu, not on the bar).
+     * Single chrome strip: Scratchpad | notebook chip (name) | hint |
+     * undo/redo | tools | settings. Chip always toggles the shared hierarchy
+     * switcher (including when that notebook is already open — no ▾).
      */
     private LinearLayout buildTopBar() {
         LinearLayout bar = row(Gravity.CENTER_VERTICAL);
@@ -514,7 +514,7 @@ public final class CanvasActivity extends Activity {
             tools.setTool(PageInkView.Tool.LASSO);
         });
         settingsButton = iconButton(R.drawable.ic_settings, R.string.settings);
-        onTap(settingsButton, v -> showSettings());
+        onTap(settingsButton, v -> toggleSettings());
         bar.addView(undoButton, iconLp(0));
         bar.addView(redoButton, iconLp(4));
         bar.addView(rule(), barDividerLp());
@@ -2380,7 +2380,7 @@ public final class CanvasActivity extends Activity {
         box.addView(actions, actionsLp);
     }
 
-    /** End-aligned Close row that dismisses the overlay (Settings / launch log). */
+    /** End-aligned Close row for the launch-log panel (Settings has no Close — gear toggles). */
     private void addCloseActionsRow(LinearLayout box, int topMarginPx) {
         Button close = tinyButton(getString(R.string.close), 15);
         styleButton(close, true);
@@ -2394,7 +2394,16 @@ public final class CanvasActivity extends Activity {
         box.addView(actions, actionsLp);
     }
 
-    /** In-window Settings: account, Sync now / Sign out, Prepare transfer, Launch log, Close. */
+    /** Gear toggles Settings (second tap / any open overlay dismisses). Scrim tap also closes. */
+    private void toggleSettings() {
+        if (overlay != null) {
+            dismissOverlay();
+            return;
+        }
+        showSettings();
+    }
+
+    /** In-window Settings: account, Sync now / Sign out, Prepare transfer, Launch log. */
     private void showSettings() {
         settingsGeneration++;
         SyncConfig config = SyncConfig.load(this);
@@ -2511,8 +2520,6 @@ public final class CanvasActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         launchLp.topMargin = dp(8);
         box.addView(launchLog, launchLp);
-
-        addCloseActionsRow(box, dp(8));
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -2804,24 +2811,25 @@ public final class CanvasActivity extends Activity {
 
     private void styleTabs() {
         boolean scratch = SCRATCHPAD.equals(collectionId);
+        // Mutual-exclusive underline from active-sheet SoT — never both.
         styleTool(scratchpadTab, scratch);
         String chipId = chipNotebookId();
         String title = chipId == null ? "" : titleOf(chipId);
         if (title.isEmpty()) {
             title = getString(R.string.notebook_fallback);
         }
-        // Always a real notebook name + ▾; never the label "Notebooks".
-        activeNotebookButton.setText(title + " ▾");
+        // Always a real notebook name (no ▾); never the label "Notebooks".
+        activeNotebookButton.setText(title);
         boolean inNotebook = !scratch && notebookKey(collectionId) != null;
-        // Underline is the dropdown affordance (always on); bold when that notebook is open.
-        styleTab(activeNotebookButton, true);
+        styleTab(activeNotebookButton, inNotebook);
         inkLabel(activeNotebookButton, inNotebook);
         activeNotebookButton.setSelected(inNotebook);
     }
 
     /** E-ink selection without fills: a 2 dp black underline (and bold label). */
     private void styleTab(View tab, boolean selected) {
-        tab.setBackground(selected ? new Underline(dp(2), dp(12)) : null);
+        // Always assign a drawable (never null) so e-ink clears the previous mark.
+        tab.setBackground(new Underline(dp(2), dp(12), selected));
         tab.setSelected(selected);
     }
 
@@ -2949,7 +2957,8 @@ public final class CanvasActivity extends Activity {
             chromeWord(linkButton);
             chromeWord(reorderButton);
             chromeWord(moveButton);
-            moreButton = tinyButton(getString(R.string.notebook_options), 18);
+            // Same 14sp as Move/Link so baseline/center aligns with the word row.
+            moreButton = tinyButton(getString(R.string.notebook_options), 14);
             chromeWord(moreButton);
             moreButton.setContentDescription(getString(R.string.page_options));
             onTap(linkButton, v -> startMode(this, false));
@@ -2958,8 +2967,8 @@ public final class CanvasActivity extends Activity {
             onTap(moreButton, v -> showPageMenu(this));
 
             int mark = page.paper != null ? dp(2) : pageGap;
-            // Shared bottom margin keeps the chrome row above the dashed edge.
-            int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(6);
+            // Comfortable inset from dashed edge / page rim (hit pad stays 0).
+            int chromeBottom = (page.paper != null ? 0 : pageGap) + dp(16);
 
             // Left: references above Link · Reorder (both navigate-to-target).
             LinearLayout left = new LinearLayout(context);
@@ -2972,7 +2981,7 @@ public final class CanvasActivity extends Activity {
             LinearLayout leftRow = new LinearLayout(context);
             leftRow.setOrientation(LinearLayout.HORIZONTAL);
             leftRow.setGravity(Gravity.CENTER_VERTICAL);
-            leftRow.setBaselineAligned(false);
+            leftRow.setBaselineAligned(true);
             leftRow.addView(linkButton, wrap());
             // Pre-v173 optical gaps used pad+margin; pad is 0 now — put the
             // same space in margin so interstitial hits stay drawable (lasso).
@@ -2984,7 +2993,7 @@ public final class CanvasActivity extends Activity {
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
             leftLp.gravity = Gravity.BOTTOM | Gravity.START;
-            leftLp.leftMargin = dp(14); // was edge 10 + Link pad 4
+            leftLp.leftMargin = dp(22); // farther from left edge (was 14)
             leftLp.bottomMargin = chromeBottom;
             addView(left, leftLp);
 
@@ -2992,16 +3001,18 @@ public final class CanvasActivity extends Activity {
             actions = new LinearLayout(context);
             actions.setOrientation(LinearLayout.HORIZONTAL);
             actions.setGravity(Gravity.CENTER_VERTICAL);
-            actions.setBaselineAligned(false);
+            // Baseline-align ⋮ with Move text (⋮ at 18sp sat slightly low).
+            actions.setBaselineAligned(true);
             actions.addView(moveButton, wrap());
             LinearLayout.LayoutParams moreLp = wrap();
             moreLp.leftMargin = dp(20); // was Move pad 4 + 6 + ⋮ pad 10
+            moreLp.gravity = Gravity.CENTER_VERTICAL;
             actions.addView(moreButton, moreLp);
             FrameLayout.LayoutParams actionsLp = new FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT);
             actionsLp.gravity = Gravity.BOTTOM | Gravity.END;
-            actionsLp.rightMargin = dp(18); // was edge 8 + ⋮ pad 10
+            actionsLp.rightMargin = dp(24); // farther from right edge (was 18)
             actionsLp.bottomMargin = chromeBottom;
             addView(actions, actionsLp);
 

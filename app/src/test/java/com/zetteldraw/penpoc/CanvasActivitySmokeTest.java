@@ -59,21 +59,27 @@ public class CanvasActivitySmokeTest {
         BoardRepository repo = ZettelData.repository(activity);
         idle();
 
-        assertNull("seed titles are not listed on the compact bar", find(root, "comedy"));
         assertNull("never show the label Notebooks as chip text", find(root, "Notebooks"));
         View chip = byDescription(root, "Switch notebook").get(0);
-        assertTrue("chip shows a real notebook name + ▾ on Scratchpad",
-                ((android.widget.TextView) chip).getText().toString().endsWith(" ▾"));
+        // Chip may show a seed name (MRU) — that is not a strip tab.
+        assertNull("other seeds stay off the bar", find(root, "journal"));
+        String chipText = ((android.widget.TextView) chip).getText().toString();
+        assertFalse("no ▾ on notebook chip", chipText.contains("▾"));
+        assertFalse("chip shows a real notebook name on Scratchpad", chipText.isEmpty());
+        assertFalse("Scratchpad active → chip not selected/underlined", chip.isSelected());
+        assertTrue("Scratchpad active → Scratchpad underlined",
+                byDescription(root, "Scratchpad").get(0).isSelected());
         assertTrue("no options glyph in the top bar", tabMenus(root).isEmpty());
         assertTrue("no Trash icon on the bar", byDescription(root, "Trash").isEmpty());
         NavClicks.openNotebook(root, "comedy");
         View comedyChip = byDescription(root, "Switch notebook").get(0);
         assertTrue("open notebook chip is marked", comedyChip.isSelected());
-        assertEquals("comedy ▾", ((android.widget.TextView) comedyChip).getText().toString());
+        assertEquals("comedy", ((android.widget.TextView) comedyChip).getText().toString());
         assertTrue("open chip is underlined, not filled", comedyChip.getBackground() != null
                 && !(comedyChip.getBackground() instanceof android.graphics.drawable.GradientDrawable));
         assertNull("other notebooks stay off the bar", find(root, "journal"));
-        assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
+        assertFalse("notebook active → Scratchpad not underlined",
+                byDescription(root, "Scratchpad").get(0).isSelected());
         assertTrue("still no tab options glyph once a notebook is open", tabMenus(root).isEmpty());
         assertNull("bar + is gone — create lives in the switcher menu", barPlus(root, comedyChip));
 
@@ -87,7 +93,7 @@ public class CanvasActivitySmokeTest {
         assertNull("form closed", findEdit(root));
         // 4 seeds + sketches
         assertEquals(5, repo.notebooks().size());
-        assertEquals("sketches ▾", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("sketches", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertTrue(byDescription(root, "Switch notebook").get(0).isSelected());
 
         assertTrue(byDescription(root, "Switch notebook").get(0).performLongClick());
@@ -98,7 +104,7 @@ public class CanvasActivitySmokeTest {
         name.setText("drawings");
         click(root, "Save");
         assertEquals("drawings", repo.notebooks().get(4).title());
-        assertEquals("drawings ▾", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("drawings", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
 
         assertTrue(byDescription(root, "Switch notebook").get(0).performLongClick());
         idle();
@@ -139,13 +145,13 @@ public class CanvasActivitySmokeTest {
         assertEquals("journal", name.getText().toString());
         name.setText("diary");
         click(root, "Save");
-        assertEquals("diary ▾", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
+        assertEquals("diary", ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertNull(find(root, "journal"));
 
         clickDesc(root, "Scratchpad");
         assertTrue(byDescription(root, "Scratchpad").get(0).isSelected());
         assertEquals("MRU notebook name on Scratchpad",
-                "diary ▾",
+                "diary",
                 ((android.widget.TextView) byDescription(root, "Switch notebook").get(0)).getText().toString());
         assertFalse(byDescription(root, "Switch notebook").get(0).isSelected());
         controller.pause().stop().destroy();

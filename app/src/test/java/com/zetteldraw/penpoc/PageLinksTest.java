@@ -463,7 +463,7 @@ public class PageLinksTest {
 
         openNotebook(root, "frombook");
         click(root, "→ chapter 1/4");
-        assertEquals("chapter ▾", ((android.widget.TextView) NavClicks.byDescription(root, "Switch notebook")).getText().toString());
+        assertEquals("chapter", ((android.widget.TextView) NavClicks.byDescription(root, "Switch notebook")).getText().toString());
         assertTrue(NavClicks.byDescription(root, "Switch notebook").isSelected());
         assertNull(find(root, "shelf"));
         scroller = pageScroller(root);
