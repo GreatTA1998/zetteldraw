@@ -71,6 +71,16 @@ public class CanvasActivitySmokeTest {
                 byDescription(root, "Scratchpad").get(0).isSelected());
         assertTrue("no options glyph in the top bar", tabMenus(root).isEmpty());
         assertTrue("no Trash icon on the bar", byDescription(root, "Trash").isEmpty());
+        // Scratchpad: first chip tap selects the named notebook — no menu.
+        String mru = chipText;
+        assertTrue(chip.performClick());
+        idle();
+        assertTrue("chip tap from Scratchpad selects named notebook", chip.isSelected());
+        assertEquals(mru, ((android.widget.TextView) chip).getText().toString());
+        assertNull("no hierarchy menu on select tap", find(root, "+ New notebook"));
+        assertFalse(byDescription(root, "Scratchpad").get(0).isSelected());
+        clickDesc(root, "Scratchpad");
+        idle();
         NavClicks.openNotebook(root, "comedy");
         View comedyChip = byDescription(root, "Switch notebook").get(0);
         assertTrue("open notebook chip is marked", comedyChip.isSelected());
@@ -374,7 +384,13 @@ public class CanvasActivitySmokeTest {
         assertEquals(movedFirst, repo.notebookPages(Notebook.JOURNAL.uuid).get(0).id);
         assertEquals("moving a page away updates the count", java.util.Arrays.asList("1/1"), pageLabels(root));
 
-        assertTrue(byDescription(root, "Switch notebook").get(0).performClick());
+        // Still on Scratchpad: first chip tap selects MRU; second opens the menu.
+        View chip = byDescription(root, "Switch notebook").get(0);
+        assertFalse(chip.isSelected());
+        assertTrue(chip.performClick());
+        idle();
+        assertTrue(chip.isSelected());
+        assertTrue(chip.performClick());
         idle();
         click(root, "+ New notebook");
         EditText name = findEdit(root);

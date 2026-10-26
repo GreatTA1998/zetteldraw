@@ -14,8 +14,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Compact-nav helpers: notebooks are not listed on the top strip. Open the
- * shared hierarchy switcher (Switch notebook), then pick a title.
+ * Compact-nav helpers. Chip tap: if named notebook ≠ active → select it;
+ * if already active → toggle hierarchy menu. Tests that need a different
+ * notebook may need one select-tap then a menu-tap.
  */
 final class NavClicks {
     private NavClicks() {}
@@ -23,7 +24,37 @@ final class NavClicks {
     static void openNotebook(View root, String title) {
         View switcher = byDescription(root, "Switch notebook");
         assertNotNull("Switch notebook chip missing", switcher);
-        assertTrue(switcher.performClick());
+        TextView chip = (TextView) switcher;
+        String chipTitle = chip.getText().toString();
+        boolean chipIsTarget = title.contentEquals(chipTitle);
+        boolean chipActive = switcher.isSelected();
+
+        if (chipIsTarget && !chipActive) {
+            // Scratchpad (or other non-chip collection): first tap selects it.
+            assertTrue(switcher.performClick());
+            idle();
+            assertTrue("chip should be active after select", switcher.isSelected());
+            return;
+        }
+        if (chipIsTarget) {
+            // Already on the target: toggle menu and re-pick to refresh the open sheet
+            // (same path as a user who opens the hierarchy and chooses the current notebook).
+            assertTrue(switcher.performClick());
+            idle();
+            TextView again = last(root, title);
+            assertNotNull(again);
+            assertTrue(again.performClick());
+            idle();
+            return;
+        }
+
+        // Need the hierarchy menu to pick a different title.
+        if (!switcher.isSelected()) {
+            // On Scratchpad: first tap selects the chip's MRU notebook.
+            assertTrue(switcher.performClick());
+            idle();
+        }
+        assertTrue("open hierarchy menu", switcher.performClick());
         idle();
         TextView pick = last(root, title);
         assertNotNull("hierarchy missing " + title, pick);

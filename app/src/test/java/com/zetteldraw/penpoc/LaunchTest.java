@@ -224,8 +224,11 @@ public class LaunchTest {
         repo.applyPull(page);
         ShadowLooper.idleMainLooper();
 
-        // Compact nav does not list notebooks on the strip — open the shared switcher.
-        assertTrue(NavClicks.byDescription(root, "Switch notebook").performClick());
+        // Compact nav: from Scratchpad, select-tap then menu-tap to open hierarchy.
+        View switcher = NavClicks.byDescription(root, "Switch notebook");
+        assertTrue(switcher.performClick());
+        ShadowLooper.idleMainLooper();
+        assertTrue(switcher.performClick());
         ShadowLooper.idleMainLooper();
         assertNotNull("the open screen still hears about the pull", findText(root, "from the web"));
         second.pause().stop().destroy();

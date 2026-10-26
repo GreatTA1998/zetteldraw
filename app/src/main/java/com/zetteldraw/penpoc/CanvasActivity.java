@@ -651,13 +651,22 @@ public final class CanvasActivity extends Activity {
     }
 
     /**
-     * Tap the active-notebook chip: shared Move/Place-under hierarchy to switch.
-     * Second tap on the same activator dismisses (toggle) — menu lives in the
-     * drawing band, so the chip stays reachable while open.
+     * Tap the notebook chip:
+     * <ul>
+     *   <li>Chip notebook ≠ active collection → open that notebook (no menu).
+     *       On Scratchpad the chip is MRU / first seed — first tap selects it.</li>
+     *   <li>Chip notebook is already active → toggle the hierarchy menu.</li>
+     * </ul>
      */
     private void showNotebookSwitcher() {
         if (overlay != null) {
             dismissOverlay();
+            return;
+        }
+        String chipId = chipNotebookId();
+        String open = notebookKey(collectionId);
+        if (chipId != null && !chipId.equals(open)) {
+            openNotebook(chipId, null);
             return;
         }
         if (shownNotebooks == null) {
@@ -2957,8 +2966,9 @@ public final class CanvasActivity extends Activity {
             chromeWord(linkButton);
             chromeWord(reorderButton);
             chromeWord(moveButton);
-            // Same 14sp as Move/Link so baseline/center aligns with the word row.
-            moreButton = tinyButton(getString(R.string.notebook_options), 14);
+            // Slightly larger than Move/Link (14sp) for e-ink tap; baselineAligned
+            // keeps feet on the same line — no extra pad into the page.
+            moreButton = tinyButton(getString(R.string.notebook_options), 16);
             chromeWord(moreButton);
             moreButton.setContentDescription(getString(R.string.page_options));
             onTap(linkButton, v -> startMode(this, false));
